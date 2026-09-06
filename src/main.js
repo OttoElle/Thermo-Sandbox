@@ -108,6 +108,7 @@ const ctxDelete = document.getElementById('ctxDelete');
 // Playback Bar & Model Toggle Controls
 const modelToggleGroup = document.getElementById('modelToggleGroup');
 const modelToggleBtns = modelToggleGroup ? modelToggleGroup.querySelectorAll('.model-toggle-btn') : [];
+const btnToggleGravity = document.getElementById('btnToggleGravity');
 const btnPlayPause = document.getElementById('btnPlayPause');
 const playIcon = document.getElementById('playIcon');
 const btnStep = document.getElementById('btnStep');
@@ -1946,6 +1947,8 @@ function resetToLoadedProfile() {
   closeContextMenu();
   updateElementsList();
   renderToolProperties(activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
   timeVal.textContent = '0.00 s';
 }
 
@@ -2164,6 +2167,8 @@ fileImportInput.addEventListener('change', (e) => {
       engine.setLoadedProfile(data);
       updateElementsList();
       renderToolProperties(activeTool);
+      updateModelToggleUI();
+      updateGravityUI();
       addRecentProfile(currentProjectName, data);
       hasActiveSession = true;
       hideSplashScreen();
@@ -2184,6 +2189,30 @@ modelToggleBtns.forEach(btn => {
     btn.classList.add('active');
     engine.simModel = btn.dataset.model;
   });
+});
+
+function updateModelToggleUI() {
+  modelToggleBtns.forEach(btn => {
+    if (btn.dataset.model === (engine.simModel || 'hard_sphere')) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+}
+
+function updateGravityUI() {
+  if (!btnToggleGravity) return;
+  if (engine.gravityEnabled) {
+    btnToggleGravity.classList.add('active');
+  } else {
+    btnToggleGravity.classList.remove('active');
+  }
+}
+
+btnToggleGravity?.addEventListener('click', () => {
+  engine.gravityEnabled = !engine.gravityEnabled;
+  updateGravityUI();
 });
 
 btnPlayPause.addEventListener('click', () => {
@@ -4044,6 +4073,8 @@ function renderSplashPresets() {
       addRecentProfile(p.name, state);
       updateElementsList();
       renderToolProperties(activeTool);
+      updateModelToggleUI();
+      updateGravityUI();
       hasActiveSession = true;
       hideSplashScreen();
     });
@@ -4058,6 +4089,8 @@ function loadProfileData(name, data) {
   engine.setLoadedProfile(data);
   updateElementsList();
   renderToolProperties(activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
   hasActiveSession = true;
   hideSplashScreen();
 }
@@ -4123,6 +4156,7 @@ function hideSplashScreen() {
 btnSplashNew?.addEventListener('click', () => {
   stopAndResetSimulationForNewScene();
   engine.clear();
+  engine.gravityEnabled = false;
   
   currentProjectName = 'Untitled Simulation';
   headerProjectTitle.textContent = 'Untitled Simulation.json';
@@ -4130,6 +4164,8 @@ btnSplashNew?.addEventListener('click', () => {
   engine.setLoadedProfile(state);
   updateElementsList();
   renderToolProperties(activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
   hideSplashScreen();
 });
 

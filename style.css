@@ -1513,6 +1513,45 @@ body {
   font-weight: 700;
 }
 
+.gravity-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.gravity-toggle-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-main);
+  border-color: var(--border-card);
+}
+
+.gravity-toggle-btn.active {
+  background-color: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+}
+
+.gravity-toggle-btn svg {
+  transition: transform 0.2s ease;
+}
+
+.gravity-toggle-btn.active svg {
+  transform: translateY(1px);
+}
+
 .save-modal-body {
   display: flex;
   flex-direction: column;

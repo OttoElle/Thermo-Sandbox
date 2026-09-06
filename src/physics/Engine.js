@@ -42,6 +42,8 @@ export class Engine {
     this.timeScale = 1.0;
     this.isPaused = true;
     this.simModel = 'hard_sphere'; // 'hard_sphere' or 'lennard_jones'
+    this.gravityEnabled = false;
+    this.gravity = 350; // px/s^2 (+y downward)
     
     this.totalTime = 0;
     this.nextParticleId = 1;
@@ -401,9 +403,16 @@ export class Engine {
 
   _subStep(dt) {
     // 1. Move particles
+    const applyGravity = this.gravityEnabled;
+    const gStep = this.gravity * dt;
     for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
-      if (!p.fixed) p.update(dt);
+      if (!p.fixed) {
+        if (applyGravity) {
+          p.vel.y += gStep;
+        }
+        p.update(dt);
+      }
     }
 
     // 2. Spatial Grid Particle Collision
@@ -833,6 +842,9 @@ export class Engine {
     return {
       version: '3.0',
       profileName: profileName,
+      simModel: this.simModel || 'hard_sphere',
+      gravityEnabled: !!this.gravityEnabled,
+      gravity: this.gravity || 350,
       timestamp: new Date().toISOString(),
       walls: this.walls.map(w => w.toJSON()),
       throttleValves: (this.throttleValves || []).map(tv => tv.toJSON()),
@@ -863,6 +875,9 @@ export class Engine {
     this.clear();
 
     if (state.profileName) this.currentProfileName = state.profileName;
+    if (state.simModel) this.simModel = state.simModel;
+    if (state.gravityEnabled !== undefined) this.gravityEnabled = !!state.gravityEnabled;
+    if (state.gravity !== undefined) this.gravity = state.gravity;
     if (state.walls) this.walls = state.walls.map(w => Wall.fromJSON(w));
     if (state.throttleValves) this.throttleValves = state.throttleValves.map(tv => ThrottleValve.fromJSON(tv));
     if (state.reservoirs) this.reservoirs = state.reservoirs.map(r => Reservoir.fromJSON(r));

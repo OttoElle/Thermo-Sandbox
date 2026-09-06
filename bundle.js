@@ -2301,6 +2301,8 @@ class Engine {
     this.timeScale = 1.0;
     this.isPaused = true;
     this.simModel = 'hard_sphere'; // 'hard_sphere' or 'lennard_jones'
+    this.gravityEnabled = false;
+    this.gravity = 350; // px/s^2 (+y downward)
     
     this.totalTime = 0;
     this.nextParticleId = 1;
@@ -2660,9 +2662,16 @@ class Engine {
 
   _subStep(dt) {
     // 1. Move particles
+    const applyGravity = this.gravityEnabled;
+    const gStep = this.gravity * dt;
     for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
-      if (!p.fixed) p.update(dt);
+      if (!p.fixed) {
+        if (applyGravity) {
+          p.vel.y += gStep;
+        }
+        p.update(dt);
+      }
     }
 
     // 2. Spatial Grid Particle Collision
@@ -3092,6 +3101,9 @@ class Engine {
     return {
       version: '3.0',
       profileName: profileName,
+      simModel: this.simModel || 'hard_sphere',
+      gravityEnabled: !!this.gravityEnabled,
+      gravity: this.gravity || 350,
       timestamp: new Date().toISOString(),
       walls: this.walls.map(w => w.toJSON()),
       throttleValves: (this.throttleValves || []).map(tv => tv.toJSON()),
@@ -3122,6 +3134,9 @@ class Engine {
     this.clear();
 
     if (state.profileName) this.currentProfileName = state.profileName;
+    if (state.simModel) this.simModel = state.simModel;
+    if (state.gravityEnabled !== undefined) this.gravityEnabled = !!state.gravityEnabled;
+    if (state.gravity !== undefined) this.gravity = state.gravity;
     if (state.walls) this.walls = state.walls.map(w => Wall.fromJSON(w));
     if (state.throttleValves) this.throttleValves = state.throttleValves.map(tv => ThrottleValve.fromJSON(tv));
     if (state.reservoirs) this.reservoirs = state.reservoirs.map(r => Reservoir.fromJSON(r));
@@ -5755,6 +5770,7 @@ const ctxDelete = document.getElementById('ctxDelete');
 // Playback Bar & Model Toggle Controls
 const modelToggleGroup = document.getElementById('modelToggleGroup');
 const modelToggleBtns = modelToggleGroup ? modelToggleGroup.querySelectorAll('.model-toggle-btn') : [];
+const btnToggleGravity = document.getElementById('btnToggleGravity');
 const btnPlayPause = document.getElementById('btnPlayPause');
 const playIcon = document.getElementById('playIcon');
 const btnStep = document.getElementById('btnStep');
@@ -7593,6 +7609,8 @@ function resetToLoadedProfile() {
   closeContextMenu();
   updateElementsList();
   renderToolProperties(activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
   timeVal.textContent = '0.00 s';
 }
 
@@ -7811,6 +7829,8 @@ fileImportInput.addEventListener('change', (e) => {
       engine.setLoadedProfile(data);
       updateElementsList();
       renderToolProperties(activeTool);
+      updateModelToggleUI();
+      updateGravityUI();
       addRecentProfile(currentProjectName, data);
       hasActiveSession = true;
       hideSplashScreen();
@@ -7831,6 +7851,30 @@ modelToggleBtns.forEach(btn => {
     btn.classList.add('active');
     engine.simModel = btn.dataset.model;
   });
+});
+
+function updateModelToggleUI() {
+  modelToggleBtns.forEach(btn => {
+    if (btn.dataset.model === (engine.simModel || 'hard_sphere')) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+}
+
+function updateGravityUI() {
+  if (!btnToggleGravity) return;
+  if (engine.gravityEnabled) {
+    btnToggleGravity.classList.add('active');
+  } else {
+    btnToggleGravity.classList.remove('active');
+  }
+}
+
+btnToggleGravity?.addEventListener('click', () => {
+  engine.gravityEnabled = !engine.gravityEnabled;
+  updateGravityUI();
 });
 
 btnPlayPause.addEventListener('click', () => {
@@ -9691,6 +9735,8 @@ function renderSplashPresets() {
       addRecentProfile(p.name, state);
       updateElementsList();
       renderToolProperties(activeTool);
+      updateModelToggleUI();
+      updateGravityUI();
       hasActiveSession = true;
       hideSplashScreen();
     });
@@ -9705,6 +9751,8 @@ function loadProfileData(name, data) {
   engine.setLoadedProfile(data);
   updateElementsList();
   renderToolProperties(activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
   hasActiveSession = true;
   hideSplashScreen();
 }
@@ -9770,6 +9818,7 @@ function hideSplashScreen() {
 btnSplashNew?.addEventListener('click', () => {
   stopAndResetSimulationForNewScene();
   engine.clear();
+  engine.gravityEnabled = false;
   
   currentProjectName = 'Untitled Simulation';
   headerProjectTitle.textContent = 'Untitled Simulation.json';
@@ -9777,6 +9826,8 @@ btnSplashNew?.addEventListener('click', () => {
   engine.setLoadedProfile(state);
   updateElementsList();
   renderToolProperties(activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
   hideSplashScreen();
 });
 
