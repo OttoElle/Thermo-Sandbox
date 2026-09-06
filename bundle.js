@@ -7543,6 +7543,29 @@ document.getElementById('menuEntrySaveAs').addEventListener('click', () => {
   openSaveModal();
 });
 
+function stopAndResetSimulationForNewScene() {
+  isSimulating = false;
+  engine.isPaused = true;
+  isAmbientSim = false;
+  
+  document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
+  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
+  
+  playIcon.classList.add('is-play');
+  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
+  
+  engine.totalTime = 0;
+  timeVal.textContent = '0.00 s';
+  historyBuffer.length = 0;
+  undoStack.length = 0;
+  redoStack.length = 0;
+  selectedItems = [];
+  resetPolygonDraft();
+  arcSteps = [];
+  closePopup();
+  closeContextMenu();
+}
+
 function resetToLoadedProfile() {
   isSimulating = false;
   engine.isPaused = true;
@@ -7776,7 +7799,7 @@ fileImportInput.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (evt) => {
     try {
-      recordUndoState();
+      stopAndResetSimulationForNewScene();
       const data = JSON.parse(evt.target.result);
       if (data.profileName) {
         currentProjectName = data.profileName;
@@ -7786,7 +7809,6 @@ fileImportInput.addEventListener('change', (e) => {
       }
       headerProjectTitle.textContent = `${currentProjectName}.json`;
       engine.setLoadedProfile(data);
-      selectedItems = [];
       updateElementsList();
       renderToolProperties(activeTool);
       addRecentProfile(currentProjectName, data);
@@ -9660,14 +9682,13 @@ function renderSplashPresets() {
       </div>
     `;
     card.addEventListener('click', () => {
-      isSimulating = false;
-      engine.isPaused = true;
+      stopAndResetSimulationForNewScene();
       p.load(engine);
       currentProjectName = p.name;
       headerProjectTitle.textContent = `${currentProjectName}.json`;
       const state = engine.exportState(p.name);
+      engine.setLoadedProfile(state);
       addRecentProfile(p.name, state);
-      selectedItems = [];
       updateElementsList();
       renderToolProperties(activeTool);
       hasActiveSession = true;
@@ -9678,12 +9699,10 @@ function renderSplashPresets() {
 }
 
 function loadProfileData(name, data) {
-  isSimulating = false;
-  engine.isPaused = true;
+  stopAndResetSimulationForNewScene();
   currentProjectName = name;
   headerProjectTitle.textContent = `${name}.json`;
   engine.setLoadedProfile(data);
-  selectedItems = [];
   updateElementsList();
   renderToolProperties(activeTool);
   hasActiveSession = true;
@@ -9743,18 +9762,13 @@ function hideSplashScreen() {
   document.body.classList.remove('splash-mode');
   if (splashOverlay) {
     splashOverlay.classList.add('hidden');
-    setTimeout(() => {
-      if (!isSplashActive && splashOverlay) {
-        splashOverlay.style.display = 'none';
-      }
-    }, 250);
+    splashOverlay.style.display = 'none';
   }
 }
 
 // Splash Screen Action Event Listeners
 btnSplashNew?.addEventListener('click', () => {
-  isSimulating = false;
-  engine.isPaused = true;
+  stopAndResetSimulationForNewScene();
   engine.clear();
   
   // Standard chamber outer boundaries
@@ -9767,7 +9781,6 @@ btnSplashNew?.addEventListener('click', () => {
   headerProjectTitle.textContent = 'Untitled Simulation.json';
   const state = engine.exportState('Untitled Simulation');
   engine.setLoadedProfile(state);
-  selectedItems = [];
   updateElementsList();
   renderToolProperties(activeTool);
   hideSplashScreen();
