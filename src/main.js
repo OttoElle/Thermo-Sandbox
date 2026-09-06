@@ -18,6 +18,7 @@ import { ParticleGroup } from './physics/ParticleGroup.js';
 import { Regulator } from './physics/Regulator.js';
 import { ThrottleValve } from './physics/ThrottleValve.js';
 import { Presets } from './presets/index.js';
+import { SequencerUI } from './control/SequencerUI.js';
 
 // Canvas DOM Elements
 const canvas = document.getElementById('simCanvas');
@@ -158,6 +159,8 @@ window.engine = engine;
 window.renderer = renderer;
 const tempChart = new TempTimeChart(tempChartCanvas);
 const velChart = new VelHistChart(velChartCanvas);
+const sequencerUI = new SequencerUI(engine);
+window.sequencerUI = sequencerUI;
 
 renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
 
@@ -4075,6 +4078,7 @@ function renderSplashPresets() {
       renderToolProperties(activeTool);
       updateModelToggleUI();
       updateGravityUI();
+      sequencerUI?.render();
       hasActiveSession = true;
       hideSplashScreen();
     });
@@ -4091,6 +4095,7 @@ function loadProfileData(name, data) {
   renderToolProperties(activeTool);
   updateModelToggleUI();
   updateGravityUI();
+  sequencerUI?.render();
   hasActiveSession = true;
   hideSplashScreen();
 }
@@ -4171,6 +4176,7 @@ btnSplashNew?.addEventListener('click', () => {
   renderToolProperties(activeTool);
   updateModelToggleUI();
   updateGravityUI();
+  sequencerUI?.render();
   hideSplashScreen();
 });
 
@@ -4264,6 +4270,7 @@ function animate(now) {
 
   renderer.render(engine, selectedItems);
   renderLiveToolPreviews();
+  sequencerUI?.updateLive();
 
   // Throttled Chart Updates (~15 Hz) to keep UI and Render loop at max FPS
   chartTimer += dt;

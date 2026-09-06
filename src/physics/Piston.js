@@ -50,6 +50,10 @@ export class Piston {
     this.workExtracted = 0; // Total Joules recovered
     this.instantPower = 0; // Current Watts
 
+    // Controlled / Sequencer properties
+    this.targetPos = options.targetPos !== undefined ? options.targetPos : pos;
+    this.targetSpeed = options.targetSpeed !== undefined ? options.targetSpeed : 150;
+
     // Thermal properties
     this.conductivity = options.conductivity !== undefined ? options.conductivity : 0.2;
     this.temperature = options.temperature !== undefined ? options.temperature : 300;
@@ -207,6 +211,28 @@ export class Piston {
         }
         this.setPos(newPos);
       }
+    } else if (this.mode === 'controlled') {
+      const { minTravel, maxTravel } = this.getTravelLimits();
+      const target = Math.max(minTravel, Math.min(maxTravel, this.targetPos !== undefined ? this.targetPos : this.getPos()));
+      const curPos = this.getPos();
+      const diff = target - curPos;
+      const dist = Math.abs(diff);
+      const speed = Math.max(10, this.targetSpeed || 150);
+      const maxStep = speed * dt;
+      const prevPos = curPos;
+
+      if (dist <= maxStep || dist < 0.5) {
+        this.setPos(target);
+        this.velocity = 0;
+      } else {
+        const step = Math.sign(diff) * maxStep;
+        this.setPos(curPos + step);
+        this.velocity = dt > 0 ? (this.getPos() - prevPos) / dt : 0;
+      }
+      this.instantPower = 0;
+    } else if (this.mode === 'hold') {
+      this.velocity = 0;
+      this.instantPower = 0;
     }
 
     if (dt > 0) {
@@ -262,6 +288,8 @@ export class Piston {
       amplitude: this.amplitude,
       phase: this.phase,
       dampingCoeff: this.dampingCoeff,
+      targetPos: this.targetPos,
+      targetSpeed: this.targetSpeed,
       conductivity: this.conductivity,
       temperature: this.temperature,
       isActive: this.isActive

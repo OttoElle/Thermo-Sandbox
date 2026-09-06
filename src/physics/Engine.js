@@ -14,11 +14,13 @@ import { RegeneratorMatrix } from './RegeneratorMatrix.js';
 import { TextLabel } from './TextLabel.js';
 import { Regulator } from './Regulator.js';
 import { ThrottleValve } from './ThrottleValve.js';
+import { CycleSequencer } from '../control/CycleSequencer.js';
 
 export class Engine {
   constructor(width = 2500, height = 2500) {
     this.width = width;
     this.height = height;
+    this.sequencer = new CycleSequencer();
 
     this.particles = [];
     this.walls = [];
@@ -89,6 +91,9 @@ export class Engine {
     this.historyVolume = [];
     this.historyCount = [];
     this.historyKineticEnergy = [];
+    if (this.sequencer) {
+      this.sequencer.reset();
+    }
     this._updateStats();
   }
 
@@ -344,6 +349,11 @@ export class Engine {
 
     const effectiveDt = dt * this.timeScale;
     const subDt = effectiveDt / this.subSteps;
+
+    // 0. Precision Cycle Sequencer (Coordinates valves, pistons & thermals per phase)
+    if (this.sequencer && this.sequencer.isEnabled) {
+      this.sequencer.step(effectiveDt, this);
+    }
 
     // 1. Particle Emitters & Regulators & Throttle Valves
     for (let i = 0; i < this.emitters.length; i++) {
@@ -859,6 +869,7 @@ export class Engine {
       regenerators: this.regenerators.map(r => r.toJSON()),
       textLabels: this.textLabels.map(l => l.toJSON()),
       particleGroups: this.particleGroups.map(g => g.toJSON()),
+      cycleSequencer: this.sequencer ? this.sequencer.exportState() : null,
       particles: this.particles.map(p => ({
         x: p.initialPos.x,
         y: p.initialPos.y,
@@ -918,6 +929,14 @@ export class Engine {
     for (let i = 0; i < this.sensors.length; i++) this.sensors[i].clearHistory();
     this.totalTime = 0;
     this.isPaused = true;
+
+    if (state.cycleSequencer && this.sequencer) {
+      this.sequencer.importState(state.cycleSequencer);
+    } else if (this.sequencer) {
+      this.sequencer.reset();
+      this.sequencer.phases = [];
+    }
+
     this._updateStats();
   }
 

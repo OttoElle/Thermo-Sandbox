@@ -20,11 +20,13 @@ files_order = [
     'src/physics/ThrottleValve.js',
     'src/render/Colormap.js',
     'src/render/ParticleGLRenderer.js',
+    'src/control/CycleSequencer.js',
     'src/physics/Engine.js',
     'src/render/Renderer.js',
     'src/analytics/TempTimeChart.js',
     'src/analytics/VelHistChart.js',
     'src/analytics/ChamberChart.js',
+    'src/control/SequencerUI.js',
     'src/presets/index.js',
     'src/main.js'
 ]
