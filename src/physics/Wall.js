@@ -19,6 +19,7 @@ export class Wall {
     this.isOpen = options.isOpen !== undefined ? options.isOpen : false;
     this.allowedDirection = options.allowedDirection !== undefined ? options.allowedDirection : 1; // 1 = along normal, -1 = opposite
     this.triggerPressure = options.triggerPressure !== undefined ? options.triggerPressure : 250; // Threshold Pa for relief_valve
+    this.pressureHysteresis = options.pressureHysteresis !== undefined ? options.pressureHysteresis : 25; // Hysteresis band in Pa
     this.reliefMode = options.reliefMode || 'oneway'; // 'oneway' or 'bidirectional'
 
     this.thickness = options.thickness || 4;
@@ -105,9 +106,10 @@ export class Wall {
       this.accumulatedImpulse = 0;
 
       if (this.type === 'relief_valve') {
-        if (this.smoothedPressure >= this.triggerPressure) {
+        const hyst = this.pressureHysteresis !== undefined ? this.pressureHysteresis : 25;
+        if (!this.isOpen && this.smoothedPressure >= this.triggerPressure) {
           this.isOpen = true;
-        } else if (this.smoothedPressure < this.triggerPressure * 0.75) {
+        } else if (this.isOpen && this.smoothedPressure < Math.max(0, this.triggerPressure - hyst)) {
           this.isOpen = false;
         }
       }
@@ -149,6 +151,7 @@ export class Wall {
       isOpen: this.isOpen,
       allowedDirection: this.allowedDirection,
       triggerPressure: this.triggerPressure,
+      pressureHysteresis: this.pressureHysteresis,
       reliefMode: this.reliefMode,
       thickness: this.thickness,
       groupId: this.groupId || undefined

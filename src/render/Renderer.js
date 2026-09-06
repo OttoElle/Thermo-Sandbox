@@ -317,7 +317,7 @@ export class Renderer {
         ctx.stroke();
       }
     } else if (tool === 'valve') {
-      ctx.strokeStyle = vtype === 'relief_valve' ? '#ec4899' : (vtype === 'check_valve' ? '#10b981' : '#f59e0b');
+      ctx.strokeStyle = vtype === 'relief_valve' ? '#f97316' : (vtype === 'check_valve' ? '#a855f7' : '#06b6d4');
       ctx.lineWidth = 3;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
@@ -333,7 +333,7 @@ export class Renderer {
       ctx.fillStyle = ctx.strokeStyle;
       ctx.fill();
     } else if (tool === 'throttle_valve') {
-      ctx.strokeStyle = '#f59e0b';
+      ctx.strokeStyle = '#10b981';
       ctx.lineWidth = 4;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
@@ -344,7 +344,7 @@ export class Renderer {
       const midX = (start.x + current.x) * 0.5;
       const midY = (start.y + current.y) * 0.5;
       const len = Math.round(Math.hypot(current.x - start.x, current.y - start.y));
-      ctx.fillStyle = '#f59e0b';
+      ctx.fillStyle = '#10b981';
       ctx.font = 'bold 10px JetBrains Mono, monospace';
       ctx.textAlign = 'center';
       ctx.fillText(`Throttle Valve (${len}px)`, midX, midY - 12);
@@ -589,30 +589,45 @@ export class Renderer {
     ctx.restore();
   }
 
+  getTemperatureColor(T, alpha = 1.0) {
+    const minT = 50;
+    const maxT = 800;
+    const norm = Math.max(0, Math.min(1.0, (T - minT) / (maxT - minT)));
+    const c = thermalColormap.getColor(norm);
+    if (alpha >= 1.0) return c.rgb;
+    return `rgba(${c.r}, ${c.g}, ${c.b}, ${alpha})`;
+  }
+
   drawReservoir(res, isSelected = false) {
     const ctx = this.ctx;
     ctx.save();
 
     const isActive = res.isActive !== false;
-    const isCold = res.temperature < 250;
-    const isHot = res.temperature > 350;
+    const baseColor = isActive ? this.getTemperatureColor(res.temperature, 1.0) : '#64748b';
+    const fill = isActive ? this.getTemperatureColor(res.temperature, 0.22) : 'rgba(71, 85, 105, 0.12)';
 
-    let baseColor = isCold ? '#38bdf8' : (isHot ? '#ef4444' : '#10b981');
-    if (!isActive) baseColor = '#64748b';
-
-    ctx.fillStyle = isActive ? `${baseColor}22` : 'rgba(71, 85, 105, 0.12)';
+    ctx.fillStyle = fill;
     ctx.fillRect(res.x, res.y, res.width, res.height);
 
     ctx.strokeStyle = isSelected ? '#ffffff' : baseColor;
-    ctx.lineWidth = isSelected ? 3.5 : (isActive ? 2 : 1.5);
+    ctx.lineWidth = isSelected ? 3.5 : (isActive ? 2.5 : 1.5);
     if (!isActive) ctx.setLineDash([4, 4]);
     ctx.strokeRect(res.x, res.y, res.width, res.height);
     ctx.setLineDash([]);
 
-    ctx.fillStyle = isActive ? (isSelected ? '#ffffff' : '#f8fafc') : '#94a3b8';
+    // Solid Isotherm Fill (No inner hatching, distinct glowing label)
+    const textStr = `Sink ${Math.round(res.temperature)}K${isActive ? '' : ' [OFF]'}`;
     ctx.font = 'bold 11px Inter, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`Sink ${Math.round(res.temperature)}K (Const)`, res.x + res.width * 0.5, res.y + res.height * 0.5 + 4);
+    const textWidth = ctx.measureText(textStr).width;
+    const midX = res.x + res.width * 0.5;
+    const midY = res.y + res.height * 0.5;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+    ctx.fillRect(midX - textWidth * 0.5 - 4, midY - 8, textWidth + 8, 16);
+
+    ctx.fillStyle = isActive ? '#ffffff' : '#94a3b8';
+    ctx.fillText(textStr, midX, midY + 4);
 
     ctx.restore();
   }
@@ -622,14 +637,11 @@ export class Renderer {
     ctx.save();
 
     const isActive = hx.isActive !== false;
-    const isCold = hx.temperature < 250;
-    const isHot = hx.temperature > 350;
-
-    let themeColor = isCold ? '#38bdf8' : (isHot ? '#f97316' : '#2dd4bf');
-    if (!isActive) themeColor = '#64748b';
+    const themeColor = isActive ? this.getTemperatureColor(hx.temperature, 1.0) : '#64748b';
+    const fill = isActive ? this.getTemperatureColor(hx.temperature, 0.16) : 'rgba(71, 85, 105, 0.1)';
 
     // Permeable background
-    ctx.fillStyle = isActive ? `${themeColor}18` : 'rgba(71, 85, 105, 0.1)';
+    ctx.fillStyle = fill;
     ctx.fillRect(hx.x, hx.y, hx.width, hx.height);
 
     // Permeable dashed boundary
@@ -639,13 +651,13 @@ export class Renderer {
     ctx.strokeRect(hx.x, hx.y, hx.width, hx.height);
     ctx.setLineDash([]);
 
-    // Cross-Hatch Pattern (X)
+    // Cross-Hatch Pattern (X-Mesh)
     ctx.save();
     ctx.beginPath();
     ctx.rect(hx.x, hx.y, hx.width, hx.height);
     ctx.clip();
 
-    ctx.strokeStyle = isActive ? `${themeColor}44` : 'rgba(100, 116, 139, 0.15)';
+    ctx.strokeStyle = isActive ? this.getTemperatureColor(hx.temperature, 0.45) : 'rgba(100, 116, 139, 0.18)';
     ctx.lineWidth = 1.2;
 
     const step = 14;
@@ -662,11 +674,19 @@ export class Renderer {
     }
     ctx.restore();
 
-    // Label without emoji
-    ctx.fillStyle = isActive ? '#ffffff' : '#94a3b8';
+    // Label with solid background badge
+    const textStr = `Heat Exchanger ${Math.round(hx.temperature)}K${isActive ? '' : ' [OFF]'}`;
     ctx.font = 'bold 10.5px Inter, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`Heat Exchanger ${Math.round(hx.temperature)}K`, hx.x + hx.width * 0.5, hx.y + hx.height * 0.5 + 4);
+    const textWidth = ctx.measureText(textStr).width;
+    const midX = hx.x + hx.width * 0.5;
+    const midY = hx.y + hx.height * 0.5;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+    ctx.fillRect(midX - textWidth * 0.5 - 4, midY - 8, textWidth + 8, 16);
+
+    ctx.fillStyle = isActive ? '#ffffff' : '#94a3b8';
+    ctx.fillText(textStr, midX, midY + 4);
 
     ctx.restore();
   }
@@ -678,29 +698,26 @@ export class Renderer {
     const isActive = reg.isActive !== false;
     const n = reg.sliceCount || 10;
     const isHoriz = reg.orientation === 'horizontal';
+    const avgT = Math.round(reg.getAverageTemperature ? reg.getAverageTemperature() : 300);
 
     // Render spatial multi-slice gradient parallel to flow lines
     for (let i = 0; i < n; i++) {
       const t = reg.temperatures[i] || 300;
-      const isCold = t < 250;
-      const isHot = t > 350;
-      let sliceColor = isCold ? '#38bdf8' : (isHot ? '#f43f5e' : '#10b981');
-      if (!isActive) sliceColor = '#64748b';
+      const sliceColor = isActive ? this.getTemperatureColor(t, 0.22) : 'rgba(71, 85, 105, 0.1)';
 
-      ctx.fillStyle = isActive ? `${sliceColor}22` : 'rgba(71, 85, 105, 0.1)';
+      ctx.fillStyle = sliceColor;
       if (isHoriz) {
-        // Horizontal bands parallel to horizontal flow lines
         const sh = reg.height / n;
         ctx.fillRect(reg.x, reg.y + i * sh, reg.width, sh);
       } else {
-        // Vertical bands parallel to vertical flow lines
         const sw = reg.width / n;
         ctx.fillRect(reg.x + i * sw, reg.y, sw, reg.height);
       }
     }
 
     // Permeable dashed outline
-    ctx.strokeStyle = isSelected ? '#ffffff' : (isActive ? '#38bdf8' : '#64748b');
+    const borderColor = isActive ? this.getTemperatureColor(avgT, 1.0) : '#64748b';
+    ctx.strokeStyle = isSelected ? '#ffffff' : borderColor;
     ctx.lineWidth = isSelected ? 2.5 : 1.5;
     ctx.setLineDash([4, 4]);
     ctx.strokeRect(reg.x, reg.y, reg.width, reg.height);
@@ -712,7 +729,7 @@ export class Renderer {
     ctx.rect(reg.x, reg.y, reg.width, reg.height);
     ctx.clip();
 
-    ctx.strokeStyle = isActive ? 'rgba(56, 189, 248, 0.45)' : 'rgba(100, 116, 139, 0.2)';
+    ctx.strokeStyle = isActive ? this.getTemperatureColor(avgT, 0.45) : 'rgba(100, 116, 139, 0.2)';
     ctx.lineWidth = 1.2;
 
     if (isHoriz) {
@@ -734,13 +751,21 @@ export class Renderer {
     }
     ctx.restore();
 
-    // Gradient Span Label without emoji
+    // Gradient Span Label
     const minT = Math.round(Math.min(...reg.temperatures));
     const maxT = Math.round(Math.max(...reg.temperatures));
-    ctx.fillStyle = isActive ? '#ffffff' : '#94a3b8';
+    const textStr = `Regenerator [${minT}-${maxT}K]${isActive ? '' : ' [OFF]'}`;
     ctx.font = 'bold 10px Inter, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`Regenerator [${minT}-${maxT}K]`, reg.x + reg.width * 0.5, reg.y + reg.height * 0.5 + 4);
+    const textWidth = ctx.measureText(textStr).width;
+    const midX = reg.x + reg.width * 0.5;
+    const midY = reg.y + reg.height * 0.5;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+    ctx.fillRect(midX - textWidth * 0.5 - 4, midY - 8, textWidth + 8, 16);
+
+    ctx.fillStyle = isActive ? '#ffffff' : '#94a3b8';
+    ctx.fillText(textStr, midX, midY + 4);
 
     ctx.restore();
   }
@@ -750,7 +775,10 @@ export class Renderer {
     ctx.save();
 
     const isActive = block.isActive !== false;
-    ctx.fillStyle = isActive ? 'rgba(245, 158, 11, 0.20)' : 'rgba(71, 85, 105, 0.12)';
+    const baseColor = isActive ? this.getTemperatureColor(block.temperature, 1.0) : '#64748b';
+    const fill = isActive ? this.getTemperatureColor(block.temperature, 0.20) : 'rgba(71, 85, 105, 0.12)';
+
+    ctx.fillStyle = fill;
     ctx.fillRect(block.x, block.y, block.width, block.height);
 
     // Dotted Stipple Matrix Pattern / Hatching
@@ -759,7 +787,7 @@ export class Renderer {
     ctx.rect(block.x, block.y, block.width, block.height);
     ctx.clip();
 
-    ctx.fillStyle = isActive ? 'rgba(245, 158, 11, 0.55)' : 'rgba(100, 116, 139, 0.35)';
+    ctx.fillStyle = isActive ? this.getTemperatureColor(block.temperature, 0.55) : 'rgba(100, 116, 139, 0.35)';
     const dotSpacing = 14;
     const dotR = 1.4;
     for (let x = block.x + dotSpacing * 0.5; x < block.x + block.width; x += dotSpacing) {
@@ -771,14 +799,14 @@ export class Renderer {
     }
     ctx.restore();
 
-    ctx.strokeStyle = isSelected ? '#ffffff' : (isActive ? '#f59e0b' : '#64748b');
+    ctx.strokeStyle = isSelected ? '#ffffff' : baseColor;
     ctx.lineWidth = isSelected ? 3.5 : (isActive ? 2 : 1.5);
     if (!isActive) ctx.setLineDash([4, 4]);
     ctx.strokeRect(block.x, block.y, block.width, block.height);
     ctx.setLineDash([]);
 
     // Label with solid background badge for clear readability
-    const textStr = `Ressavoir ${Math.round(block.temperature)}K`;
+    const textStr = `Ressavoir ${Math.round(block.temperature)}K${isActive ? '' : ' [OFF]'}`;
     ctx.font = 'bold 11px Inter, sans-serif';
     ctx.textAlign = 'center';
     const textWidth = ctx.measureText(textStr).width;
@@ -788,7 +816,7 @@ export class Renderer {
     ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
     ctx.fillRect(midX - textWidth * 0.5 - 4, midY - 8, textWidth + 8, 16);
 
-    ctx.fillStyle = isActive ? '#fef08a' : '#94a3b8';
+    ctx.fillStyle = isActive ? '#ffffff' : '#94a3b8';
     ctx.fillText(textStr, midX, midY + 4);
 
     ctx.restore();
@@ -847,10 +875,11 @@ export class Renderer {
     const ctx = this.ctx;
     ctx.save();
 
-    ctx.fillStyle = 'rgba(168, 85, 247, 0.2)';
+    const isActive = sink.isActive !== false;
+    ctx.fillStyle = isActive ? 'rgba(168, 85, 247, 0.2)' : 'rgba(100, 116, 139, 0.12)';
     ctx.fillRect(sink.x, sink.y, sink.width, sink.height);
 
-    ctx.strokeStyle = isSelected ? '#38bdf8' : '#a855f7';
+    ctx.strokeStyle = isSelected ? '#38bdf8' : (isActive ? '#a855f7' : '#64748b');
     ctx.lineWidth = isSelected ? 3 : 2;
     ctx.setLineDash([4, 4]);
     ctx.strokeRect(sink.x, sink.y, sink.width, sink.height);
@@ -858,16 +887,40 @@ export class Renderer {
 
     const cx = sink.x + sink.width * 0.5;
     const cy = sink.y + sink.height * 0.5;
-    ctx.strokeStyle = '#c084fc';
-    ctx.lineWidth = 1.5;
+
+    // Direction indicator
+    ctx.strokeStyle = isActive ? '#c084fc' : '#94a3b8';
+    ctx.lineWidth = 1.8;
     ctx.beginPath();
-    ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+    if (sink.direction === 'right') {
+      ctx.moveTo(cx - 8, cy); ctx.lineTo(cx + 8, cy);
+      ctx.lineTo(cx + 4, cy - 4); ctx.moveTo(cx + 8, cy); ctx.lineTo(cx + 4, cy + 4);
+    } else if (sink.direction === 'left') {
+      ctx.moveTo(cx + 8, cy); ctx.lineTo(cx - 8, cy);
+      ctx.lineTo(cx - 4, cy - 4); ctx.moveTo(cx - 8, cy); ctx.lineTo(cx - 4, cy + 4);
+    } else if (sink.direction === 'down') {
+      ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
+      ctx.lineTo(cx - 4, cy + 4); ctx.moveTo(cx, cy + 8); ctx.lineTo(cx + 4, cy + 4);
+    } else if (sink.direction === 'up') {
+      ctx.moveTo(cx, cy + 8); ctx.lineTo(cx, cy - 8);
+      ctx.lineTo(cx - 4, cy - 4); ctx.moveTo(cx, cy - 8); ctx.lineTo(cx + 4, cy - 4);
+    } else { // 360
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy);
+      ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3);
+    }
     ctx.stroke();
 
-    ctx.fillStyle = '#d8b4fe';
+    ctx.fillStyle = isActive ? '#d8b4fe' : '#94a3b8';
     ctx.font = '10px Inter, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Absorber', cx, sink.y + sink.height + 14);
+    let filterTag = '';
+    if (sink.tempFilterMode === 'above') filterTag = ` [>${Math.round(sink.filterTemperature || 300)}K]`;
+    else if (sink.tempFilterMode === 'below') filterTag = ` [<${Math.round(sink.filterTemperature || 300)}K]`;
+
+    const limitTag = sink.maxParticles > 0 ? ` (${sink.absorbedCount}/${sink.maxParticles})` : '';
+    const statusText = isActive ? `Absorber${limitTag}${filterTag}` : 'Absorber [OFF]';
+    ctx.fillText(statusText, cx, sink.y + sink.height + 14);
 
     ctx.restore();
   }
@@ -952,14 +1005,14 @@ export class Renderer {
     ctx.save();
 
     let strokeColor = '#ffffff';
-    if (wall.conductivity > 0) {
-      strokeColor = '#eab308';
-    } else if (wall.type === 'manual_valve') {
-      strokeColor = wall.isOpen ? '#22c55e' : '#f59e0b';
+    if (wall.type === 'manual_valve') {
+      strokeColor = wall.isOpen ? '#22c55e' : '#06b6d4';
     } else if (wall.type === 'check_valve') {
       strokeColor = '#a855f7';
     } else if (wall.type === 'relief_valve') {
-      strokeColor = wall.isOpen ? '#22c55e' : '#38bdf8';
+      strokeColor = wall.isOpen ? '#22c55e' : '#f97316';
+    } else if (wall.conductivity > 0) {
+      strokeColor = '#eab308';
     }
 
     if (isSelected) {
@@ -988,7 +1041,7 @@ export class Renderer {
       const ny = wall.normal.y * wall.allowedDirection;
 
       ctx.strokeStyle = '#a855f7';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
       ctx.moveTo(midX - nx * 8, midY - ny * 8);
       ctx.lineTo(midX + nx * 10, midY + ny * 10);
@@ -999,14 +1052,14 @@ export class Renderer {
     }
 
     if (wall.type === 'manual_valve') {
-      ctx.fillStyle = wall.isOpen ? '#22c55e' : '#f59e0b';
+      ctx.fillStyle = wall.isOpen ? '#22c55e' : '#06b6d4';
       ctx.beginPath();
       ctx.arc(midX, midY, 6, 0, Math.PI * 2);
       ctx.fill();
     }
 
     if (wall.type === 'relief_valve') {
-      ctx.fillStyle = wall.isOpen ? '#22c55e' : '#0284c7';
+      ctx.fillStyle = wall.isOpen ? '#22c55e' : '#f97316';
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -1017,7 +1070,7 @@ export class Renderer {
       if (wall.reliefMode === 'oneway') {
         const nx = wall.normal.x * (wall.allowedDirection || 1);
         const ny = wall.normal.y * (wall.allowedDirection || 1);
-        ctx.strokeStyle = '#38bdf8';
+        ctx.strokeStyle = '#f97316';
         ctx.lineWidth = 1.8;
         ctx.beginPath();
         ctx.moveTo(midX - nx * 7, midY - ny * 7);
@@ -1029,9 +1082,10 @@ export class Renderer {
       }
 
       ctx.font = 'bold 9px JetBrains Mono, monospace';
-      ctx.fillStyle = wall.isOpen ? '#86efac' : '#7dd3fc';
+      ctx.fillStyle = wall.isOpen ? '#86efac' : '#fdba74';
       ctx.textAlign = 'center';
-      ctx.fillText(`P:${Math.round(wall.smoothedPressure || 0)}/${wall.triggerPressure}`, midX, midY - 10);
+      const hystStr = wall.pressureHysteresis ? ` (±${wall.pressureHysteresis})` : '';
+      ctx.fillText(`P:${Math.round(wall.smoothedPressure || 0)}/${wall.triggerPressure}${hystStr}`, midX, midY - 10);
     }
 
     ctx.restore();
@@ -1042,7 +1096,7 @@ export class Renderer {
     ctx.save();
 
     const isActive = tv.isActive !== false;
-    let baseColor = isActive ? '#f59e0b' : '#64748b'; // Warm amber or muted gray
+    let baseColor = isActive ? '#10b981' : '#64748b'; // Emerald Green
     if (isSelected) baseColor = '#ffffff';
 
     const th = tv.thickness || 6;

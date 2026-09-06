@@ -11,7 +11,6 @@ export class Emitter {
     this.temperature = options.temperature !== undefined ? options.temperature : 350;
     this.mass = options.mass !== undefined ? options.mass : 1.0;
     this.direction = options.direction || 'right'; // 'right', 'left', 'up', 'down', 'radial', '360'
-    this.speed = options.speed !== undefined ? options.speed : 120;
     this.enabled = options.enabled !== undefined ? options.enabled : true;
     this.maxParticles = options.maxParticles !== undefined ? options.maxParticles : 0; // 0 = unlimited
     this.emittedCount = 0;
@@ -44,7 +43,7 @@ export class Emitter {
     const interval = 1.0 / this.rate;
 
     const kB = 35.0;
-    const thermalSpeed = Math.sqrt((2 * kB * Math.max(5, this.temperature)) / this.mass);
+    const thermalSpeed = Math.sqrt((2 * kB * Math.max(5, this.temperature)) / Math.max(0.01, this.mass));
 
     while (this.timer >= interval) {
       this.timer -= interval;
@@ -55,27 +54,25 @@ export class Emitter {
       const py = this.y + Math.random() * this.height;
 
       let vx = 0, vy = 0;
-      const thermalAngle = Math.random() * Math.PI * 2;
-      const vThermX = (Math.random() * 0.4) * thermalSpeed * Math.cos(thermalAngle);
-      const vThermY = (Math.random() * 0.4) * thermalSpeed * Math.sin(thermalAngle);
+      const spreadAngle = (Math.random() - 0.5) * 0.35; // subtle thermal divergence
+      const speedFluct = thermalSpeed * (0.9 + Math.random() * 0.2);
 
       if (this.direction === 'right') {
-        vx = this.speed + vThermX;
-        vy = vThermY;
+        vx = speedFluct * Math.cos(spreadAngle);
+        vy = speedFluct * Math.sin(spreadAngle);
       } else if (this.direction === 'left') {
-        vx = -this.speed + vThermX;
-        vy = vThermY;
+        vx = -speedFluct * Math.cos(spreadAngle);
+        vy = speedFluct * Math.sin(spreadAngle);
       } else if (this.direction === 'down') {
-        vx = vThermX;
-        vy = this.speed + vThermY;
+        vx = speedFluct * Math.sin(spreadAngle);
+        vy = speedFluct * Math.cos(spreadAngle);
       } else if (this.direction === 'up') {
-        vx = vThermX;
-        vy = -this.speed + vThermY;
+        vx = speedFluct * Math.sin(spreadAngle);
+        vy = -speedFluct * Math.cos(spreadAngle);
       } else { // 'radial' or '360'
         const theta = Math.random() * Math.PI * 2;
-        const totalSpeed = this.speed + (Math.random() * 0.3) * thermalSpeed;
-        vx = totalSpeed * Math.cos(theta);
-        vy = totalSpeed * Math.sin(theta);
+        vx = speedFluct * Math.cos(theta);
+        vy = speedFluct * Math.sin(theta);
       }
 
       engine.addParticle(px, py, vx, vy, this.mass);
@@ -98,11 +95,11 @@ export class Emitter {
       temperature: this.temperature,
       mass: this.mass,
       direction: this.direction,
-      speed: this.speed,
       enabled: this.enabled,
       maxParticles: this.maxParticles
     };
   }
+
 
   static fromJSON(data) {
     return new Emitter(data.x, data.y, data.width, data.height, data);

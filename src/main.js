@@ -303,19 +303,19 @@ function attachDualInput(id, onChange) {
 
 // Tool Configurations
 const toolConfigs = {
-  wall: { shape: 'polygon', conductivity: 0.0, thickness: 4 },
+  wall: { shape: 'polygon', thickness: 4, conductivity: 0.0 },
   piston: { mass: 30, mode: 'free', springK: 50, frequency: 0.8, amplitude: 50, phase: 0, dampingCoeff: 25.0, conductivity: 0.2 },
   solid_res: { temperature: 500, conductance: 0.8 },
   heat_exchanger: { temperature: 300, conductivity: 0.6 },
   regenerator: { temperature: 300, heatCapacity: 400, conductivity: 0.7, orientation: 'horizontal', sliceCount: 10 },
   storage_block: { temperature: 300, heatCapacity: 300, conductivity: 0.6 },
-  valve: { type: 'manual_valve', conductivity: 0.0, allowedDirection: 1, triggerPressure: 250, reliefMode: 'oneway' },
-  throttle_valve: { openRatio: 0.3, thickness: 6 },
-  gas: { count: 30, temperature: 300, mass: 1.0, velocityMode: 'uniform_speed' },
-  regulator: { targetCount: 50, hysteresis: 3, temperature: 300, mass: 1.0, rate: 15 },
-  emitter: { rate: 8, temperature: 350, mass: 1.0, direction: 'right', speed: 120, maxParticles: 0 },
-  sink: { absorptionEfficiency: 1.0 },
-  sensor: { label: 'Chamber' },
+  valve: { type: 'manual_valve', thickness: 4, conductivity: 0.0, allowedDirection: 1, triggerPressure: 250, pressureHysteresis: 25, reliefMode: 'oneway' },
+  throttle_valve: { openRatio: 0.3, thickness: 6, conductivity: 0.0 },
+  gas: { temperature: 300, mass: 1.0, count: 30, velocityMode: 'uniform_speed' },
+  regulator: { temperature: 300, mass: 1.0, targetCount: 50, hysteresis: 3, rate: 15 },
+  emitter: { direction: 'right', rate: 8, temperature: 300, mass: 1.0, maxParticles: 0 },
+  sink: { direction: '360', tempFilterMode: 'all', filterTemperature: 300, maxParticles: 0, absorptionEfficiency: 1.0 },
+  sensor: { label: 'Chamber', color: '#38bdf8' },
   text: { text: 'Note', fontSize: 14, color: '#94a3b8' }
 };
 
@@ -466,7 +466,12 @@ function renderToolProperties(tool) {
   if (toolDialogBadge) toolDialogBadge.textContent = badgeText;
   if (toolDialogHelpPanel) toolDialogHelpPanel.textContent = toolHelpDescriptions[tool] || '';
 
-  if (tool === 'select') {
+  // Always reset description to collapsed when switching tools
+  isToolHelpOpen = false;
+  if (toolDialogHelpPanel) toolDialogHelpPanel.style.display = 'none';
+  if (helpArrowIcon) helpArrowIcon.textContent = '▾';
+
+  if (isSimulating || tool === 'select') {
     if (toolDialogPanel) toolDialogPanel.style.display = 'none';
     toolPropertiesContainer.innerHTML = '';
     return;
@@ -474,6 +479,8 @@ function renderToolProperties(tool) {
 
   if (toolDialogPanel) {
     toolDialogPanel.style.display = 'flex';
+    toolDialogPanel.style.left = '350px';
+    toolDialogPanel.style.top = '176px';
   }
 
   if (tool === 'text') {
@@ -495,16 +502,16 @@ function renderToolProperties(tool) {
 
   } else if (tool === 'wall') {
     toolPropertiesContainer.innerHTML = `
-      ${makeDualInput('Conductivity κ (0 = Insulated)', 'propWCond', 0, 1, 0.05, toolConfigs.wall.conductivity)}
-      ${makeDualInput('Wall Thickness', 'propWThick', 2, 12, 1, toolConfigs.wall.thickness, 'px')}
+      ${makeDualInput('Thickness', 'propWThick', 2, 16, 1, toolConfigs.wall.thickness, 'px')}
+      ${makeDualInput('Conductivity κ', 'propWCond', 0, 1, 0.05, toolConfigs.wall.conductivity)}
     `;
-    attachDualInput('propWCond', val => {
-      toolConfigs.wall.conductivity = val;
-      syncActiveToolWithSelection('wall', item => { item.conductivity = val; });
-    });
     attachDualInput('propWThick', val => {
       toolConfigs.wall.thickness = val;
       syncActiveToolWithSelection('wall', item => { item.thickness = val; });
+    });
+    attachDualInput('propWCond', val => {
+      toolConfigs.wall.conductivity = val;
+      syncActiveToolWithSelection('wall', item => { item.conductivity = val; });
     });
 
   } else if (tool === 'piston') {
@@ -559,8 +566,8 @@ function renderToolProperties(tool) {
 
   } else if (tool === 'solid_res') {
     toolPropertiesContainer.innerHTML = `
-      ${makeDualInput('Constant Temperature T', 'propResT', 50, 1000, 25, toolConfigs.solid_res.temperature, 'K')}
-      ${makeDualInput('Coupling Conductance κ', 'propResK', 0.1, 1.0, 0.05, toolConfigs.solid_res.conductance)}
+      ${makeDualInput('Constant Temperature T', 'propResT', 0, 1000, 25, toolConfigs.solid_res.temperature, 'K')}
+      ${makeDualInput('Thermal Coupling κ', 'propResK', 0.05, 1.0, 0.05, toolConfigs.solid_res.conductance)}
     `;
     attachDualInput('propResT', val => {
       toolConfigs.solid_res.temperature = val;
@@ -576,8 +583,8 @@ function renderToolProperties(tool) {
 
   } else if (tool === 'heat_exchanger') {
     toolPropertiesContainer.innerHTML = `
-      ${makeDualInput('Body Temperature T', 'propHxT', 50, 800, 25, toolConfigs.heat_exchanger.temperature, 'K')}
-      ${makeDualInput('Gas Thermalization Rate κ', 'propHxK', 0.1, 1.0, 0.05, toolConfigs.heat_exchanger.conductivity)}
+      ${makeDualInput('Body Temperature T', 'propHxT', 0, 1000, 25, toolConfigs.heat_exchanger.temperature, 'K')}
+      ${makeDualInput('Thermal Coupling κ', 'propHxK', 0.05, 1.0, 0.05, toolConfigs.heat_exchanger.conductivity)}
     `;
     attachDualInput('propHxT', val => {
       toolConfigs.heat_exchanger.temperature = val;
@@ -594,15 +601,15 @@ function renderToolProperties(tool) {
   } else if (tool === 'regenerator') {
     toolPropertiesContainer.innerHTML = `
       <div class="field-row">
-        <div class="field-label"><span>Flow / Conduction Axis</span></div>
+        <div class="field-label"><span>Flow Axis</span></div>
         <div class="btn-toggle-group">
           <button class="sub-toggle-btn ${toolConfigs.regenerator.orientation === 'horizontal' ? 'active' : ''}" id="btnRegenHoriz">Horizontal</button>
           <button class="sub-toggle-btn ${toolConfigs.regenerator.orientation === 'vertical' ? 'active' : ''}" id="btnRegenVert">Vertical</button>
         </div>
       </div>
-      ${makeDualInput('Base Temperature T', 'propRegenT', 50, 800, 25, toolConfigs.regenerator.temperature, 'K')}
+      ${makeDualInput('Base Temperature T', 'propRegenT', 0, 1000, 25, toolConfigs.regenerator.temperature, 'K')}
       ${makeDualInput('Total Heat Capacity C', 'propRegenC', 50, 1500, 50, toolConfigs.regenerator.heatCapacity, 'J/K')}
-      ${makeDualInput('Gas Coupling Rate κ', 'propRegenK', 0.1, 1.0, 0.05, toolConfigs.regenerator.conductivity)}
+      ${makeDualInput('Thermal Coupling κ', 'propRegenK', 0.05, 1.0, 0.05, toolConfigs.regenerator.conductivity)}
     `;
     document.getElementById('btnRegenHoriz')?.addEventListener('click', () => {
       toolConfigs.regenerator.orientation = 'horizontal';
@@ -629,9 +636,9 @@ function renderToolProperties(tool) {
 
   } else if (tool === 'storage_block') {
     toolPropertiesContainer.innerHTML = `
-      ${makeDualInput('Initial Temperature T', 'propStoreT', 50, 800, 25, toolConfigs.storage_block.temperature, 'K')}
+      ${makeDualInput('Temperature T', 'propStoreT', 0, 1000, 25, toolConfigs.storage_block.temperature, 'K')}
       ${makeDualInput('Heat Capacity C', 'propStoreC', 50, 1500, 50, toolConfigs.storage_block.heatCapacity, 'J/K')}
-      ${makeDualInput('Surface Conductivity κ', 'propStoreK', 0.1, 1.0, 0.05, toolConfigs.storage_block.conductivity)}
+      ${makeDualInput('Thermal Conductivity κ', 'propStoreK', 0.05, 1.0, 0.05, toolConfigs.storage_block.conductivity)}
     `;
     attachDualInput('propStoreT', val => {
       toolConfigs.storage_block.temperature = val;
@@ -652,9 +659,18 @@ function renderToolProperties(tool) {
   } else if (tool === 'valve') {
     const vType = toolConfigs.valve.type;
     let extraFields = '';
-    if (vType === 'relief_valve') {
+    if (vType === 'check_valve') {
+      extraFields = `
+        <div class="field-row">
+          <button id="btnToolFlipCheckDir" class="btn-flip-dir" style="width:100%;">
+            <span>Flip Flow Direction (${toolConfigs.valve.allowedDirection > 0 ? 'Forward →' : 'Reverse ←'})</span>
+          </button>
+        </div>
+      `;
+    } else if (vType === 'relief_valve') {
       extraFields = `
         ${makeDualInput('Trigger Pressure P_max', 'propVReliefP', 50, 1000, 25, toolConfigs.valve.triggerPressure, 'Pa')}
+        ${makeDualInput('Hysteresis Band ΔP', 'propVReliefHyst', 0, 100, 5, toolConfigs.valve.pressureHysteresis !== undefined ? toolConfigs.valve.pressureHysteresis : 25, 'Pa')}
         <div class="field-row">
           <div class="field-label"><span>Relief Mode</span></div>
           <div class="btn-toggle-group">
@@ -665,17 +681,32 @@ function renderToolProperties(tool) {
       `;
     }
     toolPropertiesContainer.innerHTML = `
-      ${makeDualInput('Conductivity κ', 'propVKappa', 0, 1, 0.05, toolConfigs.valve.conductivity)}
       ${extraFields}
+      ${makeDualInput('Thickness', 'propVThick', 2, 16, 1, toolConfigs.valve.thickness || 4, 'px')}
+      ${makeDualInput('Conductivity κ', 'propVKappa', 0, 1, 0.05, toolConfigs.valve.conductivity)}
     `;
+    attachDualInput('propVThick', val => {
+      toolConfigs.valve.thickness = val;
+      syncActiveToolWithSelection('valve', item => { item.thickness = val; });
+    });
     attachDualInput('propVKappa', val => {
       toolConfigs.valve.conductivity = val;
       syncActiveToolWithSelection('valve', item => { item.conductivity = val; });
     });
-    if (vType === 'relief_valve') {
+    if (vType === 'check_valve') {
+      document.getElementById('btnToolFlipCheckDir')?.addEventListener('click', () => {
+        toolConfigs.valve.allowedDirection = -toolConfigs.valve.allowedDirection;
+        renderToolProperties('valve');
+        syncActiveToolWithSelection('valve', item => { item.allowedDirection = toolConfigs.valve.allowedDirection; });
+      });
+    } else if (vType === 'relief_valve') {
       attachDualInput('propVReliefP', val => {
         toolConfigs.valve.triggerPressure = val;
         syncActiveToolWithSelection('valve', item => { item.triggerPressure = val; });
+      });
+      attachDualInput('propVReliefHyst', val => {
+        toolConfigs.valve.pressureHysteresis = val;
+        syncActiveToolWithSelection('valve', item => { item.pressureHysteresis = val; });
       });
       document.getElementById('btnRelief1Way')?.addEventListener('click', () => {
         toolConfigs.valve.reliefMode = 'oneway';
@@ -692,7 +723,8 @@ function renderToolProperties(tool) {
   } else if (tool === 'throttle_valve') {
     toolPropertiesContainer.innerHTML = `
       ${makeDualInput('Opening Ratio', 'propTVOpen', 0, 100, 5, Math.round(toolConfigs.throttle_valve.openRatio * 100), '%')}
-      ${makeDualInput('Thickness', 'propTVThick', 2, 16, 1, toolConfigs.throttle_valve.thickness, 'px')}
+      ${makeDualInput('Thickness', 'propTVThick', 2, 16, 1, toolConfigs.throttle_valve.thickness || 6, 'px')}
+      ${makeDualInput('Conductivity κ', 'propTVCond', 0, 1, 0.05, toolConfigs.throttle_valve.conductivity || 0)}
     `;
     attachDualInput('propTVOpen', val => {
       toolConfigs.throttle_valve.openRatio = val / 100;
@@ -705,14 +737,17 @@ function renderToolProperties(tool) {
         item._updateGeometry();
       });
     });
+    attachDualInput('propTVCond', val => {
+      toolConfigs.throttle_valve.conductivity = val;
+      syncActiveToolWithSelection('throttle_valve', item => { item.conductivity = val; });
+    });
 
   } else if (tool === 'gas') {
     toolPropertiesContainer.innerHTML = `
-      ${makeDualInput('Spawner Particle Count', 'propGasCount', 5, 200, 5, toolConfigs.gas.count)}
-      ${makeDualInput('Gas Temperature T', 'propGasT', 50, 800, 25, toolConfigs.gas.temperature, 'K')}
+      ${makeDualInput('Gas Temperature T', 'propGasT', 0, 1000, 25, toolConfigs.gas.temperature, 'K')}
       ${makeDualInput('Particle Mass m', 'propGasM', 0.2, 5.0, 0.2, toolConfigs.gas.mass)}
+      ${makeDualInput('Spawner Particle Count', 'propGasCount', 5, 300, 5, toolConfigs.gas.count)}
     `;
-    attachDualInput('propGasCount', val => { toolConfigs.gas.count = Math.round(val); });
     attachDualInput('propGasT', val => {
       toolConfigs.gas.temperature = val;
       syncActiveToolWithSelection('gas', item => { engine.setGroupTemperature(item, val); });
@@ -721,23 +756,16 @@ function renderToolProperties(tool) {
       toolConfigs.gas.mass = val;
       syncActiveToolWithSelection('gas', item => { engine.setGroupMass(item, val); });
     });
+    attachDualInput('propGasCount', val => { toolConfigs.gas.count = Math.round(val); });
 
   } else if (tool === 'regulator') {
     toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Gas Temperature T', 'propRegTemp', 0, 1000, 25, toolConfigs.regulator.temperature, 'K')}
+      ${makeDualInput('Particle Mass m', 'propRegMass', 0.2, 5.0, 0.2, toolConfigs.regulator.mass)}
       ${makeDualInput('Target Particle Count N', 'propRegTarget', 5, 300, 5, toolConfigs.regulator.targetCount)}
       ${makeDualInput('Hysteresis Band ΔN', 'propRegHyst', 0, 20, 1, toolConfigs.regulator.hysteresis)}
-      ${makeDualInput('Gas Temperature T', 'propRegTemp', 50, 1000, 25, toolConfigs.regulator.temperature, 'K')}
-      ${makeDualInput('Particle Mass m', 'propRegMass', 0.2, 5.0, 0.2, toolConfigs.regulator.mass)}
       ${makeDualInput('Max Adjustment Rate', 'propRegRate', 1, 60, 1, toolConfigs.regulator.rate, '/s')}
     `;
-    attachDualInput('propRegTarget', val => {
-      toolConfigs.regulator.targetCount = Math.round(val);
-      syncActiveToolWithSelection('regulator', item => { item.targetCount = Math.round(val); });
-    });
-    attachDualInput('propRegHyst', val => {
-      toolConfigs.regulator.hysteresis = Math.round(val);
-      syncActiveToolWithSelection('regulator', item => { item.hysteresis = Math.round(val); });
-    });
     attachDualInput('propRegTemp', val => {
       toolConfigs.regulator.temperature = val;
       syncActiveToolWithSelection('regulator', item => { item.temperature = val; });
@@ -745,6 +773,14 @@ function renderToolProperties(tool) {
     attachDualInput('propRegMass', val => {
       toolConfigs.regulator.mass = val;
       syncActiveToolWithSelection('regulator', item => { item.mass = val; });
+    });
+    attachDualInput('propRegTarget', val => {
+      toolConfigs.regulator.targetCount = Math.round(val);
+      syncActiveToolWithSelection('regulator', item => { item.targetCount = Math.round(val); });
+    });
+    attachDualInput('propRegHyst', val => {
+      toolConfigs.regulator.hysteresis = Math.round(val);
+      syncActiveToolWithSelection('regulator', item => { item.hysteresis = Math.round(val); });
     });
     attachDualInput('propRegRate', val => {
       toolConfigs.regulator.rate = val;
@@ -764,8 +800,8 @@ function renderToolProperties(tool) {
         </div>
       </div>
       ${makeDualInput('Rate', 'propEmitRate', 1, 60, 1, toolConfigs.emitter.rate, '/s')}
-      ${makeDualInput('Temperature T', 'propEmitT', 50, 800, 25, toolConfigs.emitter.temperature, 'K')}
-      ${makeDualInput('Emission Speed', 'propEmitSpd', 20, 350, 10, toolConfigs.emitter.speed, 'px/s')}
+      ${makeDualInput('Temperature T', 'propEmitT', 0, 1000, 25, toolConfigs.emitter.temperature, 'K')}
+      ${makeDualInput('Particle Mass m', 'propEmitM', 0.2, 5.0, 0.2, toolConfigs.emitter.mass || 1.0)}
       ${makeDualInput('Max Count Limit (0 = ∞)', 'propEmitMax', 0, 500, 10, toolConfigs.emitter.maxParticles, '')}
     `;
     toolPropertiesContainer.querySelectorAll('[data-dir]').forEach(btn => {
@@ -784,9 +820,9 @@ function renderToolProperties(tool) {
       toolConfigs.emitter.temperature = val;
       syncActiveToolWithSelection('emitter', item => { item.temperature = val; });
     });
-    attachDualInput('propEmitSpd', val => {
-      toolConfigs.emitter.speed = val;
-      syncActiveToolWithSelection('emitter', item => { item.speed = val; });
+    attachDualInput('propEmitM', val => {
+      toolConfigs.emitter.mass = val;
+      syncActiveToolWithSelection('emitter', item => { item.mass = val; });
     });
     attachDualInput('propEmitMax', val => {
       toolConfigs.emitter.maxParticles = Math.round(val);
@@ -795,8 +831,53 @@ function renderToolProperties(tool) {
 
   } else if (tool === 'sink') {
     toolPropertiesContainer.innerHTML = `
-      ${makeDualInput('Absorption Rate', 'propSinkEff', 0.1, 1.0, 0.05, toolConfigs.sink.absorptionEfficiency)}
+      <div class="field-row">
+        <div class="field-label"><span>Direction</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${toolConfigs.sink.direction === 'right' ? 'active' : ''}" data-sinkdir="right" title="Right (0°)">→</button>
+          <button class="sub-toggle-btn ${toolConfigs.sink.direction === 'left' ? 'active' : ''}" data-sinkdir="left" title="Left (180°)">←</button>
+          <button class="sub-toggle-btn ${toolConfigs.sink.direction === 'down' ? 'active' : ''}" data-sinkdir="down" title="Down (90°)">↓</button>
+          <button class="sub-toggle-btn ${toolConfigs.sink.direction === 'up' ? 'active' : ''}" data-sinkdir="up" title="Up (270°)">↑</button>
+          <button class="sub-toggle-btn ${toolConfigs.sink.direction === '360' ? 'active' : ''}" data-sinkdir="360" title="All (360°)">360°</button>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field-label"><span>Filter by Temperature</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${toolConfigs.sink.tempFilterMode === 'all' ? 'active' : ''}" data-tfilter="all">All</button>
+          <button class="sub-toggle-btn ${toolConfigs.sink.tempFilterMode === 'above' ? 'active' : ''}" data-tfilter="above">&gt; T</button>
+          <button class="sub-toggle-btn ${toolConfigs.sink.tempFilterMode === 'below' ? 'active' : ''}" data-tfilter="below">&lt; T</button>
+        </div>
+      </div>
+      ${toolConfigs.sink.tempFilterMode !== 'all' ? makeDualInput('Threshold Temperature T', 'propSinkT', 0, 1000, 25, toolConfigs.sink.filterTemperature || 300, 'K') : ''}
+      ${makeDualInput('Max Absorb Limit (0 = ∞)', 'propSinkMax', 0, 500, 10, toolConfigs.sink.maxParticles || 0, '')}
+      ${makeDualInput('Absorption Efficiency', 'propSinkEff', 0.1, 1.0, 0.05, toolConfigs.sink.absorptionEfficiency)}
     `;
+    toolPropertiesContainer.querySelectorAll('[data-sinkdir]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        toolPropertiesContainer.querySelectorAll('[data-sinkdir]').forEach(x => x.classList.remove('active'));
+        btn.classList.add('active');
+        toolConfigs.sink.direction = btn.dataset.sinkdir;
+        syncActiveToolWithSelection('sink', item => { item.direction = btn.dataset.sinkdir; });
+      });
+    });
+    toolPropertiesContainer.querySelectorAll('[data-tfilter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        toolConfigs.sink.tempFilterMode = btn.dataset.tfilter;
+        renderToolProperties('sink');
+        syncActiveToolWithSelection('sink', item => { item.tempFilterMode = btn.dataset.tfilter; });
+      });
+    });
+    if (toolConfigs.sink.tempFilterMode !== 'all') {
+      attachDualInput('propSinkT', val => {
+        toolConfigs.sink.filterTemperature = val;
+        syncActiveToolWithSelection('sink', item => { item.filterTemperature = val; });
+      });
+    }
+    attachDualInput('propSinkMax', val => {
+      toolConfigs.sink.maxParticles = Math.round(val);
+      syncActiveToolWithSelection('sink', item => { item.maxParticles = Math.round(val); });
+    });
     attachDualInput('propSinkEff', val => {
       toolConfigs.sink.absorptionEfficiency = val;
       syncActiveToolWithSelection('sink', item => { item.absorptionEfficiency = val; });
@@ -808,16 +889,24 @@ function renderToolProperties(tool) {
         <div class="field-label"><span>Chamber Prefix</span></div>
         <input type="text" id="propSensName" value="${toolConfigs.sensor.label}" class="styled-select" style="width:100%;">
       </div>
+      <div class="field-row">
+        <div class="field-label"><span>Border & Chart Color</span></div>
+        <input type="color" id="propSensColor" value="${toolConfigs.sensor.color || '#38bdf8'}" class="styled-select" style="width:54px; height:26px; padding:1px; cursor:pointer;">
+      </div>
     `;
     document.getElementById('propSensName')?.addEventListener('input', (e) => {
       toolConfigs.sensor.label = e.target.value.trim() || 'Chamber';
       syncActiveToolWithSelection('sensor', item => { item.label = toolConfigs.sensor.label; });
     });
+    document.getElementById('propSensColor')?.addEventListener('input', (e) => {
+      toolConfigs.sensor.color = e.target.value;
+      syncActiveToolWithSelection('sensor', item => { item.color = e.target.value; });
+    });
   }
 }
 
 // ============================================================================
-// Floating Tool Dialog (Onshape CAD Style) Controls & Dragging
+// Floating Tool Dialog (Onshape CAD Style) Controls
 // ============================================================================
 let isToolHelpOpen = false;
 function toggleToolHelp(forceState) {
@@ -832,53 +921,11 @@ btnToolDialogClose?.addEventListener('click', (e) => {
   document.getElementById('toolSelect')?.click();
 });
 
-if (toolDialogHeader && toolDialogPanel) {
-  let isDraggingDialog = false;
-  let didMoveDialog = false;
-  let dialogDragStart = { x: 0, y: 0 };
-  let dialogPanelStart = { x: 350, y: 176 };
-
-  toolDialogHeader.addEventListener('mousedown', (e) => {
-    if (e.target.closest?.('.tool-dialog-actions')) return;
-    isDraggingDialog = true;
-    didMoveDialog = false;
-    dialogDragStart = { x: e.clientX, y: e.clientY };
-    const rect = toolDialogPanel.getBoundingClientRect();
-    dialogPanelStart = { x: rect.left, y: rect.top };
-    toolDialogHeader.style.cursor = 'grabbing';
-  });
-
-  window.addEventListener('mousemove', (e) => {
-    if (!isDraggingDialog) return;
-    const dx = e.clientX - dialogDragStart.x;
-    const dy = e.clientY - dialogDragStart.y;
-    if (Math.hypot(dx, dy) > 4) {
-      didMoveDialog = true;
-    }
-    const newLeft = Math.max(10, Math.min(window.innerWidth - toolDialogPanel.offsetWidth - 10, dialogPanelStart.x + dx));
-    const newTop = Math.max(70, Math.min(window.innerHeight - toolDialogPanel.offsetHeight - 10, dialogPanelStart.y + dy));
-    toolDialogPanel.style.left = `${newLeft}px`;
-    toolDialogPanel.style.top = `${newTop}px`;
-  });
-
-  window.addEventListener('mouseup', () => {
-    if (isDraggingDialog) {
-      isDraggingDialog = false;
-      if (toolDialogHeader) toolDialogHeader.style.cursor = 'pointer';
-      setTimeout(() => { didMoveDialog = false; }, 50);
-    }
-  });
-
+if (toolDialogHeader) {
+  toolDialogHeader.style.cursor = 'pointer';
   toolDialogHeader.addEventListener('click', (e) => {
     if (e.target.closest?.('.tool-dialog-actions')) return;
-    if (didMoveDialog) return;
     toggleToolHelp();
-  });
-
-  toolDialogHeader.addEventListener('dblclick', (e) => {
-    if (e.target.closest('.tool-dialog-actions')) return;
-    toolDialogPanel.style.left = '350px';
-    toolDialogPanel.style.top = '176px';
   });
 }
 
@@ -908,7 +955,7 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
       `;
     } else if (item.type === 'check_valve') {
       extraControls = `
-        <button id="${idPrefix}flipDirBtn" class="btn-flip-dir" title="Flip flow direction">
+        <button id="${idPrefix}flipDirBtn" class="btn-flip-dir" title="Flip flow direction" style="margin-bottom:8px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>
           <span>Flip Flow Direction (${item.allowedDirection > 0 ? 'Forward →' : 'Reverse ←'})</span>
         </button>
@@ -916,6 +963,7 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
     } else if (item.type === 'relief_valve') {
       extraControls = `
         ${makeDualInput('Trigger Pressure P_max', `${idPrefix}reliefP`, 50, 1000, 25, item.triggerPressure, 'Pa')}
+        ${makeDualInput('Hysteresis Band ΔP', `${idPrefix}reliefHyst`, 0, 100, 5, item.pressureHysteresis !== undefined ? item.pressureHysteresis : 25, 'Pa')}
         <div class="field-row">
           <div class="field-label"><span>Relief Mode</span></div>
           <div class="btn-toggle-group">
@@ -924,7 +972,7 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
           </div>
         </div>
         ${item.reliefMode === 'oneway' ? `
-          <button id="${idPrefix}flipReliefDirBtn" class="btn-flip-dir" title="Flip relief opening direction">
+          <button id="${idPrefix}flipReliefDirBtn" class="btn-flip-dir" title="Flip relief opening direction" style="margin-bottom:8px;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>
             <span>Flip Relief Direction (${(item.allowedDirection || 1) > 0 ? 'Forward →' : 'Reverse ←'})</span>
           </button>
@@ -934,12 +982,12 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
 
     bodyContainer.innerHTML = `
       ${extraControls}
-      ${makeDualInput('Conductivity κ', `${idPrefix}wKappa`, 0, 1, 0.05, item.conductivity)}
       ${makeDualInput('Thickness', `${idPrefix}wThick`, 2, 16, 1, item.thickness, 'px')}
+      ${makeDualInput('Conductivity κ', `${idPrefix}wKappa`, 0, 1, 0.05, item.conductivity)}
     `;
 
-    attachDualInput(`${idPrefix}wKappa`, val => { item.conductivity = val; });
     attachDualInput(`${idPrefix}wThick`, val => { item.thickness = val; });
+    attachDualInput(`${idPrefix}wKappa`, val => { item.conductivity = val; });
 
     document.getElementById(`${idPrefix}toggleValveBtn`)?.addEventListener('click', () => {
       item.isOpen = !item.isOpen;
@@ -951,6 +999,7 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
     });
     if (item.type === 'relief_valve') {
       attachDualInput(`${idPrefix}reliefP`, val => { item.triggerPressure = val; });
+      attachDualInput(`${idPrefix}reliefHyst`, val => { item.pressureHysteresis = val; });
       document.getElementById(`${idPrefix}relief1Way`)?.addEventListener('click', () => {
         item.reliefMode = 'oneway';
         updateElementsList();
@@ -976,10 +1025,11 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
       </div>
       <div class="stat-card" style="margin-bottom:8px;">
         <span class="stat-label">Opening Aperture & Pressure Drop</span>
-        <span class="stat-value" style="font-size:12px; color:#f59e0b;">${Math.round(item.openRatio * 100)}% (${gapPx} px) | ΔP: ${(item.deltaP || 0).toFixed(1)} Pa</span>
+        <span class="stat-value" style="font-size:12px; color:#10b981;">${Math.round(item.openRatio * 100)}% (${gapPx} px) | ΔP: ${(item.deltaP || 0).toFixed(1)} Pa</span>
       </div>
       ${makeDualInput('Opening Ratio', `${idPrefix}tvOpen`, 0, 100, 5, Math.round(item.openRatio * 100), '%')}
       ${makeDualInput('Thickness', `${idPrefix}tvThick`, 2, 16, 1, item.thickness, 'px')}
+      ${makeDualInput('Conductivity κ', `${idPrefix}tvCond`, 0, 1, 0.05, item.conductivity || 0)}
       <button class="btn-danger" id="${idPrefix}delTVBtn" style="width:100%; margin-top:8px; padding:6px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">
         Delete Throttle Valve
       </button>
@@ -996,6 +1046,9 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
     attachDualInput(`${idPrefix}tvThick`, val => {
       item.thickness = Math.round(val);
       item._updateGeometry();
+    });
+    attachDualInput(`${idPrefix}tvCond`, val => {
+      item.conductivity = val;
     });
     document.getElementById(`${idPrefix}delTVBtn`)?.addEventListener('click', () => {
       deleteSelectedItems();
@@ -1070,17 +1123,21 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
     bodyContainer.innerHTML = `
       <div class="field-row" style="margin-bottom:8px;">
         <button id="${idPrefix}toggleResBtn" class="btn-emitter-toggle ${isResActive ? 'is-on' : 'is-off'}">
-          <span>${isResActive ? 'SINK IS ACTIVE' : 'SINK IS DISABLED'}</span>
+          <span>${isResActive ? 'RESERVOIR IS ACTIVE' : 'RESERVOIR IS DISABLED'}</span>
         </button>
       </div>
-      ${makeDualInput('Constant Temperature T', `${idPrefix}resT`, 50, 1000, 25, item.temperature, 'K')}
-      ${makeDualInput('Coupling Conductance κ', `${idPrefix}resK`, 0.1, 1.0, 0.05, item.conductance)}
+      ${makeDualInput('Constant Temperature T', `${idPrefix}resT`, 0, 1000, 25, item.temperature, 'K')}
+      ${makeDualInput('Thermal Coupling κ', `${idPrefix}resK`, 0.05, 1.0, 0.05, item.conductance)}
     `;
     document.getElementById(`${idPrefix}toggleResBtn`)?.addEventListener('click', () => {
       item.toggle();
       updateElementsList();
     });
-    attachDualInput(`${idPrefix}resT`, val => { item.temperature = val; item.label = `Sink (${Math.round(val)}K)`; updateElementCardLabel(itemIndex, item.label); });
+    attachDualInput(`${idPrefix}resT`, val => {
+      item.temperature = val;
+      item.label = `Isotherm (${Math.round(val)}K)`;
+      updateElementCardLabel(itemIndex, item.label);
+    });
     attachDualInput(`${idPrefix}resK`, val => { item.conductance = val; });
 
   } else if (item instanceof HeatExchanger) {
@@ -1091,14 +1148,18 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
           <span>${isHxActive ? 'HEAT EXCHANGER IS ACTIVE' : 'HEAT EXCHANGER IS DISABLED'}</span>
         </button>
       </div>
-      ${makeDualInput('Body Temperature T', `${idPrefix}hxT`, 50, 800, 25, item.temperature, 'K')}
-      ${makeDualInput('Gas Coupling Rate κ', `${idPrefix}hxK`, 0.1, 1.0, 0.05, item.conductivity)}
+      ${makeDualInput('Body Temperature T', `${idPrefix}hxT`, 0, 1000, 25, item.temperature, 'K')}
+      ${makeDualInput('Thermal Coupling κ', `${idPrefix}hxK`, 0.05, 1.0, 0.05, item.conductivity)}
     `;
     document.getElementById(`${idPrefix}toggleHxBtn`)?.addEventListener('click', () => {
       item.toggle();
       updateElementsList();
     });
-    attachDualInput(`${idPrefix}hxT`, val => { item.temperature = val; item.label = `Heat Exchanger (${Math.round(val)}K)`; updateElementCardLabel(itemIndex, item.label); });
+    attachDualInput(`${idPrefix}hxT`, val => {
+      item.temperature = val;
+      item.label = `Heat Exchanger (${Math.round(val)}K)`;
+      updateElementCardLabel(itemIndex, item.label);
+    });
     attachDualInput(`${idPrefix}hxK`, val => { item.conductivity = val; });
 
   } else if (item instanceof RegeneratorMatrix) {
@@ -1123,8 +1184,9 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
         <span class="stat-label">Thermal Gradient Span</span>
         <span class="stat-value" style="font-size:12px; color:#38bdf8;">${minT} K to ${maxT} K (Avg: ${avgT} K)</span>
       </div>
+      ${makeDualInput('Base Temperature T', `${idPrefix}regT`, 0, 1000, 25, avgT, 'K')}
       ${makeDualInput('Total Heat Capacity C', `${idPrefix}regC`, 50, 1500, 50, item.heatCapacity, 'J/K')}
-      ${makeDualInput('Gas Coupling Rate κ', `${idPrefix}regK`, 0.1, 1.0, 0.05, item.conductivity)}
+      ${makeDualInput('Thermal Coupling κ', `${idPrefix}regK`, 0.05, 1.0, 0.05, item.conductivity)}
       ${makeDualInput('Axial Heat Leakage', `${idPrefix}regAx`, 0, 0.5, 0.02, item.axialConductivity || 0.05)}
     `;
     document.getElementById(`${idPrefix}toggleRegBtn`)?.addEventListener('click', () => {
@@ -1139,6 +1201,13 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
       item.orientation = 'vertical';
       updateElementsList();
     });
+    attachDualInput(`${idPrefix}regT`, val => {
+      const diff = val - item.getAverageTemperature();
+      for (let i = 0; i < item.sliceCount; i++) {
+        item.temperatures[i] = Math.max(5, item.temperatures[i] + diff);
+      }
+      updateElementsList();
+    });
     attachDualInput(`${idPrefix}regC`, val => { item.heatCapacity = val; });
     attachDualInput(`${idPrefix}regK`, val => { item.conductivity = val; });
     attachDualInput(`${idPrefix}regAx`, val => { item.axialConductivity = val; });
@@ -1151,15 +1220,19 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
           <span>${isBlockActive ? 'RESSAVOIR IS ACTIVE' : 'RESSAVOIR IS DISABLED'}</span>
         </button>
       </div>
-      ${makeDualInput('Temperature T', `${idPrefix}blockT`, 50, 800, 25, item.temperature, 'K')}
+      ${makeDualInput('Temperature T', `${idPrefix}blockT`, 0, 1000, 25, item.temperature, 'K')}
       ${makeDualInput('Heat Capacity C', `${idPrefix}blockC`, 50, 1500, 50, item.heatCapacity, 'J/K')}
-      ${makeDualInput('Surface Conductivity κ', `${idPrefix}blockK`, 0.1, 1.0, 0.05, item.conductivity)}
+      ${makeDualInput('Thermal Conductivity κ', `${idPrefix}blockK`, 0.05, 1.0, 0.05, item.conductivity)}
     `;
     document.getElementById(`${idPrefix}toggleBlockBtn`)?.addEventListener('click', () => {
       item.toggle();
       updateElementsList();
     });
-    attachDualInput(`${idPrefix}blockT`, val => { item.temperature = val; item.label = `Ressavoir (${Math.round(val)}K)`; updateElementCardLabel(itemIndex, item.label); });
+    attachDualInput(`${idPrefix}blockT`, val => {
+      item.temperature = val;
+      item.label = `Ressavoir (${Math.round(val)}K)`;
+      updateElementCardLabel(itemIndex, item.label);
+    });
     attachDualInput(`${idPrefix}blockC`, val => { item.heatCapacity = val; });
     attachDualInput(`${idPrefix}blockK`, val => { item.conductivity = val; });
 
@@ -1182,8 +1255,8 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
         </div>
       </div>
       ${makeDualInput('Rate', `${idPrefix}emitRate`, 1, 60, 1, item.rate, '/s')}
-      ${makeDualInput('Temperature T', `${idPrefix}emitT`, 50, 800, 25, item.temperature, 'K')}
-      ${makeDualInput('Emission Speed', `${idPrefix}emitSpd`, 20, 350, 10, item.speed, 'px/s')}
+      ${makeDualInput('Temperature T', `${idPrefix}emitT`, 0, 1000, 25, item.temperature, 'K')}
+      ${makeDualInput('Particle Mass m', `${idPrefix}emitM`, 0.2, 5.0, 0.2, item.mass || 1.0)}
       ${makeDualInput('Max Count Limit (0 = ∞)', `${idPrefix}emitMax`, 0, 500, 10, item.maxParticles || 0)}
     `;
     document.getElementById(`${idPrefix}emitToggleBtn`)?.addEventListener('click', () => {
@@ -1199,7 +1272,7 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
     });
     attachDualInput(`${idPrefix}emitRate`, val => { item.rate = Math.round(val); updateElementCardLabel(itemIndex, `${item.label || 'Emitter'} [${item.rate}/s, ${Math.round(item.temperature)}K]`); });
     attachDualInput(`${idPrefix}emitT`, val => { item.temperature = val; });
-    attachDualInput(`${idPrefix}emitSpd`, val => { item.speed = val; });
+    attachDualInput(`${idPrefix}emitM`, val => { item.mass = val; });
     attachDualInput(`${idPrefix}emitMax`, val => { item.maxParticles = Math.round(val); });
 
   } else if (item instanceof SensorZone) {
@@ -1212,7 +1285,7 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
         <input type="text" id="${idPrefix}sensName" value="${item.label}" class="styled-select" style="width:100%;">
       </div>
       <div class="field-row">
-        <div class="field-label"><span>Chamber Border & Chart Color</span></div>
+        <div class="field-label"><span>Border & Chart Color</span></div>
         <input type="color" id="${idPrefix}sensColor" value="${item.color || '#38bdf8'}" class="styled-select" style="width:54px; height:26px; padding:1px; cursor:pointer;">
       </div>
       <div class="stat-card" style="margin-top:6px;">
@@ -1247,9 +1320,63 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
     });
 
   } else if (item instanceof Sink) {
+    const isSinkActive = item.isActive !== false;
     bodyContainer.innerHTML = `
-      ${makeDualInput('Absorption Rate', `${idPrefix}sinkEff`, 0.1, 1.0, 0.05, item.absorptionEfficiency)}
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}toggleSinkBtn" class="btn-emitter-toggle ${isSinkActive ? 'is-on' : 'is-off'}">
+          <span>${isSinkActive ? 'ABSORBER IS ACTIVE' : 'ABSORBER IS DISABLED'}</span>
+        </button>
+      </div>
+      <div class="field-row">
+        <div class="field-label"><span>Direction</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${item.direction === 'right' ? 'active' : ''}" data-sinkdir="right" title="Right (0°)">→</button>
+          <button class="sub-toggle-btn ${item.direction === 'left' ? 'active' : ''}" data-sinkdir="left" title="Left (180°)">←</button>
+          <button class="sub-toggle-btn ${item.direction === 'down' ? 'active' : ''}" data-sinkdir="down" title="Down (90°)">↓</button>
+          <button class="sub-toggle-btn ${item.direction === 'up' ? 'active' : ''}" data-sinkdir="up" title="Up (270°)">↑</button>
+          <button class="sub-toggle-btn ${item.direction === '360' || !item.direction ? 'active' : ''}" data-sinkdir="360" title="All (360°)">360°</button>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field-label"><span>Filter by Temperature</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${(item.tempFilterMode || 'all') === 'all' ? 'active' : ''}" id="${idPrefix}btnTAll">All</button>
+          <button class="sub-toggle-btn ${item.tempFilterMode === 'above' ? 'active' : ''}" id="${idPrefix}btnTAbove">&gt; T</button>
+          <button class="sub-toggle-btn ${item.tempFilterMode === 'below' ? 'active' : ''}" id="${idPrefix}btnTBelow">&lt; T</button>
+        </div>
+      </div>
+      ${(item.tempFilterMode && item.tempFilterMode !== 'all') ? makeDualInput('Threshold Temperature T', `${idPrefix}sinkT`, 0, 1000, 25, item.filterTemperature || 300, 'K') : ''}
+      ${makeDualInput('Max Absorb Limit (0 = ∞)', `${idPrefix}sinkMax`, 0, 500, 10, item.maxParticles || 0)}
+      ${makeDualInput('Absorption Efficiency', `${idPrefix}sinkEff`, 0.1, 1.0, 0.05, item.absorptionEfficiency)}
     `;
+
+    document.getElementById(`${idPrefix}toggleSinkBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    bodyContainer.querySelectorAll('[data-sinkdir]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bodyContainer.querySelectorAll('[data-sinkdir]').forEach(x => x.classList.remove('active'));
+        btn.classList.add('active');
+        item.direction = btn.dataset.sinkdir;
+      });
+    });
+    document.getElementById(`${idPrefix}btnTAll`)?.addEventListener('click', () => {
+      item.tempFilterMode = 'all';
+      updateElementsList();
+    });
+    document.getElementById(`${idPrefix}btnTAbove`)?.addEventListener('click', () => {
+      item.tempFilterMode = 'above';
+      updateElementsList();
+    });
+    document.getElementById(`${idPrefix}btnTBelow`)?.addEventListener('click', () => {
+      item.tempFilterMode = 'below';
+      updateElementsList();
+    });
+    if (item.tempFilterMode && item.tempFilterMode !== 'all') {
+      attachDualInput(`${idPrefix}sinkT`, val => { item.filterTemperature = val; });
+    }
+    attachDualInput(`${idPrefix}sinkMax`, val => { item.maxParticles = Math.round(val); });
     attachDualInput(`${idPrefix}sinkEff`, val => { item.absorptionEfficiency = val; });
 
   } else if (item instanceof ParticleGroup) {
@@ -1260,7 +1387,7 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
         <span class="stat-label">Active Particles in Group</span>
         <span class="stat-value" style="font-size:12px; color:#38bdf8;">${activeCount} particles (avg ${avgT} K)</span>
       </div>
-      ${makeDualInput('Group Temperature T', `${idPrefix}pgTemp`, 50, 1000, 25, item.temperature, 'K')}
+      ${makeDualInput('Gas Temperature T', `${idPrefix}pgTemp`, 0, 1000, 25, item.temperature, 'K')}
       ${makeDualInput('Particle Mass m', `${idPrefix}pgMass`, 0.2, 5.0, 0.2, item.mass)}
       <button id="${idPrefix}selectPtsBtn" class="btn-secondary-action" style="width:100%; margin-top:6px; font-size:11px; padding:6px; background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.3); border-radius:4px; color:#38bdf8; cursor:pointer;">Select Particles on Canvas</button>
       <button id="${idPrefix}delGroupBtn" class="btn-danger-action" style="width:100%; margin-top:6px; font-size:11px; padding:6px; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); border-radius:4px; color:#ef4444; cursor:pointer;">Delete Spawner Group</button>
@@ -1297,10 +1424,10 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
         <span class="stat-label">Particles in Zone</span>
         <span class="stat-value" style="font-size:12px; color:#10b981;">${item.currentCount || 0} / ${item.targetCount} pts (band ±${item.hysteresis})</span>
       </div>
-      ${makeDualInput('Target Count N', `${idPrefix}regTarget`, 5, 300, 5, item.targetCount)}
-      ${makeDualInput('Hysteresis Band ΔN', `${idPrefix}regHyst`, 0, 20, 1, item.hysteresis)}
-      ${makeDualInput('Gas Temperature T', `${idPrefix}regTemp`, 50, 1000, 25, item.temperature, 'K')}
+      ${makeDualInput('Gas Temperature T', `${idPrefix}regTemp`, 0, 1000, 25, item.temperature, 'K')}
       ${makeDualInput('Particle Mass m', `${idPrefix}regMass`, 0.2, 5.0, 0.2, item.mass)}
+      ${makeDualInput('Target Particle Count N', `${idPrefix}regTarget`, 5, 300, 5, item.targetCount)}
+      ${makeDualInput('Hysteresis Band ΔN', `${idPrefix}regHyst`, 0, 20, 1, item.hysteresis)}
       ${makeDualInput('Max Adjustment Rate', `${idPrefix}regRate`, 1, 60, 1, item.rate, '/s')}
       <button id="${idPrefix}delRegBtn" class="btn-danger-action" style="width:100%; margin-top:6px; font-size:11px; padding:6px; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); border-radius:4px; color:#ef4444; cursor:pointer;">Delete Regulator</button>
     `;
@@ -1308,10 +1435,10 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
       item.toggle();
       updateElementsList();
     });
-    attachDualInput(`${idPrefix}regTarget`, val => { item.targetCount = Math.round(val); updateElementCardLabel(itemIndex, `Regulator [Tgt: ${item.targetCount}, ±${item.hysteresis}]`); });
-    attachDualInput(`${idPrefix}regHyst`, val => { item.hysteresis = Math.round(val); updateElementCardLabel(itemIndex, `Regulator [Tgt: ${item.targetCount}, ±${item.hysteresis}]`); });
     attachDualInput(`${idPrefix}regTemp`, val => { item.temperature = val; });
     attachDualInput(`${idPrefix}regMass`, val => { item.mass = val; });
+    attachDualInput(`${idPrefix}regTarget`, val => { item.targetCount = Math.round(val); updateElementCardLabel(itemIndex, `Regulator [Tgt: ${item.targetCount}, ±${item.hysteresis}]`); });
+    attachDualInput(`${idPrefix}regHyst`, val => { item.hysteresis = Math.round(val); updateElementCardLabel(itemIndex, `Regulator [Tgt: ${item.targetCount}, ±${item.hysteresis}]`); });
     attachDualInput(`${idPrefix}regRate`, val => { item.rate = val; });
     document.getElementById(`${idPrefix}delRegBtn`)?.addEventListener('click', () => {
       recordUndoState();
@@ -2022,7 +2149,10 @@ btnPlayPause.addEventListener('click', () => {
     isSimulating = true;
     document.querySelector('.ribbon-row-construction')?.classList.add('simulating-locked');
     document.getElementById('btnToolbarClear')?.setAttribute('disabled', 'true');
-    document.getElementById('toolSelect')?.click();
+    activeTool = 'select';
+    ribbonToolBtns.forEach(b => b.classList.remove('active'));
+    document.getElementById('toolSelect')?.classList.add('active');
+    if (toolDialogPanel) toolDialogPanel.style.display = 'none';
     selectedItems = [];
     resetPolygonDraft();
     arcSteps = [];
@@ -2046,7 +2176,10 @@ btnStep.addEventListener('click', () => {
     isSimulating = true;
     document.querySelector('.ribbon-row-construction')?.classList.add('simulating-locked');
     document.getElementById('btnToolbarClear')?.setAttribute('disabled', 'true');
-    document.getElementById('toolSelect')?.click();
+    activeTool = 'select';
+    ribbonToolBtns.forEach(b => b.classList.remove('active'));
+    document.getElementById('toolSelect')?.classList.add('active');
+    if (toolDialogPanel) toolDialogPanel.style.display = 'none';
     closePopup();
     closeContextMenu();
   }
@@ -2222,12 +2355,13 @@ ctxDuplicate?.addEventListener('click', () => {
     if (item instanceof Wall) {
       const w = engine.addWall(item.p1.x + 20, item.p1.y + 20, item.p2.x + 20, item.p2.y + 20, {
         type: item.type, conductivity: item.conductivity, thickness: item.thickness,
-        allowedDirection: item.allowedDirection, triggerPressure: item.triggerPressure, reliefMode: item.reliefMode
+        allowedDirection: item.allowedDirection, triggerPressure: item.triggerPressure,
+        pressureHysteresis: item.pressureHysteresis, reliefMode: item.reliefMode
       });
       newItems.push(w);
     } else if (item instanceof Reservoir) {
       const r = engine.addReservoir(item.x + 20, item.y + 20, item.width, item.height, {
-        label: item.label, temperature: item.temperature, conductance: item.conductance
+        label: item.label, temperature: item.temperature, conductance: item.conductance, isActive: item.isActive
       });
       newItems.push(r);
     } else if (item instanceof HeatExchanger) {
@@ -2249,12 +2383,14 @@ ctxDuplicate?.addEventListener('click', () => {
       newItems.push(b);
     } else if (item instanceof Emitter) {
       const em = engine.addEmitter(item.x + 20, item.y + 20, item.width, item.height, {
-        rate: item.rate, temperature: item.temperature, mass: item.mass, direction: item.direction, speed: item.speed, maxParticles: item.maxParticles
+        rate: item.rate, temperature: item.temperature, mass: item.mass, direction: item.direction, maxParticles: item.maxParticles, enabled: item.enabled
       });
       newItems.push(em);
     } else if (item instanceof Sink) {
       const sk = engine.addSink(item.x + 20, item.y + 20, item.width, item.height, {
-        absorptionEfficiency: item.absorptionEfficiency
+        absorptionEfficiency: item.absorptionEfficiency, direction: item.direction,
+        maxParticles: item.maxParticles, tempFilterMode: item.tempFilterMode,
+        filterTemperature: item.filterTemperature, isActive: item.isActive
       });
       newItems.push(sk);
     } else if (item instanceof Regulator) {
@@ -2270,7 +2406,8 @@ ctxDuplicate?.addEventListener('click', () => {
       newItems.push(tv);
     } else if (item instanceof SensorZone) {
       const s = engine.addSensor({
-        label: `${item.label} (Copy)`, x: item.x + 20, y: item.y + 20, width: item.width, height: item.height
+        label: `${item.label} (Copy)`, x: item.x + 20, y: item.y + 20, width: item.width, height: item.height,
+        color: item.color
       });
       newItems.push(s);
     }
@@ -2531,6 +2668,7 @@ canvas.addEventListener('mousedown', (e) => {
       clickedItem instanceof ThermalBlock ||
       clickedItem instanceof Reservoir ||
       clickedItem instanceof Emitter ||
+      clickedItem instanceof Sink ||
       clickedItem instanceof Regulator ||
       (clickedItem instanceof Piston && (clickedItem.mode === 'motorized' || clickedItem.mode === 'damper'))
     ) {
@@ -2947,8 +3085,13 @@ window.addEventListener('mouseup', (e) => {
       recordUndoState();
       const cfg = toolConfigs.valve;
       const v = engine.addWall(s.x, s.y, c.x, c.y, {
-        type: cfg.type, conductivity: cfg.conductivity, allowedDirection: cfg.allowedDirection,
-        triggerPressure: cfg.triggerPressure, reliefMode: cfg.reliefMode
+        type: cfg.type,
+        thickness: cfg.thickness || 4,
+        conductivity: cfg.conductivity,
+        allowedDirection: cfg.allowedDirection,
+        triggerPressure: cfg.triggerPressure,
+        pressureHysteresis: cfg.pressureHysteresis,
+        reliefMode: cfg.reliefMode
       });
       selectedItems = [v];
       updateElementsList();
@@ -2959,7 +3102,8 @@ window.addEventListener('mouseup', (e) => {
       const cfg = toolConfigs.throttle_valve;
       const tv = engine.addThrottleValve(s.x, s.y, c.x, c.y, {
         openRatio: cfg.openRatio,
-        thickness: cfg.thickness
+        thickness: cfg.thickness || 6,
+        conductivity: cfg.conductivity || 0
       });
       selectedItems = [tv];
       updateElementsList();
@@ -2991,16 +3135,26 @@ window.addEventListener('mouseup', (e) => {
       recordUndoState();
       const cfg = toolConfigs.emitter;
       const em = engine.addEmitter(minX, minY, w, h, {
-        rate: cfg.rate, temperature: cfg.temperature, mass: cfg.mass, direction: cfg.direction, speed: cfg.speed, maxParticles: cfg.maxParticles
+        rate: cfg.rate,
+        temperature: cfg.temperature,
+        mass: cfg.mass || 1.0,
+        direction: cfg.direction,
+        maxParticles: cfg.maxParticles
       });
       selectedItems = [em];
       updateElementsList();
 
-    // Sink (Vacuum)
+    // Sink (Absorber)
     } else if (activeTool === 'sink' && w >= 20 && h >= 20) {
       recordUndoState();
       const cfg = toolConfigs.sink;
-      const sk = engine.addSink(minX, minY, w, h, { absorptionEfficiency: cfg.absorptionEfficiency });
+      const sk = engine.addSink(minX, minY, w, h, {
+        absorptionEfficiency: cfg.absorptionEfficiency,
+        direction: cfg.direction,
+        maxParticles: cfg.maxParticles,
+        tempFilterMode: cfg.tempFilterMode,
+        filterTemperature: cfg.filterTemperature
+      });
       selectedItems = [sk];
       updateElementsList();
 
@@ -3010,7 +3164,8 @@ window.addEventListener('mouseup', (e) => {
       const letter = String.fromCharCode(65 + engine.sensors.length);
       const sZone = engine.addSensor({
         label: `${toolConfigs.sensor.label} ${letter}`,
-        x: minX, y: minY, width: w, height: h
+        x: minX, y: minY, width: w, height: h,
+        color: toolConfigs.sensor.color || '#38bdf8'
       });
       selectedItems = [sZone];
       updateElementsList();
