@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Thermo Sandbox – 2D Particle Simulation</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Hidden File Input for JSON Import -->
+  <input type="file" id="fileImportInput" accept=".json" style="display: none;">
+
+  <div class="app-viewport">
+    <!-- Hardware Accelerated WebGL 2 Particle Canvas -->
+    <canvas id="glCanvas"></canvas>
+    <!-- Fullscreen Infinite UI & Geometry Canvas -->
+    <canvas id="simCanvas"></canvas>
+
+    <!-- Floating Velocity / Temp Colormap Legend Badge (Vertical, Right Side above Zoom Controls) -->
+    <div id="floatingVelLegend" class="floating-vel-legend" title="Velocity / Temperature Colormap">
+      <span class="legend-symbol">|v|</span>
+      <span class="legend-tag">high</span>
+      <div class="legend-gradient-bar"></div>
+      <span class="legend-tag">low</span>
+    </div>
+
+    <!-- Positioned Floating Context Popup for Canvas Elements -->
+    <div id="elementPopup" class="element-popup" style="display: none;">
+      <div class="popup-header">
+        <span id="popupTitle" class="popup-title">Element</span>
+        <button id="btnPopupClose" class="popup-close">&times;</button>
+      </div>
+      <div id="popupBody" class="popup-body">
+        <!-- Dynamically populated per element -->
+      </div>
+    </div>
+
+    <!-- Right-Click Context Menu -->
+    <div id="contextMenu" class="context-menu" style="display: none;">
+      <div class="context-menu-item" id="ctxDuplicate">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <span>Duplicate</span>
+        <span class="ctx-shortcut">Ctrl+D</span>
+      </div>
+      <div class="context-menu-item" id="ctxGroup">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span>Group / Ungroup</span>
+        <span class="ctx-shortcut">Ctrl+G</span>
+      </div>
+      <div class="context-menu-divider"></div>
+      <div class="context-menu-item" id="ctxBringFront">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+        <span>Bring to Front</span>
+      </div>
+      <div class="context-menu-item" id="ctxBringForward">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+        <span>Bring Forward</span>
+      </div>
+      <div class="context-menu-item" id="ctxSendBackward">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        <span>Send Backward</span>
+      </div>
+      <div class="context-menu-item" id="ctxSendBack">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 22 2 17 12 12 22 17 12 22"/><polyline points="2 7 12 2 22 7"/><polyline points="2 12 12 7 22 12"/></svg>
+        <span>Send to Back</span>
+      </div>
+      <div class="context-menu-divider"></div>
+      <div class="context-menu-item ctx-danger" id="ctxDelete">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        <span>Delete</span>
+        <span class="ctx-shortcut">Del</span>
+      </div>
+    </div>
+
+    <!-- Floating Top Header (Row 1: Menu Bar & Centered Profile Name | Row 2: Split Mode Toolbar Ribbon) -->
+    <header class="floating-header ipe-header">
+      
+      <!-- ROW 1: Menu Bar, Centered Project Title & Save As -->
+      <div class="header-row-menubar">
+        <div class="menubar-left">
+          <div class="brand-badge">
+            <img src="logo.png" alt="Logo" class="brand-logo-img">
+          </div>
+          <span class="brand-title">Thermo Sandbox</span>
+
+          <div class="header-vdivider"></div>
+
+          <nav class="menu-nav">
+            <!-- 1. FILE MENU -->
+            <div class="menu-item" id="menuFile">
+              <button class="menu-btn">File</button>
+              <div class="menu-dropdown">
+                <div class="menu-entry" id="menuEntryImport">
+                  <span>Open / Import JSON...</span>
+                  <span class="menu-shortcut">Ctrl+O</span>
+                </div>
+                <div class="menu-entry" id="menuEntrySaveAs">
+                  <span>Save As / Export...</span>
+                  <span class="menu-shortcut">Ctrl+S</span>
+                </div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry" id="menuEntryReset">
+                  <span>Reset to Initial State</span>
+                </div>
+                <div class="menu-entry menu-entry-danger" id="menuEntryClear">
+                  <span>Clear All (New Canvas)</span>
+                  <span class="menu-shortcut">Ctrl+N</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. EDIT MENU -->
+            <div class="menu-item" id="menuEdit">
+              <button class="menu-btn">Edit</button>
+              <div class="menu-dropdown">
+                <div class="menu-entry" id="menuEntryUndo">
+                  <span>Undo</span>
+                  <span class="menu-shortcut">Ctrl+Z</span>
+                </div>
+                <div class="menu-entry" id="menuEntryRedo">
+                  <span>Redo</span>
+                  <span class="menu-shortcut">Ctrl+Y</span>
+                </div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry" id="menuEntryDuplicate">
+                  <span>Duplicate Selection</span>
+                  <span class="menu-shortcut">Ctrl+D</span>
+                </div>
+                <div class="menu-entry" id="menuEntryGroup">
+                  <span>Group Selected</span>
+                </div>
+                <div class="menu-entry menu-entry-danger" id="menuEntryDelete">
+                  <span>Delete Selection</span>
+                  <span class="menu-shortcut">Del</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. VIEW MENU -->
+            <div class="menu-item" id="menuView">
+              <button class="menu-btn">View</button>
+              <div class="menu-dropdown">
+                <div class="menu-entry" id="menuEntryToggleGrid">
+                  <span id="labelMenuGrid">✓ Show Grid</span>
+                </div>
+                <div class="menu-entry" id="menuEntryGrid10">
+                  <span id="labelGrid10">Grid Size: 10 px</span>
+                </div>
+                <div class="menu-entry" id="menuEntryGrid20">
+                  <span id="labelGrid20">✓ Grid Size: 20 px</span>
+                </div>
+                <div class="menu-entry" id="menuEntryGrid40">
+                  <span id="labelGrid40">Grid Size: 40 px</span>
+                </div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry" id="menuEntryToggleSnap">
+                  <span id="labelMenuSnap">✓ Snap to Grid</span>
+                </div>
+                <div class="menu-entry" id="menuEntryToggleVectors">
+                  <span id="labelMenuVectors">Velocity Vectors (v⃗)</span>
+                </div>
+                <div class="menu-entry" id="menuEntryToggleColor">
+                  <span id="labelMenuColor">✓ Color by Speed (|v|)</span>
+                </div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry" id="menuEntryResetView">
+                  <span>Center View</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. HELP MENU -->
+            <div class="menu-item" id="menuHelp">
+              <button class="menu-btn">Help</button>
+              <div class="menu-dropdown">
+                <div class="menu-entry" id="menuEntryGuide">
+                  <span>Interactive Guide & Docs</span>
+                </div>
+                <div class="menu-entry" id="menuEntryShortcuts">
+                  <span>Keyboard Shortcuts</span>
+                </div>
+              </div>
+            </div>
+          </nav>
+        </div>
+
+        <!-- Center: Prominent Project Profile Title -->
+        <div class="header-center-title">
+          <span id="headerProjectTitle" class="header-project-title">Default Profile.json</span>
+        </div>
+
+        <!-- Right Menu Bar Status / Empty Right Space -->
+        <div class="menubar-right"></div>
+      </div>
+
+      <!-- ROW 2: Continuous IPE / CAD Toolbar Ribbon (2 Sub-Rows) -->
+      <div class="header-ribbon-container">
+
+        <!-- SUB-ROW 1: General Tools, Grid, Transforms & Actions -->
+        <div class="header-row-ribbon ribbon-row-general">
+          
+          <!-- Group 1: Grid & View Controls -->
+          <div class="ribbon-group" title="Grid & View Settings">
+            <span class="ribbon-group-title">VIEW & GRID</span>
+            <div class="ribbon-group-controls">
+              <button id="btnToggleGrid" class="ribbon-btn active" title="Toggle Grid Visibility">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+              </button>
+              <select id="selectGridSize" class="ribbon-select" title="Grid Size">
+                <option value="10">10px</option>
+                <option value="20" selected>20px</option>
+                <option value="40">40px</option>
+              </select>
+              <button id="btnToggleSnap" class="ribbon-btn active" title="Toggle Snap-to-Grid & Vertex Magnet">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="3" x2="8" y2="3"/><line x1="16" y1="3" x2="20" y2="3"/></svg>
+              </button>
+              <button id="btnToggleVectors" class="ribbon-btn" title="Toggle Velocity Vectors (v⃗)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="5" cy="19" r="2.5" fill="currentColor"/><path d="M7.5 16.5L19 5m0 0h-6.5m6.5 0v6.5"/></svg>
+              </button>
+              <button id="btnToggleColor" class="ribbon-btn active" title="Toggle Particle Color by Speed / Colormap">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.7-1.7h2c3 0 5.5-2.5 5.5-5.5C22 6.2 17.5 2 12 2z"/><circle cx="7.5" cy="10.5" r="1.2" fill="currentColor"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/><circle cx="16.5" cy="10.5" r="1.2" fill="currentColor"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 2: History (Undo/Redo) -->
+          <div class="ribbon-group" title="History">
+            <span class="ribbon-group-title">HISTORY</span>
+            <div class="ribbon-group-controls">
+              <button id="btnUndo" class="ribbon-btn" title="Undo (Ctrl+Z)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+              </button>
+              <button id="btnRedo" class="ribbon-btn" title="Redo (Ctrl+Y)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 3: General Selection Tools -->
+          <div class="ribbon-group" title="General Tools">
+            <span class="ribbon-group-title">TOOLS</span>
+            <div class="ribbon-group-controls">
+              <button class="ribbon-tool-btn active" data-tool="select" id="toolSelect" title="Select & Move Tool (Shift+Click to multi-select)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7 18 3-7 7-3L3 3z"/></svg>
+                <span>Select</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="text" id="toolText" title="Text Annotation">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+                <span>Text</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 4: Transform Controls (Rotate & Flip) -->
+          <div class="ribbon-group" title="Transform Selected Objects">
+            <span class="ribbon-group-title">TRANSFORM</span>
+            <div class="ribbon-group-controls">
+              <button id="btnRotate90" class="ribbon-btn" title="Rotate Selection 90° Clockwise">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              </button>
+              <button id="btnFlipH" class="ribbon-btn" title="Flip Selection Horizontally">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="8,7 3,12 8,17"/><polygon points="16,7 21,12 16,17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+              </button>
+              <button id="btnFlipV" class="ribbon-btn" title="Flip Selection Vertically">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7,8 12,3 17,8"/><polygon points="7,16 12,21 17,16"/><line x1="3" y1="12" x2="21" y2="12"/></svg>
+              </button>
+              <button id="btnGroupSelected" class="ribbon-btn" title="Group / Ungroup Selected Objects (Ctrl+G)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 5: Actions (Reset, Clear) -->
+          <div class="ribbon-group" title="Canvas Actions">
+            <span class="ribbon-group-title">ACTIONS</span>
+            <div class="ribbon-group-controls">
+              <button id="btnToolbarReset" class="ribbon-btn" title="Reset Simulation to Initial State (Rewind to t=0)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
+              </button>
+              <button id="btnToolbarClear" class="ribbon-btn btn-danger" title="Clear Canvas (New Document)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SUB-ROW 2: Construction / Building Elements -->
+        <div class="header-row-ribbon ribbon-row-construction">
+          
+          <!-- Group 1: Wall Tools -->
+          <div class="ribbon-group ribbon-creation-group" title="Wall Tools">
+            <span class="ribbon-group-title">WALLS</span>
+            <div class="ribbon-group-controls">
+              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="polygon" id="toolWallPoly" title="Polyline Wall">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 17 9 7 15 15 21 5"/></svg>
+                <span>Polyline</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="rect" id="toolWallRect" title="Rectangle Wall Box">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                <span>Rect</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="arc" id="toolWallArc" title="Circular Arc Wall">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20A16 16 0 0 1 20 4"/></svg>
+                <span>Arc</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="circle" id="toolWallCircle" title="Complete Circle Wall (Center-Radius Drag)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+                <span>Circle</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 2: Particle Elements -->
+          <div class="ribbon-group ribbon-creation-group" title="Particle Elements">
+            <span class="ribbon-group-title">PARTICLES</span>
+            <div class="ribbon-group-controls">
+              <button class="ribbon-tool-btn" data-tool="gas" id="toolGas" title="Particle Spawner Infill">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><circle cx="12" cy="12" r="3"/></svg>
+                <span>Spawner</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="emitter" id="toolEmitter" title="Particle Source / Emitter (360° Option, Max Count, Click to Toggle)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
+                <span>Emitter</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="sink" id="toolSink" title="Particle Absorber / Vacuum">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/></svg>
+                <span>Absorber</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="regulator" id="toolRegulator" title="Particle Regulator Zone (Maintains Target N with Hysteresis)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2 2"/><path d="M7 12h10M12 7v10"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
+                <span>Regulator</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 3: Thermal Elements -->
+          <div class="ribbon-group ribbon-creation-group" title="Thermal Elements">
+            <span class="ribbon-group-title">THERMAL</span>
+            <div class="ribbon-group-controls">
+              <button class="ribbon-tool-btn" data-tool="solid_res" id="toolSolidRes" title="Thermal Sink (Constant-T Heat Sink)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>
+                <span>Sink</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="heat_exchanger" id="toolHeatEx" title="Heat Exchanger (Permeable, Constant-T, Cross-Hatch Pattern)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2 2"/><line x1="4" y1="4" x2="20" y2="20"/><line x1="20" y1="4" x2="4" y2="20"/></svg>
+                <span>Heat Exchanger</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="regenerator" id="toolRegen" title="Regenerator Matrix (Permeable, Finite Capacity C, Directional Parallel Lines)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2 2"/><line x1="3" y1="7" x2="21" y2="7"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="17" x2="21" y2="17"/></svg>
+                <span>Regenerator</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="storage_block" id="toolStorage" title="Thermal Ressavoir (Finite Heat Capacity C)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 8h8v8H8z"/></svg>
+                <span>Ressavoir</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 4: Pistons -->
+          <div class="ribbon-group ribbon-creation-group" title="Piston Tools">
+            <span class="ribbon-group-title">PISTONS</span>
+            <div class="ribbon-group-controls">
+              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="free" id="toolPistonFree" title="Displacer Piston (Free / Phase Displacer)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="9" width="14" height="6" rx="1"/><line x1="12" y1="3" x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="21"/></svg>
+                <span>Displacer</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="spring" id="toolPistonSpring" title="Accumulator Piston (Spring / Gas Bounce Space)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h3l2-5 3 10 3-10 2 5h4"/></svg>
+                <span>Accumulator</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="motorized" id="toolPistonMotor" title="Compressor Piston (Motor-Driven Work Input)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 8v8m-4-4h8"/></svg>
+                <span>Compressor</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="damper" id="toolPistonDamper" title="Expander Piston (Work Extraction Load)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="8" rx="1"/><line x1="12" y1="2" x2="12" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                <span>Expander</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 5: Valves -->
+          <div class="ribbon-group ribbon-creation-group" title="Valve Tools">
+            <span class="ribbon-group-title">VALVES</span>
+            <div class="ribbon-group-controls">
+              <button class="ribbon-tool-btn" data-tool="throttle_valve" id="toolValveThrottle" title="Throttle Valve (Variable Opening Orifice)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6v12l8-6zm16 0v12l-8-6z"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
+                <span>Throttle</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="manual_valve" id="toolValveManual" title="Manual Valve (Click to Open/Close)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6v12l8-6zm16 0v12l-8-6z"/><circle cx="12" cy="6" r="2"/></svg>
+                <span>Manual</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="check_valve" id="toolValveCheck" title="Check Valve (One-Way Flow Diode)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18l6-6-6-6"/><line x1="18" y1="6" x2="18" y2="18"/></svg>
+                <span>Check</span>
+              </button>
+              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="relief_valve" id="toolValvePRV" title="PRV (Pressure Relief Valve)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8m-4 4 4-4 4 4"/><circle cx="12" cy="18" r="4"/></svg>
+                <span>PRV</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- Group 6: Sensor Zone -->
+          <div class="ribbon-group ribbon-creation-group" title="Chamber Sensor">
+            <span class="ribbon-group-title">SENSORS</span>
+            <div class="ribbon-group-controls">
+              <button class="ribbon-tool-btn" data-tool="sensor" id="toolSensor" title="Chamber Measurement Zone (Drift & Multi-Chart Analytics)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/><circle cx="12" cy="12" r="2"/></svg>
+                <span>Chamber</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Lock Banner Overlay when Simulation is Active -->
+          <div class="ribbon-locked-banner" id="ribbonLockedBanner">
+            <div class="ribbon-locked-content">
+              <svg class="locked-icon-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <span class="locked-text">Simulation active – Tools paused</span>
+              <button class="btn-stop-sim-shortcut" id="btnUnlockSim" title="Stop simulation and unlock toolbar">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+                <span>Stop</span>
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </header>
+
+    <!-- Floating Left Sidebar: Dedicated CAD Feature Tree & Elements List -->
+    <aside class="floating-sidebar floating-left ipe-sidebar-left" id="sidebarLeft">
+      <!-- Canvas Elements Outline List with Hierarchical CAD Feature Tree -->
+      <div class="sidebar-block sidebar-tree-zone" id="elementsBlock">
+        <div class="section-title-row">
+          <span class="section-title">CANVAS ELEMENTS</span>
+          <span id="elementCountBadge" class="count-badge">0</span>
+        </div>
+        <div id="elementsListContainer" class="elements-list-container">
+          <p class="empty-cell">No elements on canvas</p>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Floating Tool Options Dialog (Onshape CAD Style) -->
+    <div class="tool-dialog-panel" id="toolDialogPanel" style="display: none;">
+      <div class="tool-dialog-header" id="toolDialogHeader" title="Click header to toggle description | Drag to move">
+        <div class="tool-dialog-title-group" id="toolDialogTitleGroup">
+          <span class="tool-dialog-badge" id="toolDialogBadge">WALLS</span>
+          <span class="tool-dialog-title" id="toolDialogTitle">Wall</span>
+          <span class="tool-dialog-info-arrow" id="helpArrowIcon" title="Toggle description">▾</span>
+        </div>
+        <div class="tool-dialog-actions">
+          <button class="tool-dialog-btn btn-dialog-close" id="btnToolDialogClose" title="Close (Esc)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="tool-dialog-help-panel" id="toolDialogHelpPanel" style="display: none;">
+        <!-- Dynamically populated tool description -->
+      </div>
+      <div class="tool-dialog-body" id="toolPropertiesContainer">
+        <!-- Dynamically populated for the active tool -->
+      </div>
+    </div>
+
+    <!-- Floating Right Sidebar (~380px Wide) -->
+    <aside class="floating-sidebar floating-right">
+      <!-- Section 1: Global System Statistics -->
+      <div class="sidebar-block">
+        <div class="section-title">SYSTEM STATS</div>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-label">Particles N</span>
+            <span id="statN" class="stat-value">0</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Temperature ⟨T⟩</span>
+            <span id="statT" class="stat-value">0 K</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Kinetic Energy</span>
+            <span id="statE" class="stat-value">0 J</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Mean Speed</span>
+            <span id="statV" class="stat-value">0 px/s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chart 1: Global Velocity Distribution -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <span class="chart-title">Velocity Distribution (Maxwell-Boltzmann)</span>
+        </div>
+        <canvas id="velChartCanvas" width="310" height="95"></canvas>
+      </div>
+
+      <div class="sidebar-divider"></div>
+
+      <!-- Section 2: Chamber Telemetry & Collapsible Cards -->
+      <div class="sidebar-block" style="padding-bottom:4px;">
+        <div class="section-title">CHAMBER ANALYTICS</div>
+        <div id="chamberCardsContainer" class="chamber-cards-list">
+          <p class="empty-cell" style="padding:10px 0;">No measurement zones placed</p>
+        </div>
+      </div>
+
+      <!-- Chart 2: Global Temperature & Pressure History -->
+      <div class="chart-card">
+        <div class="chart-header">
+          <span class="chart-title">System History</span>
+          <div class="chart-tabs">
+            <button class="tab-btn active" id="tabTemp">T(t)</button>
+            <button class="tab-btn" id="tabPV">P-V</button>
+          </div>
+        </div>
+        <canvas id="tempChartCanvas" width="310" height="105"></canvas>
+      </div>
+
+      <div class="sidebar-divider"></div>
+
+      <!-- Section 3: Custom Multi-Chart Dashboard -->
+      <div class="sidebar-block">
+        <div class="section-title-row">
+          <span class="section-title">CUSTOM DASHBOARD</span>
+          <button id="btnAddCustomChart" class="btn-add-chart" title="Add Custom Graph">+ Add Chart</button>
+        </div>
+        <div id="customChartsContainer" class="custom-charts-list">
+          <!-- Dynamically added custom charts -->
+        </div>
+      </div>
+    </aside>
+
+    <!-- Floating Bottom Playback Bar -->
+    <div class="floating-playback-bar">
+      <!-- 1. Playback Control Buttons Group -->
+      <div class="playback-btn-group">
+        <button id="btnPlayPause" class="playback-btn btn-play" title="Play / Pause Simulation (Spacebar)">
+          <span id="playIcon" class="is-play">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
+          </span>
+        </button>
+        <button id="btnStopReset" class="playback-btn btn-stop" title="Stop & Reset to Initial State (Enables Building)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        </button>
+        <button id="btnStepBack" class="playback-btn" title="Step Back (Previous Frame)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="5" y1="5" x2="5" y2="19"/><polyline points="12 19 5 12 12 5"/><line x1="19" y1="12" x2="6" y2="12"/></svg>
+        </button>
+        <button id="btnStep" class="playback-btn" title="Step Forward (S)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="19" y1="5" x2="19" y2="19"/><polyline points="12 5 19 12 12 19"/><line x1="5" y1="12" x2="18" y2="12"/></svg>
+        </button>
+      </div>
+
+      <div class="playback-divider"></div>
+
+      <!-- 2. Time Counter: Directly next to playback buttons -->
+      <div class="time-counter">
+        <span class="time-label">t =</span>
+        <span id="timeVal" class="time-num">0.00 s</span>
+      </div>
+
+      <div class="playback-divider"></div>
+
+      <!-- 3. Speed Slider -->
+      <div class="speed-control">
+        <span id="speedVal" class="speed-val">1.00×</span>
+        <input type="range" id="speedSlider" min="0.1" max="3.0" step="0.05" value="1.0" class="styled-slider">
+      </div>
+
+      <div class="playback-divider"></div>
+
+      <!-- 4. Physics Model 1-Click Toggle with Clean SVG Badges -->
+      <div class="model-toggle-group" id="modelToggleGroup" title="Switch Simulation Physics Model">
+        <button class="model-toggle-btn active" data-model="hard_sphere">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="9" ry="4"/><ellipse cx="12" cy="12" rx="4" ry="9"/></svg>
+          <span>Ideal Fluid</span>
+        </button>
+        <button class="model-toggle-btn" data-model="lennard_jones" title="Real Fluid (Lennard-Jones Intermolecular Potential)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5c2 1 4 5 6 13 1 3 2 3 4-2 2-6 5-10 8-10"/></svg>
+          <span>Real Fluid</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Floating Zoom Controls -->
+    <div class="floating-zoom-panel">
+      <button id="btnZoomIn" class="zoom-btn" title="Zoom In">+</button>
+      <span id="zoomDisplay" class="zoom-text">100%</span>
+      <button id="btnZoomOut" class="zoom-btn" title="Zoom Out">−</button>
+      <button id="btnResetView" class="zoom-btn" title="Reset View to Center">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+
+    <!-- Modal: Save Project As Dialog -->
+    <div id="saveModal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Save Project As</h3>
+          <button id="btnSaveClose" class="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body save-modal-body">
+          <div class="field-row">
+            <div class="field-label"><span>Project / Profile Name</span></div>
+            <input type="text" id="saveProjectNameInput" class="styled-select" style="width:100%; font-size:13px; font-weight:600;" value="Default Profile" placeholder="Enter project name...">
+          </div>
+          <div class="save-file-preview">
+            <span style="font-size:11px; color:var(--text-dim);">Download file:</span>
+            <code id="saveFilenamePreview" style="font-family:'JetBrains Mono',monospace; color:var(--accent-green);">Default_Profile.json</code>
+          </div>
+          <div class="modal-actions-row">
+            <button id="btnSaveCancel" class="btn-pill btn-secondary-action">Cancel</button>
+            <button id="btnSaveDownload" class="btn-pill btn-primary-action">Save & Download JSON</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Add Custom Chart Dialog -->
+    <div id="chartModal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Add Dashboard Chart</h3>
+          <button id="btnChartModalClose" class="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="field-row">
+            <div class="field-label"><span>Target Subject</span></div>
+            <select id="selectChartTarget" class="styled-select" style="width:100%;">
+              <option value="global">Global System</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <div class="field-label"><span>Telemetry Metric</span></div>
+            <select id="selectChartMetric" class="styled-select" style="width:100%;">
+              <option value="temp">Temperature T(t)</option>
+              <option value="pressure">Pressure P(t)</option>
+              <option value="volume">Volume V(t)</option>
+              <option value="count">Particle Count N(t)</option>
+              <option value="kinetic">Kinetic Energy E_kin(t)</option>
+              <option value="drift">Drift Velocity |v_drift|(t)</option>
+              <option value="pv">P-V Indicator Diagram</option>
+            </select>
+          </div>
+          <div class="modal-actions-row">
+            <button id="btnChartCancel" class="btn-pill btn-secondary-action">Cancel</button>
+            <button id="btnChartConfirm" class="btn-pill btn-primary-action">Add to Dashboard</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Info & Quick Guide -->
+    <div id="infoModal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Thermo Sandbox – Quick Guide</h3>
+          <button id="btnInfoClose" class="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p><b>1. Building & Editing:</b> When the simulation is stopped (<code>■ Stop</code>), click any tool mode button in the top ribbon to draw on the canvas.</p>
+          <p><b>2. Properties Inspector:</b> The left panel dynamically shows live sliders and synchronized numeric input boxes for the active tool or selection.</p>
+          <p><b>3. Multi-Select & Transforms:</b> Hold <code>Shift</code> and click to select multiple objects. Use <code>TRANSFORM</code> tools to rotate 90° or flip horizontally / vertically.</p>
+          <p><b>4. Thermal Triad:</b> Choose between constant-temperature <b>Reservoir</b>, permeable <b>Porous Matrix</b>, or impermeable <b>Solid Thermal Block</b>.</p>
+          <p><b>5. Valves & Emitters:</b> Emitters feature 360° emission and can be clicked to toggle ON/OFF. Valves include Pressure Relief Valves (PRV) with automatic release.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="bundle.js"></script>
+</body>
+</html>

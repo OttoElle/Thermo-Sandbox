@@ -1,0 +1,8944 @@
+// ParticleLab Bundled Engine
+
+// --- src/physics/Vector2.js ---
+class Vector2 {
+  constructor(x = 0, y = 0) {
+    this.x = x;
+    this.y = y;
+  }
+
+  set(x, y) {
+    this.x = x;
+    this.y = y;
+    return this;
+  }
+
+  copy(v) {
+    this.x = v.x;
+    this.y = v.y;
+    return this;
+  }
+
+  clone() {
+    return new Vector2(this.x, this.y);
+  }
+
+  add(v) {
+    this.x += v.x;
+    this.y += v.y;
+    return this;
+  }
+
+  sub(v) {
+    this.x -= v.x;
+    this.y -= v.y;
+    return this;
+  }
+
+  multiplyScalar(s) {
+    this.x *= s;
+    this.y *= s;
+    return this;
+  }
+
+  divideScalar(s) {
+    if (s !== 0) {
+      this.x /= s;
+      this.y /= s;
+    }
+    return this;
+  }
+
+  dot(v) {
+    return this.x * v.x + this.y * v.y;
+  }
+
+  cross(v) {
+    return this.x * v.y - this.y * v.x;
+  }
+
+  lengthSq() {
+    return this.x * this.x + this.y * this.y;
+  }
+
+  length() {
+    return Math.sqrt(this.x * this.x + this.y * this.y);
+  }
+
+  normalize() {
+    const len = this.length();
+    if (len > 0.00001) {
+      this.x /= len;
+      this.y /= len;
+    }
+    return this;
+  }
+
+  distanceTo(v) {
+    const dx = this.x - v.x;
+    const dy = this.y - v.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  distanceToSq(v) {
+    const dx = this.x - v.x;
+    const dy = this.y - v.y;
+    return dx * dx + dy * dy;
+  }
+
+  negate() {
+    this.x = -this.x;
+    this.y = -this.y;
+    return this;
+  }
+
+  perpendicular() {
+    return new Vector2(-this.y, this.x);
+  }
+}
+
+
+// --- src/physics/Particle.js ---
+
+class Particle {
+  constructor(x, y, vx = 0, vy = 0, mass = 1, id = 0, groupId = null) {
+    this.id = id;
+    this.groupId = groupId;
+    this.pos = new Vector2(x, y);
+    this.vel = new Vector2(vx, vy);
+    this.mass = Math.max(0.1, mass);
+    
+    // Radius scales with sqrt(mass): base radius 3.5px for mass=1
+    this.baseRadius = 3.5;
+    this.radius = this.baseRadius * Math.sqrt(this.mass);
+    
+    this.fixed = false;
+    this.selected = false;
+    this.tag = 'default';
+
+    // Stored initial state for reset snapshot
+    this.initialPos = new Vector2(x, y);
+    this.initialVel = new Vector2(vx, vy);
+    this.initialGroupId = groupId;
+  }
+
+  setMass(m) {
+    this.mass = Math.max(0.1, m);
+    this.radius = this.baseRadius * Math.sqrt(this.mass);
+  }
+
+  getSpeed() {
+    return this.vel.length();
+  }
+
+  getSpeedSq() {
+    return this.vel.lengthSq();
+  }
+
+  getKineticEnergy() {
+    return 0.5 * this.mass * this.vel.lengthSq();
+  }
+
+  update(dt) {
+    if (this.fixed) return;
+    this.pos.x += this.vel.x * dt;
+    this.pos.y += this.vel.y * dt;
+  }
+
+  saveSnapshot() {
+    this.initialPos = this.pos.clone();
+    this.initialVel = this.vel.clone();
+  }
+
+  restoreSnapshot() {
+    this.pos = this.initialPos.clone();
+    this.vel = this.initialVel.clone();
+  }
+}
+
+
+// --- src/physics/ParticleGroup.js ---
+class ParticleGroup {
+  constructor(options = {}) {
+    this.id = options.id || 'pg_' + Math.random().toString(36).substring(2, 9);
+    this.label = options.label || 'Gas Group';
+    this.temperature = options.temperature !== undefined ? options.temperature : 300;
+    this.mass = options.mass !== undefined ? options.mass : 1.0;
+    this.count = options.count !== undefined ? options.count : 0;
+    this.x = options.x !== undefined ? options.x : 0;
+    this.y = options.y !== undefined ? options.y : 0;
+    this.width = options.width !== undefined ? options.width : 0;
+    this.height = options.height !== undefined ? options.height : 0;
+    this.groupId = this.id;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      label: this.label,
+      temperature: this.temperature,
+      mass: this.mass,
+      count: this.count,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height
+    };
+  }
+
+  static fromJSON(data) {
+    return new ParticleGroup(data);
+  }
+
+  getActiveParticles(engine) {
+    if (!engine || !engine.particles) return [];
+    return engine.particles.filter(p => p.groupId === this.id);
+  }
+
+  getActiveCount(engine) {
+    return this.getActiveParticles(engine).length;
+  }
+
+  getAverageTemperature(engine) {
+    const pts = this.getActiveParticles(engine);
+    if (pts.length === 0) return this.temperature;
+    const kB = 35.0;
+    let sumE = 0;
+    for (let i = 0; i < pts.length; i++) {
+      sumE += pts[i].getKineticEnergy();
+    }
+    return Math.max(5, sumE / (pts.length * kB));
+  }
+}
+
+// --- src/physics/SpatialGrid.js ---
+class SpatialGrid {
+  constructor(width, height, cellSize) {
+    this.width = width;
+    this.height = height;
+    this.cellSize = cellSize;
+    this.cols = Math.ceil(width / cellSize);
+    this.rows = Math.ceil(height / cellSize);
+    this.grid = new Map();
+  }
+
+  resize(width, height, cellSize = this.cellSize) {
+    this.width = width;
+    this.height = height;
+    this.cellSize = cellSize;
+    this.cols = Math.ceil(width / cellSize);
+    this.rows = Math.ceil(height / cellSize);
+    this.clear();
+  }
+
+  clear() {
+    this.grid.clear();
+  }
+
+  _getKey(col, row) {
+    return (col << 16) ^ row;
+  }
+
+  insert(particle) {
+    const col = Math.floor(particle.pos.x / this.cellSize);
+    const row = Math.floor(particle.pos.y / this.cellSize);
+    const key = this._getKey(col, row);
+
+    let cell = this.grid.get(key);
+    if (!cell) {
+      cell = [];
+      this.grid.set(key, cell);
+    }
+    cell.push(particle);
+  }
+
+  populate(particles) {
+    this.clear();
+    for (let i = 0; i < particles.length; i++) {
+      this.insert(particles[i]);
+    }
+  }
+
+  getNeighbors(particle) {
+    const neighbors = [];
+    const col = Math.floor(particle.pos.x / this.cellSize);
+    const row = Math.floor(particle.pos.y / this.cellSize);
+
+    for (let dc = -1; dc <= 1; dc++) {
+      for (let dr = -1; dr <= 1; dr++) {
+        const c = col + dc;
+        const r = row + dr;
+        const key = this._getKey(c, r);
+        const cell = this.grid.get(key);
+        if (cell) {
+          for (let i = 0; i < cell.length; i++) {
+            const other = cell[i];
+            if (other.id !== particle.id) {
+              neighbors.push(other);
+            }
+          }
+        }
+      }
+    }
+    return neighbors;
+  }
+
+  forEachPair(callback) {
+    // Iterate through all cells and avoid checking the same pair twice
+    for (const [key, cell] of this.grid.entries()) {
+      const col = (key >> 16);
+      const row = (key & 0xffff);
+
+      // Check within same cell
+      const len = cell.length;
+      for (let i = 0; i < len; i++) {
+        for (let j = i + 1; j < len; j++) {
+          callback(cell[i], cell[j]);
+        }
+      }
+
+      // Check neighbor cells in 4 directions to cover all unique pairs
+      const neighborOffsets = [
+        [1, 0], [0, 1], [1, 1], [-1, 1]
+      ];
+
+      for (let k = 0; k < neighborOffsets.length; k++) {
+        const nc = col + neighborOffsets[k][0];
+        const nr = row + neighborOffsets[k][1];
+        const nKey = this._getKey(nc, nr);
+        const nCell = this.grid.get(nKey);
+        if (nCell) {
+          const nLen = nCell.length;
+          for (let i = 0; i < len; i++) {
+            for (let j = 0; j < nLen; j++) {
+              callback(cell[i], nCell[j]);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+
+// --- src/physics/Wall.js ---
+
+class Wall {
+  constructor(x1, y1, x2, y2, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.p1 = new Vector2(x1, y1);
+    this.p2 = new Vector2(x2, y2);
+    
+    // Type: 'standard', 'manual_valve', 'check_valve', 'relief_valve'
+    this.type = options.type || 'standard';
+
+    // Thermal property: Wärmeleitfähigkeit kappa in [0, 1]
+    this.conductivity = options.conductivity !== undefined ? options.conductivity : 0.0; // 0 = vollständig isolierend
+    this.temperature = options.temperature !== undefined ? options.temperature : 300;
+    this.heatCapacity = options.heatCapacity !== undefined ? options.heatCapacity : 80;
+    this.heatAccumulator = 0;
+
+    // Valve properties
+    this.isOpen = options.isOpen !== undefined ? options.isOpen : false;
+    this.allowedDirection = options.allowedDirection !== undefined ? options.allowedDirection : 1; // 1 = along normal, -1 = opposite
+    this.triggerPressure = options.triggerPressure !== undefined ? options.triggerPressure : 250; // Threshold Pa for relief_valve
+    this.reliefMode = options.reliefMode || 'oneway'; // 'oneway' or 'bidirectional'
+
+    this.thickness = options.thickness || 4;
+
+    // Pressure tracking
+    this.accumulatedImpulse = 0;
+    this.currentPressure = 0;
+    this.smoothedPressure = 0;
+
+    // Initial snapshot state
+    this.initialTemperature = this.temperature;
+    this.initialIsOpen = this.isOpen;
+    if (options.groupId) this.groupId = options.groupId;
+
+    this._updateGeometry();
+  }
+
+  _updateGeometry() {
+    this.dir = new Vector2(this.p2.x - this.p1.x, this.p2.y - this.p1.y);
+    this.length = this.dir.length();
+    this.lenSq = this.length * this.length;
+    this.unitDir = this.length > 0 ? this.dir.clone().normalize() : new Vector2(1, 0);
+    this.normal = new Vector2(-this.unitDir.y, this.unitDir.x);
+  }
+
+  setPoints(x1, y1, x2, y2) {
+    this.p1.set(x1, y1);
+    this.p2.set(x2, y2);
+    this._updateGeometry();
+  }
+
+  getClosestPointCoords(px, py, out) {
+    if (this.lenSq <= 0.00001) {
+      out.x = this.p1.x;
+      out.y = this.p1.y;
+      return out;
+    }
+    const vx = px - this.p1.x;
+    const vy = py - this.p1.y;
+    const t = Math.max(0, Math.min(1, (vx * this.dir.x + vy * this.dir.y) / this.lenSq));
+    out.x = this.p1.x + t * this.dir.x;
+    out.y = this.p1.y + t * this.dir.y;
+    return out;
+  }
+
+  getClosestPoint(p) {
+    if (this.length === 0) return this.p1.clone();
+    const v = new Vector2(p.x - this.p1.x, p.y - this.p1.y);
+    const t = Math.max(0, Math.min(1, v.dot(this.dir) / (this.length * this.length)));
+    return new Vector2(
+      this.p1.x + t * this.dir.x,
+      this.p1.y + t * this.dir.y
+    );
+  }
+
+  addHeat(joules) {
+    this.heatAccumulator += joules;
+  }
+
+  recordImpulse(impulseMagnitude) {
+    this.accumulatedImpulse += impulseMagnitude;
+  }
+
+  toggleValve() {
+    if (this.type === 'manual_valve') {
+      this.isOpen = !this.isOpen;
+    }
+  }
+
+  flipDirection() {
+    this.allowedDirection = -this.allowedDirection;
+  }
+
+  update(dt) {
+    if (dt > 0 && this.heatCapacity > 0) {
+      this.temperature += this.heatAccumulator / this.heatCapacity;
+      this.heatAccumulator = 0;
+      if (this.temperature < 5) this.temperature = 5;
+    }
+
+    if (dt > 0 && this.length > 0) {
+      this.currentPressure = this.accumulatedImpulse / (this.length * dt);
+      this.smoothedPressure = this.smoothedPressure * 0.85 + this.currentPressure * 0.15;
+      this.accumulatedImpulse = 0;
+
+      if (this.type === 'relief_valve') {
+        if (this.smoothedPressure >= this.triggerPressure) {
+          this.isOpen = true;
+        } else if (this.smoothedPressure < this.triggerPressure * 0.75) {
+          this.isOpen = false;
+        }
+      }
+    }
+  }
+
+  conductTo(otherWall, dt) {
+    if (this.conductivity <= 0 || otherWall.conductivity <= 0) return;
+    const effConductivity = (this.conductivity + otherWall.conductivity) * 0.5;
+    const deltaT = otherWall.temperature - this.temperature;
+    const qRate = effConductivity * deltaT * 50;
+    this.addHeat(qRate * dt);
+    otherWall.addHeat(-qRate * dt);
+  }
+
+  saveSnapshot() {
+    this.initialTemperature = this.temperature;
+    this.initialIsOpen = this.isOpen;
+  }
+
+  restoreSnapshot() {
+    this.temperature = this.initialTemperature;
+    this.isOpen = this.initialIsOpen;
+    this.heatAccumulator = 0;
+    this.accumulatedImpulse = 0;
+    this.currentPressure = 0;
+    this.smoothedPressure = 0;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      p1: { x: this.p1.x, y: this.p1.y },
+      p2: { x: this.p2.x, y: this.p2.y },
+      type: this.type,
+      conductivity: this.conductivity,
+      temperature: this.temperature,
+      heatCapacity: this.heatCapacity,
+      isOpen: this.isOpen,
+      allowedDirection: this.allowedDirection,
+      triggerPressure: this.triggerPressure,
+      reliefMode: this.reliefMode,
+      thickness: this.thickness,
+      groupId: this.groupId || undefined
+    };
+  }
+
+  static fromJSON(data) {
+    return new Wall(data.p1.x, data.p1.y, data.p2.x, data.p2.y, data);
+  }
+}
+
+
+// --- src/physics/Piston.js ---
+
+class Piston {
+  constructor(options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.label = options.label || 'K';
+    
+    // Geometry: x, y is center of piston block
+    this.x = options.x !== undefined ? options.x : 480;
+    this.y = options.y !== undefined ? options.y : 320;
+    this.width = options.width !== undefined ? options.width : 28;
+    this.height = options.height !== undefined ? options.height : 120;
+    
+    // Movement Axis: Perpendicular to longer side!
+    // If height >= width (tall vertical block) -> moves horizontally along X
+    // If width > height (wide horizontal block) -> moves vertically along Y
+    if (options.orientation) {
+      this.orientation = options.orientation;
+    } else {
+      this.orientation = this.height >= this.width ? 'horizontal' : 'vertical';
+    }
+
+    // Guide Rails (Schenkel) along the movement axis
+    const pos = this.getPos();
+    this.minPos = options.minPos !== undefined ? options.minPos : pos - 150;
+    this.maxPos = options.maxPos !== undefined ? options.maxPos : pos + 150;
+
+    // Movement Mode: 'free', 'spring', 'motorized', 'damper'
+    this.mode = options.mode || 'free';
+    this.isActive = options.isActive !== undefined ? options.isActive : true;
+    
+    // Physics properties
+    this.mass = options.mass !== undefined ? options.mass : 30;
+    this.velocity = 0;
+    this.acceleration = 0;
+    this.friction = 0.005;
+    
+    // Spring properties
+    this.springK = options.springK !== undefined ? options.springK : 50.0;
+    this.equilibriumPos = options.equilibriumPos !== undefined ? options.equilibriumPos : pos;
+    
+    // Motorized properties (Work Input / Compressor)
+    this.frequency = options.frequency !== undefined ? options.frequency : 0.8;
+    this.amplitude = options.amplitude !== undefined ? options.amplitude : (this.maxPos - this.minPos) * 0.4;
+    this.phase = options.phase !== undefined ? options.phase : 0; // In radians or degrees
+    this.centerPos = options.centerPos !== undefined ? options.centerPos : pos;
+
+    // Damper properties (Work Extraction / Mechanical Load)
+    this.dampingCoeff = options.dampingCoeff !== undefined ? options.dampingCoeff : 25.0; // Ns/m
+    this.workExtracted = 0; // Total Joules recovered
+    this.instantPower = 0; // Current Watts
+
+    // Thermal properties
+    this.conductivity = options.conductivity !== undefined ? options.conductivity : 0.2;
+    this.temperature = options.temperature !== undefined ? options.temperature : 300;
+    this.heatCapacity = options.heatCapacity !== undefined ? options.heatCapacity : 120;
+    this.heatAccumulator = 0;
+
+    // Impulse tracking
+    this.forceLeft = 0;
+    this.forceRight = 0;
+    this.accumulatedImpulseLeft = 0;
+    this.accumulatedImpulseRight = 0;
+
+    this.isDragging = false;
+
+    // Initial snapshot state
+    this.initialX = this.x;
+    this.initialY = this.y;
+    this.initialVelocity = 0;
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+  }
+
+  getTravelLimits() {
+    const halfThick = (this.orientation === 'horizontal' ? this.width : this.height) * 0.5;
+    const minTravel = this.minPos + halfThick;
+    const maxTravel = this.maxPos - halfThick;
+    if (minTravel <= maxTravel) {
+      return {
+        halfThick,
+        minTravel,
+        maxTravel,
+        stroke: maxTravel - minTravel,
+        midPos: (minTravel + maxTravel) * 0.5
+      };
+    } else {
+      const mid = (this.minPos + this.maxPos) * 0.5;
+      return {
+        halfThick,
+        minTravel: mid,
+        maxTravel: mid,
+        stroke: 0,
+        midPos: mid
+      };
+    }
+  }
+
+  getPos() {
+    return this.orientation === 'horizontal' ? this.x : this.y;
+  }
+
+  setPos(val) {
+    const { minTravel, maxTravel } = this.getTravelLimits();
+    val = Math.max(minTravel, Math.min(maxTravel, val));
+    if (this.orientation === 'horizontal') {
+      this.x = val;
+    } else {
+      this.y = val;
+    }
+  }
+
+  toggle() {
+    this.isActive = !this.isActive;
+  }
+
+  getBounds() {
+    if (!this._bounds) this._bounds = { left: 0, right: 0, top: 0, bottom: 0 };
+    this._bounds.left = this.x - this.width / 2;
+    this._bounds.right = this.x + this.width / 2;
+    this._bounds.top = this.y - this.height / 2;
+    this._bounds.bottom = this.y + this.height / 2;
+    return this._bounds;
+  }
+
+  // Schenkel Handles for interactive dragging on canvas
+  getHandlePositions() {
+    if (this.orientation === 'horizontal') {
+      return {
+        minHandle: { x: this.minPos, y: this.y },
+        maxHandle: { x: this.maxPos, y: this.y }
+      };
+    } else {
+      return {
+        minHandle: { x: this.x, y: this.minPos },
+        maxHandle: { x: this.x, y: this.maxPos }
+      };
+    }
+  }
+
+  addHeat(joules) {
+    if (this.isActive) {
+      this.heatAccumulator += joules;
+    }
+  }
+
+  update(dt, totalTime) {
+    if (dt > 0 && this.heatCapacity > 0 && this.isActive) {
+      this.temperature += this.heatAccumulator / this.heatCapacity;
+      this.heatAccumulator = 0;
+      if (this.temperature < 5) this.temperature = 5;
+    }
+
+    if (!this.isActive) {
+      this.velocity = 0;
+      this.instantPower = 0;
+      return;
+    }
+
+    if (this.mode === 'motorized') {
+      const { minTravel, maxTravel, stroke, midPos } = this.getTravelLimits();
+      const amplitude = stroke * 0.5;
+
+      const omega = 2 * Math.PI * this.frequency;
+      const radPhase = typeof this.phase === 'number' ? (this.phase * Math.PI / 180) : 0;
+      // Oscillates across the entire handle span, reaching minTravel and maxTravel precisely
+      const targetPos = midPos + amplitude * Math.sin(omega * totalTime + radPhase);
+      const prevPos = this.getPos();
+      this.setPos(targetPos);
+      this.velocity = dt > 0 ? (this.getPos() - prevPos) / dt : 0;
+      this.instantPower = 0;
+    } else if (this.mode === 'free' || this.mode === 'spring' || this.mode === 'damper') {
+      if (!this.isDragging) {
+        const dtEff = Math.max(0.001, dt);
+        const fPressure = (this.accumulatedImpulseLeft - this.accumulatedImpulseRight) / dtEff;
+        
+        const { minTravel, maxTravel, midPos } = this.getTravelLimits();
+
+        let fSpring = 0;
+        if (this.mode === 'spring') {
+          const eqPos = this.equilibriumPos !== undefined ? this.equilibriumPos : midPos;
+          fSpring = -this.springK * (this.getPos() - eqPos);
+        }
+
+        let fDamper = 0;
+        if (this.mode === 'damper') {
+          fDamper = -this.dampingCoeff * this.velocity;
+          this.instantPower = this.dampingCoeff * this.velocity * this.velocity;
+          this.workExtracted += this.instantPower * dt;
+        } else {
+          this.instantPower = 0;
+        }
+
+        const totalForce = fPressure + fSpring + fDamper - this.friction * this.velocity * 10;
+        const effMass = Math.max(1, this.mass);
+
+        this.acceleration = totalForce / effMass;
+        this.velocity += this.acceleration * dt;
+
+        let newPos = this.getPos() + this.velocity * dt;
+        if (newPos <= minTravel) {
+          newPos = minTravel;
+          this.velocity = -this.velocity * 0.2;
+        } else if (newPos >= maxTravel) {
+          newPos = maxTravel;
+          this.velocity = -this.velocity * 0.2;
+        }
+        this.setPos(newPos);
+      }
+    }
+
+    if (dt > 0) {
+      this.forceLeft = this.accumulatedImpulseLeft / dt;
+      this.forceRight = this.accumulatedImpulseRight / dt;
+    }
+
+    this.accumulatedImpulseLeft = 0;
+    this.accumulatedImpulseRight = 0;
+  }
+
+  saveSnapshot() {
+    this.initialX = this.x;
+    this.initialY = this.y;
+    this.initialMinPos = this.minPos;
+    this.initialMaxPos = this.maxPos;
+    this.initialVelocity = 0;
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+  }
+
+  restoreSnapshot() {
+    this.x = this.initialX;
+    this.y = this.initialY;
+    if (this.initialMinPos !== undefined) this.minPos = this.initialMinPos;
+    if (this.initialMaxPos !== undefined) this.maxPos = this.initialMaxPos;
+    this.velocity = this.initialVelocity;
+    this.temperature = this.initialTemperature;
+    this.isActive = this.initialIsActive;
+    this.forceLeft = 0;
+    this.forceRight = 0;
+    this.workExtracted = 0;
+    this.instantPower = 0;
+    this.accumulatedImpulseLeft = 0;
+    this.accumulatedImpulseRight = 0;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      label: this.label,
+      orientation: this.orientation,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      minPos: this.minPos,
+      maxPos: this.maxPos,
+      mode: this.mode,
+      mass: this.mass,
+      springK: this.springK,
+      frequency: this.frequency,
+      amplitude: this.amplitude,
+      phase: this.phase,
+      dampingCoeff: this.dampingCoeff,
+      conductivity: this.conductivity,
+      temperature: this.temperature,
+      isActive: this.isActive
+    };
+  }
+
+  static fromJSON(data) {
+    return new Piston(data);
+  }
+}
+
+
+// --- src/physics/Reservoir.js ---
+
+class Reservoir {
+  constructor(x, y, width = 80, height = 60, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.temperature = options.temperature !== undefined ? Math.max(5, options.temperature) : 500; // Constant Kelvin
+    this.conductance = options.conductance !== undefined ? Math.max(0.01, Math.min(1.0, options.conductance)) : 0.8; // Coupling factor to walls and particles
+    this.isActive = options.isActive !== undefined ? options.isActive : true;
+    this.label = options.label || `Isotherm Block (${Math.round(this.temperature)}K)`;
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+  }
+
+  contains(px, py) {
+    return px >= this.x && px <= this.x + this.width && py >= this.y && py <= this.y + this.height;
+  }
+
+  getBounds() {
+    if (!this._bounds) this._bounds = { left: 0, right: 0, top: 0, bottom: 0 };
+    this._bounds.left = this.x;
+    this._bounds.right = this.x + this.width;
+    this._bounds.top = this.y;
+    this._bounds.bottom = this.y + this.height;
+    return this._bounds;
+  }
+
+  toggle() {
+    this.isActive = !this.isActive;
+  }
+
+  saveSnapshot() {
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+  }
+
+  restoreSnapshot() {
+    this.temperature = this.initialTemperature;
+    this.isActive = this.initialIsActive;
+  }
+
+  intersectsSegment(p1, p2) {
+    const minX = Math.min(p1.x, p2.x);
+    const maxX = Math.max(p1.x, p2.x);
+    const minY = Math.min(p1.y, p2.y);
+    const maxY = Math.max(p1.y, p2.y);
+
+    return !(maxX < this.x || minX > this.x + this.width || maxY < this.y || minY > this.y + this.height);
+  }
+
+  applyThermalCoupling(wall, dt) {
+    if (!this.isActive) return;
+    if (this.intersectsSegment(wall.p1, wall.p2) && wall.conductivity > 0) {
+      const deltaT = this.temperature - wall.temperature;
+      const heatRate = this.conductance * wall.conductivity * deltaT * 120;
+      wall.addHeat(heatRate * dt);
+    }
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      label: this.label,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      temperature: this.temperature,
+      conductance: this.conductance,
+      isActive: this.isActive
+    };
+  }
+
+  static fromJSON(data) {
+    return new Reservoir(data.x, data.y, data.width, data.height, data);
+  }
+}
+
+
+// --- src/physics/SensorZone.js ---
+
+class SensorZone {
+  constructor(options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.label = options.label || 'Kammer';
+    this.x = options.x !== undefined ? options.x : 100;
+    this.y = options.y !== undefined ? options.y : 100;
+    this.width = options.width !== undefined ? options.width : 200;
+    this.height = options.height !== undefined ? options.height : 300;
+    this.color = options.color || '#38bdf8';
+
+    // Measurements
+    this.particleCount = 0;
+    this.temperature = 300;
+    this.pressure = 100; // in Pa
+    this.density = 0;
+    this.volume = this.width * this.height;
+    this.kineticEnergy = 0;
+
+    // Drift Velocity Metrics
+    this.driftVx = 0;
+    this.driftVy = 0;
+    this.driftSpeed = 0;
+    this.displayDriftSpeed = 0;
+    this.driftAngle = 0;
+
+    // Continuous Time History for Line Charts
+    this.historyTime = [];
+    this.historyTemp = [];
+    this.historyPressure = [];
+    this.historyVolume = [];
+    this.historyCount = [];
+    this.historyKineticEnergy = [];
+    this.historyDrift = [];
+  }
+
+  contains(pos) {
+    return (
+      pos.x >= this.x &&
+      pos.x <= this.x + this.width &&
+      pos.y >= this.y &&
+      pos.y <= this.y + this.height
+    );
+  }
+
+  getArea() {
+    return this.width * this.height;
+  }
+
+  updateMeasurements(particles, currentTime = 0) {
+    let count = 0;
+    let sumVx = 0;
+    let sumVy = 0;
+    let sumMVx = 0;
+    let sumMVy = 0;
+    let sumMass = 0;
+    let totalKinetic = 0;
+    let sumThermalEnergy = 0;
+
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+      if (this.contains(p.pos)) {
+        count++;
+        sumVx += p.vel.x;
+        sumVy += p.vel.y;
+        sumMVx += p.mass * p.vel.x;
+        sumMVy += p.mass * p.vel.y;
+        sumMass += p.mass;
+        totalKinetic += 0.5 * p.mass * p.getSpeedSq();
+      }
+    }
+
+    this.particleCount = count;
+    const area = this.getArea();
+    this.volume = area;
+    this.density = area > 0 ? (count / area) * 1000 : 0;
+    this.kineticEnergy = totalKinetic;
+
+    if (count > 0) {
+      const rawMeanVx = sumVx / count;
+      const rawMeanVy = sumVy / count;
+
+      // Heavy low-pass exponential smoothing for macroscopic drift velocity (tau ~ 1.5s)
+      this.driftVx = this.driftVx * 0.90 + rawMeanVx * 0.10;
+      this.driftVy = this.driftVy * 0.90 + rawMeanVy * 0.10;
+      this.driftSpeed = Math.sqrt(this.driftVx * this.driftVx + this.driftVy * this.driftVy);
+      this.driftAngle = Math.atan2(this.driftVy, this.driftVx);
+
+      // Single-pass thermal energy (Verschiebungssatz: sum 0.5*m*(v - v_mean)^2)
+      sumThermalEnergy = Math.max(0, totalKinetic - (rawMeanVx * sumMVx + rawMeanVy * sumMVy) + 0.5 * (rawMeanVx * rawMeanVx + rawMeanVy * rawMeanVy) * sumMass);
+
+      const kB = 35.0;
+      this.temperature = Math.max(5, sumThermalEnergy / (count * kB));
+      this.pressure = ((count / (area || 1)) * kB * this.temperature * 100);
+
+      // Distinguish genuine bulk flow (trend) from random Brownian / thermal fluctuations:
+      // Thermal speed v_th ~ sqrt(2 * kB * T / m)
+      const vThermal = Math.sqrt((2 * kB * this.temperature) / 1.0);
+      const fluctuationThreshold = Math.max(12.0, (vThermal / Math.sqrt(count)) * 0.7);
+
+      if (this.driftSpeed > fluctuationThreshold && this.driftSpeed > 15.0) {
+        this.displayDriftSpeed = this.driftSpeed;
+      } else {
+        this.displayDriftSpeed = 0;
+      }
+    } else {
+      this.driftVx *= 0.85;
+      this.driftVy *= 0.85;
+      this.driftSpeed = 0;
+      this.displayDriftSpeed = 0;
+    }
+
+    // Record continuous time history (sampled every ~0.05s)
+    if (this.historyTime.length === 0 || currentTime - this.historyTime[this.historyTime.length - 1] >= 0.045) {
+      this.historyTime.push(currentTime);
+      this.historyTemp.push(this.temperature);
+      this.historyPressure.push(this.pressure);
+      this.historyVolume.push(this.volume);
+      this.historyCount.push(this.particleCount);
+      this.historyKineticEnergy.push(this.kineticEnergy);
+      this.historyDrift.push(this.displayDriftSpeed);
+
+      // Keep up to 600 points (~30 seconds of high-resolution continuous trace)
+      if (this.historyTime.length > 600) {
+        this.historyTime.shift();
+        this.historyTemp.shift();
+        this.historyPressure.shift();
+        this.historyVolume.shift();
+        this.historyCount.shift();
+        this.historyKineticEnergy.shift();
+        this.historyDrift.shift();
+      }
+    }
+  }
+
+  clearHistory() {
+    this.historyTime = [];
+    this.historyTemp = [];
+    this.historyPressure = [];
+    this.historyVolume = [];
+    this.historyCount = [];
+    this.historyKineticEnergy = [];
+    this.historyDrift = [];
+    this.driftVx = 0;
+    this.driftVy = 0;
+    this.driftSpeed = 0;
+    this.displayDriftSpeed = 0;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      label: this.label,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      color: this.color
+    };
+  }
+
+  static fromJSON(data) {
+    return new SensorZone(data);
+  }
+}
+
+
+// --- src/physics/Emitter.js ---
+
+class Emitter {
+  constructor(x, y, width = 40, height = 40, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.rate = options.rate !== undefined ? options.rate : 8; // particles per second
+    this.temperature = options.temperature !== undefined ? options.temperature : 350;
+    this.mass = options.mass !== undefined ? options.mass : 1.0;
+    this.direction = options.direction || 'right'; // 'right', 'left', 'up', 'down', 'radial', '360'
+    this.speed = options.speed !== undefined ? options.speed : 120;
+    this.enabled = options.enabled !== undefined ? options.enabled : true;
+    this.maxParticles = options.maxParticles !== undefined ? options.maxParticles : 0; // 0 = unlimited
+    this.emittedCount = 0;
+    this.timer = 0;
+
+    this.initialEnabled = this.enabled;
+  }
+
+  toggle() {
+    this.enabled = !this.enabled;
+    return this.enabled;
+  }
+
+  saveSnapshot() {
+    this.initialEnabled = this.enabled;
+    this.emittedCount = 0;
+  }
+
+  restoreSnapshot() {
+    this.enabled = this.initialEnabled;
+    this.emittedCount = 0;
+    this.timer = 0;
+  }
+
+  update(dt, engine) {
+    if (!this.enabled || this.rate <= 0 || dt <= 0) return;
+    if (this.maxParticles > 0 && this.emittedCount >= this.maxParticles) return;
+
+    this.timer += dt;
+    const interval = 1.0 / this.rate;
+
+    const kB = 35.0;
+    const thermalSpeed = Math.sqrt((2 * kB * Math.max(5, this.temperature)) / this.mass);
+
+    while (this.timer >= interval) {
+      this.timer -= interval;
+      if (this.maxParticles > 0 && this.emittedCount >= this.maxParticles) break;
+      
+      // Spawn position randomly inside emitter bounds
+      const px = this.x + Math.random() * this.width;
+      const py = this.y + Math.random() * this.height;
+
+      let vx = 0, vy = 0;
+      const thermalAngle = Math.random() * Math.PI * 2;
+      const vThermX = (Math.random() * 0.4) * thermalSpeed * Math.cos(thermalAngle);
+      const vThermY = (Math.random() * 0.4) * thermalSpeed * Math.sin(thermalAngle);
+
+      if (this.direction === 'right') {
+        vx = this.speed + vThermX;
+        vy = vThermY;
+      } else if (this.direction === 'left') {
+        vx = -this.speed + vThermX;
+        vy = vThermY;
+      } else if (this.direction === 'down') {
+        vx = vThermX;
+        vy = this.speed + vThermY;
+      } else if (this.direction === 'up') {
+        vx = vThermX;
+        vy = -this.speed + vThermY;
+      } else { // 'radial' or '360'
+        const theta = Math.random() * Math.PI * 2;
+        const totalSpeed = this.speed + (Math.random() * 0.3) * thermalSpeed;
+        vx = totalSpeed * Math.cos(theta);
+        vy = totalSpeed * Math.sin(theta);
+      }
+
+      engine.addParticle(px, py, vx, vy, this.mass);
+      this.emittedCount++;
+    }
+  }
+
+  contains(px, py) {
+    return px >= this.x && px <= this.x + this.width && py >= this.y && py <= this.y + this.height;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      rate: this.rate,
+      temperature: this.temperature,
+      mass: this.mass,
+      direction: this.direction,
+      speed: this.speed,
+      enabled: this.enabled,
+      maxParticles: this.maxParticles
+    };
+  }
+
+  static fromJSON(data) {
+    return new Emitter(data.x, data.y, data.width, data.height, data);
+  }
+}
+
+
+// --- src/physics/Sink.js ---
+class Sink {
+  constructor(x, y, width = 40, height = 40, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.absorptionEfficiency = options.absorptionEfficiency !== undefined ? options.absorptionEfficiency : 1.0;
+    this.absorbedCount = 0;
+  }
+
+  contains(px, py) {
+    return px >= this.x && px <= this.x + this.width && py >= this.y && py <= this.y + this.height;
+  }
+
+  tryAbsorb(particle) {
+    if (this.contains(particle.pos.x, particle.pos.y)) {
+      if (Math.random() <= this.absorptionEfficiency) {
+        this.absorbedCount++;
+        return true; // remove particle
+      }
+    }
+    return false;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      absorptionEfficiency: this.absorptionEfficiency
+    };
+  }
+
+  static fromJSON(data) {
+    return new Sink(data.x, data.y, data.width, data.height, data);
+  }
+}
+
+
+// --- src/physics/Regulator.js ---
+
+class Regulator {
+  constructor(x, y, width = 80, height = 80, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.targetCount = options.targetCount !== undefined ? options.targetCount : 50;
+    this.hysteresis = options.hysteresis !== undefined ? options.hysteresis : 3;
+    this.temperature = options.temperature !== undefined ? options.temperature : 300;
+    this.mass = options.mass !== undefined ? options.mass : 1.0;
+    this.rate = options.rate !== undefined ? options.rate : 15; // max adjustment particles per second
+    this.isActive = options.isActive !== undefined ? options.isActive : true;
+
+    this.currentCount = 0;
+    this.regulationState = 'idle'; // 'idle', 'emitting', or 'absorbing'
+    this.timer = 0;
+    this.initialActive = this.isActive;
+  }
+
+  toggle() {
+    this.isActive = !this.isActive;
+    if (!this.isActive) {
+      this.regulationState = 'idle';
+      this.timer = 0;
+    }
+    return this.isActive;
+  }
+
+  saveSnapshot() {
+    this.initialActive = this.isActive;
+  }
+
+  restoreSnapshot() {
+    this.isActive = this.initialActive;
+    this.regulationState = 'idle';
+    this.timer = 0;
+  }
+
+  contains(px, py) {
+    return px >= this.x && px <= this.x + this.width &&
+           py >= this.y && py <= this.y + this.height;
+  }
+
+  update(dt, engine) {
+    if (dt <= 0) return;
+
+    // 1. Count particles inside zone
+    const insideParticles = [];
+    const allParticles = engine.particles;
+    for (let i = 0; i < allParticles.length; i++) {
+      const p = allParticles[i];
+      if (this.contains(p.pos.x, p.pos.y)) {
+        insideParticles.push(p);
+      }
+    }
+    this.currentCount = insideParticles.length;
+
+    if (!this.isActive) {
+      this.regulationState = 'idle';
+      this.timer = 0;
+      return;
+    }
+
+    const lowerBound = this.targetCount - this.hysteresis;
+    const upperBound = this.targetCount + this.hysteresis;
+
+    // 2. State transitions with deadband hysteresis
+    if (this.currentCount < lowerBound) {
+      this.regulationState = 'emitting';
+    } else if (this.currentCount > upperBound) {
+      this.regulationState = 'absorbing';
+    } else if (
+      (this.regulationState === 'emitting' && this.currentCount >= this.targetCount) ||
+      (this.regulationState === 'absorbing' && this.currentCount <= this.targetCount)
+    ) {
+      this.regulationState = 'idle';
+      this.timer = 0;
+    }
+
+    // 3. Execution of active regulation
+    if (this.regulationState === 'emitting') {
+      this.timer += dt;
+      const interval = 1.0 / Math.max(1, this.rate);
+      const kB = 35.0;
+      const thermalSpeed = Math.sqrt((2 * kB * Math.max(5, this.temperature)) / this.mass);
+
+      while (this.timer >= interval && this.currentCount < this.targetCount) {
+        this.timer -= interval;
+        const px = this.x + 6 + Math.random() * Math.max(1, this.width - 12);
+        const py = this.y + 6 + Math.random() * Math.max(1, this.height - 12);
+        const theta = Math.random() * Math.PI * 2;
+        const vx = thermalSpeed * Math.cos(theta);
+        const vy = thermalSpeed * Math.sin(theta);
+        engine.addParticle(px, py, vx, vy, this.mass);
+        this.currentCount++;
+      }
+      if (this.currentCount >= this.targetCount) {
+        this.regulationState = 'idle';
+        this.timer = 0;
+      }
+    } else if (this.regulationState === 'absorbing') {
+      this.timer += dt;
+      const interval = 1.0 / Math.max(1, this.rate);
+
+      while (this.timer >= interval && this.currentCount > this.targetCount && insideParticles.length > 0) {
+        this.timer -= interval;
+        const pToRemove = insideParticles.pop();
+        engine.deleteParticles([pToRemove]);
+        this.currentCount--;
+      }
+      if (this.currentCount <= this.targetCount) {
+        this.regulationState = 'idle';
+        this.timer = 0;
+      }
+    } else {
+      this.timer = 0;
+    }
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      targetCount: this.targetCount,
+      hysteresis: this.hysteresis,
+      temperature: this.temperature,
+      mass: this.mass,
+      rate: this.rate,
+      isActive: this.isActive
+    };
+  }
+
+  static fromJSON(data) {
+    return new Regulator(data.x, data.y, data.width, data.height, {
+      id: data.id,
+      targetCount: data.targetCount,
+      hysteresis: data.hysteresis,
+      temperature: data.temperature,
+      mass: data.mass,
+      rate: data.rate,
+      isActive: data.isActive
+    });
+  }
+}
+
+
+// --- src/physics/ThermalBlock.js ---
+
+class ThermalBlock {
+  constructor(x, y, width = 80, height = 60, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.type = 'solid'; // Solid thermal obstacle
+    this.temperature = options.temperature !== undefined ? Math.max(5, options.temperature) : 300;
+    this.heatCapacity = options.heatCapacity !== undefined ? Math.max(10, options.heatCapacity) : 300; // Joules/K
+    this.conductivity = options.conductivity !== undefined ? Math.max(0.01, Math.min(1.0, options.conductivity)) : 0.6; // Surface thermal coupling
+    this.isActive = options.isActive !== undefined ? options.isActive : true;
+    this.heatAccumulator = 0;
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+    this.label = options.label || `Thermal Storage (${Math.round(this.temperature)}K)`;
+  }
+
+  contains(px, py) {
+    return px >= this.x && px <= this.x + this.width && py >= this.y && py <= this.y + this.height;
+  }
+
+  getBounds() {
+    if (!this._bounds) this._bounds = { left: 0, right: 0, top: 0, bottom: 0 };
+    this._bounds.left = this.x;
+    this._bounds.right = this.x + this.width;
+    this._bounds.top = this.y;
+    this._bounds.bottom = this.y + this.height;
+    return this._bounds;
+  }
+
+  toggle() {
+    this.isActive = !this.isActive;
+  }
+
+  addHeat(joules) {
+    if (this.isActive) {
+      this.heatAccumulator += joules;
+    }
+  }
+
+  update(dt) {
+    if (dt > 0 && this.heatCapacity > 0 && this.isActive) {
+      this.temperature += this.heatAccumulator / this.heatCapacity;
+      this.heatAccumulator = 0;
+      if (this.temperature < 5) this.temperature = 5;
+    }
+  }
+
+  saveSnapshot() {
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+  }
+
+  restoreSnapshot() {
+    this.temperature = this.initialTemperature;
+    this.isActive = this.initialIsActive;
+    this.heatAccumulator = 0;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      type: this.type,
+      temperature: this.temperature,
+      heatCapacity: this.heatCapacity,
+      conductivity: this.conductivity,
+      isActive: this.isActive,
+      label: this.label
+    };
+  }
+
+  static fromJSON(data) {
+    return new ThermalBlock(data.x, data.y, data.width, data.height, data);
+  }
+}
+
+
+// --- src/physics/HeatExchanger.js ---
+
+class HeatExchanger {
+  constructor(x, y, width = 80, height = 60, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.temperature = options.temperature !== undefined ? Math.max(5, options.temperature) : 300; // Constant Kelvin (T_body)
+    this.conductivity = options.conductivity !== undefined ? Math.max(0.01, Math.min(1.0, options.conductivity)) : 0.6; // Coupling rate kappa
+    this.isActive = options.isActive !== undefined ? options.isActive : true;
+    this.label = options.label || `Heat Exchanger (${Math.round(this.temperature)}K)`;
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+  }
+
+  contains(px, py) {
+    return px >= this.x && px <= this.x + this.width && py >= this.y && py <= this.y + this.height;
+  }
+
+  getBounds() {
+    return {
+      left: this.x,
+      right: this.x + this.width,
+      top: this.y,
+      bottom: this.y + this.height
+    };
+  }
+
+  toggle() {
+    this.isActive = !this.isActive;
+  }
+
+  saveSnapshot() {
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+  }
+
+  restoreSnapshot() {
+    this.temperature = this.initialTemperature;
+    this.isActive = this.initialIsActive;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      temperature: this.temperature,
+      conductivity: this.conductivity,
+      isActive: this.isActive,
+      label: this.label
+    };
+  }
+
+  static fromJSON(data) {
+    return new HeatExchanger(data.x, data.y, data.width, data.height, data);
+  }
+}
+
+
+// --- src/physics/RegeneratorMatrix.js ---
+
+class RegeneratorMatrix {
+  constructor(x, y, width = 120, height = 70, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.orientation = options.orientation || (this.width >= this.height ? 'horizontal' : 'vertical');
+    this.sliceCount = options.sliceCount || 10;
+    this.heatCapacity = options.heatCapacity !== undefined ? Math.max(10, options.heatCapacity) : 400; // Total Joules/K
+    this.conductivity = options.conductivity !== undefined ? Math.max(0.01, Math.min(1.0, options.conductivity)) : 0.7; // Gas-matrix exchange rate
+    this.axialConductivity = options.axialConductivity !== undefined ? options.axialConductivity : 0.05; // Thermal leak along matrix
+    this.isActive = options.isActive !== undefined ? options.isActive : true;
+    this.label = options.label || 'Regenerator Matrix';
+
+    const baseT = options.temperature !== undefined ? Math.max(5, options.temperature) : 300;
+    if (Array.isArray(options.temperatures) && options.temperatures.length === this.sliceCount) {
+      this.temperatures = options.temperatures.map(t => Math.max(5, t));
+    } else {
+      this.temperatures = new Array(this.sliceCount).fill(baseT);
+    }
+
+    this.heatAccumulators = new Array(this.sliceCount).fill(0);
+    this.initialTemperatures = [...this.temperatures];
+    this.initialIsActive = this.isActive;
+  }
+
+  contains(px, py) {
+    return px >= this.x && px <= this.x + this.width && py >= this.y && py <= this.y + this.height;
+  }
+
+  getBounds() {
+    return {
+      left: this.x,
+      right: this.x + this.width,
+      top: this.y,
+      bottom: this.y + this.height
+    };
+  }
+
+  getSliceIndex(px, py) {
+    if (!this.contains(px, py)) return -1;
+    if (this.orientation === 'horizontal') {
+      // Horizontal bands parallel to horizontal flow lines
+      const frac = Math.max(0, Math.min(0.9999, (py - this.y) / this.height));
+      return Math.floor(frac * this.sliceCount);
+    } else {
+      // Vertical bands parallel to vertical flow lines
+      const frac = Math.max(0, Math.min(0.9999, (px - this.x) / this.width));
+      return Math.floor(frac * this.sliceCount);
+    }
+  }
+
+  getAverageTemperature() {
+    if (this.temperatures.length === 0) return 300;
+    const sum = this.temperatures.reduce((a, b) => a + b, 0);
+    return sum / this.temperatures.length;
+  }
+
+  addHeatToSlice(idx, joules) {
+    if (idx >= 0 && idx < this.sliceCount) {
+      this.heatAccumulators[idx] += joules;
+    }
+  }
+
+  toggle() {
+    this.isActive = !this.isActive;
+  }
+
+  update(dt) {
+    if (dt <= 0 || !this.isActive) return;
+
+    const sliceCapacity = Math.max(1, this.heatCapacity / this.sliceCount);
+
+    // 1. Apply particle heat exchanges
+    for (let i = 0; i < this.sliceCount; i++) {
+      if (this.heatAccumulators[i] !== 0) {
+        this.temperatures[i] += this.heatAccumulators[i] / sliceCapacity;
+        this.heatAccumulators[i] = 0;
+        if (this.temperatures[i] < 5) this.temperatures[i] = 5;
+      }
+    }
+
+    // 2. Slow axial thermal diffusion between adjacent slices
+    if (this.axialConductivity > 0 && this.sliceCount > 1) {
+      const diffRate = this.axialConductivity * 8.0 * dt;
+      const nextTemps = [...this.temperatures];
+      for (let i = 0; i < this.sliceCount - 1; i++) {
+        const flux = (this.temperatures[i + 1] - this.temperatures[i]) * diffRate;
+        nextTemps[i] += flux;
+        nextTemps[i + 1] -= flux;
+      }
+      for (let i = 0; i < this.sliceCount; i++) {
+        this.temperatures[i] = Math.max(5, nextTemps[i]);
+      }
+    }
+  }
+
+  saveSnapshot() {
+    this.initialTemperatures = [...this.temperatures];
+    this.initialIsActive = this.isActive;
+  }
+
+  restoreSnapshot() {
+    this.temperatures = [...this.initialTemperatures];
+    this.heatAccumulators.fill(0);
+    this.isActive = this.initialIsActive;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      orientation: this.orientation,
+      sliceCount: this.sliceCount,
+      heatCapacity: this.heatCapacity,
+      conductivity: this.conductivity,
+      axialConductivity: this.axialConductivity,
+      isActive: this.isActive,
+      label: this.label,
+      temperatures: [...this.temperatures]
+    };
+  }
+
+  static fromJSON(data) {
+    return new RegeneratorMatrix(data.x, data.y, data.width, data.height, data);
+  }
+}
+
+
+// --- src/physics/TextLabel.js ---
+class TextLabel {
+  constructor(x, y, text = 'Notiz', options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.text = text;
+    this.fontSize = options.fontSize || 14;
+    this.color = options.color || '#94a3b8';
+    this.width = options.width || Math.max(60, this.text.length * (this.fontSize * 0.65) + 16);
+    this.height = options.height || (this.fontSize + 12);
+  }
+
+  getBounds() {
+    const w = Math.max(50, this.width || (this.text.length * (this.fontSize * 0.65) + 16));
+    const h = Math.max(20, this.height || (this.fontSize + 12));
+    return {
+      left: this.x,
+      top: this.y,
+      right: this.x + w,
+      bottom: this.y + h,
+      width: w,
+      height: h
+    };
+  }
+
+  contains(px, py) {
+    const b = this.getBounds();
+    return px >= b.left && px <= b.right && py >= b.top && py <= b.bottom;
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      x: this.x,
+      y: this.y,
+      text: this.text,
+      fontSize: this.fontSize,
+      color: this.color,
+      width: this.width,
+      height: this.height
+    };
+  }
+
+  static fromJSON(data) {
+    return new TextLabel(data.x, data.y, data.text, data);
+  }
+}
+
+
+// --- src/physics/ThrottleValve.js ---
+
+class ThrottleValve {
+  constructor(x1, y1, x2, y2, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.p1 = new Vector2(x1, y1);
+    this.p2 = new Vector2(x2, y2);
+    this.thickness = options.thickness !== undefined ? options.thickness : 6;
+    this.openRatio = options.openRatio !== undefined ? Math.max(0, Math.min(1, options.openRatio)) : 0.3; // 0.0 to 1.0
+    
+    // Thermal properties
+    this.conductivity = options.conductivity !== undefined ? options.conductivity : 0.0;
+    this.temperature = options.temperature !== undefined ? options.temperature : 300;
+    this.heatCapacity = options.heatCapacity !== undefined ? options.heatCapacity : 80;
+    this.heatAccumulator = 0;
+
+    // Pressure tracking
+    this.accumulatedImpulseSide1 = 0;
+    this.accumulatedImpulseSide2 = 0;
+    this.smoothedP1 = 0;
+    this.smoothedP2 = 0;
+    this.deltaP = 0;
+
+    // Active state
+    this.isActive = options.isActive !== undefined ? options.isActive : true;
+
+    // Initial snapshot
+    this.initialOpenRatio = this.openRatio;
+    this.initialP1 = this.p1.clone();
+    this.initialP2 = this.p2.clone();
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+
+    this._updateGeometry();
+  }
+
+  _updateGeometry() {
+    this.dir = new Vector2(this.p2.x - this.p1.x, this.p2.y - this.p1.y);
+    this.length = this.dir.length();
+    this.unitDir = this.length > 0 ? this.dir.clone().normalize() : new Vector2(1, 0);
+    this.normal = new Vector2(-this.unitDir.y, this.unitDir.x);
+    this.midPoint = new Vector2((this.p1.x + this.p2.x) * 0.5, (this.p1.y + this.p2.y) * 0.5);
+
+    // Calculate wings and gap
+    const solidFraction = Math.max(0, 1.0 - this.openRatio);
+    this.wingLength = (this.length * solidFraction) * 0.5;
+    this.gapWidth = this.length * this.openRatio;
+
+    // Wing 1: p1 to wing1End
+    this.wing1End = new Vector2(
+      this.p1.x + this.unitDir.x * this.wingLength,
+      this.p1.y + this.unitDir.y * this.wingLength
+    );
+
+    // Wing 2: wing2Start to p2
+    this.wing2Start = new Vector2(
+      this.p2.x - this.unitDir.x * this.wingLength,
+      this.p2.y - this.unitDir.y * this.wingLength
+    );
+  }
+
+  setPoints(x1, y1, x2, y2) {
+    this.p1.set(x1, y1);
+    this.p2.set(x2, y2);
+    this._updateGeometry();
+  }
+
+  setOpenRatio(ratio) {
+    this.openRatio = Math.max(0, Math.min(1.0, ratio));
+    this._updateGeometry();
+  }
+
+  toggle() {
+    this.isActive = !this.isActive;
+    return this.isActive;
+  }
+
+  addHeat(joules) {
+    if (this.isActive) {
+      this.heatAccumulator += joules;
+    }
+  }
+
+  saveSnapshot() {
+    this.initialOpenRatio = this.openRatio;
+    this.initialP1 = this.p1.clone();
+    this.initialP2 = this.p2.clone();
+    this.initialTemperature = this.temperature;
+    this.initialIsActive = this.isActive;
+  }
+
+  restoreSnapshot() {
+    this.openRatio = this.initialOpenRatio;
+    this.p1.copy(this.initialP1);
+    this.p2.copy(this.initialP2);
+    this.temperature = this.initialTemperature;
+    this.isActive = this.initialIsActive;
+    this.accumulatedImpulseSide1 = 0;
+    this.accumulatedImpulseSide2 = 0;
+    this.deltaP = 0;
+    this._updateGeometry();
+  }
+
+  update(dt) {
+    if (dt > 0 && this.heatCapacity > 0 && this.isActive) {
+      this.temperature += this.heatAccumulator / this.heatCapacity;
+      this.heatAccumulator = 0;
+      if (this.temperature < 5) this.temperature = 5;
+    }
+
+    if (dt > 0 && this.length > 0) {
+      const p1Inst = this.accumulatedImpulseSide1 / (this.length * dt);
+      const p2Inst = this.accumulatedImpulseSide2 / (this.length * dt);
+      this.smoothedP1 = this.smoothedP1 * 0.85 + p1Inst * 0.15;
+      this.smoothedP2 = this.smoothedP2 * 0.85 + p2Inst * 0.15;
+      this.deltaP = Math.abs(this.smoothedP1 - this.smoothedP2);
+      this.accumulatedImpulseSide1 = 0;
+      this.accumulatedImpulseSide2 = 0;
+    }
+  }
+
+  _closestPointOnSegment(p, a, b) {
+    const ab = new Vector2(b.x - a.x, b.y - a.y);
+    const abLenSq = ab.x * ab.x + ab.y * ab.y;
+    if (abLenSq === 0) return a.clone();
+    const ap = new Vector2(p.x - a.x, p.y - a.y);
+    const t = Math.max(0, Math.min(1, ap.dot(ab) / abLenSq));
+    return new Vector2(a.x + t * ab.x, a.y + t * ab.y);
+  }
+
+  resolveParticleCollision(p, dt) {
+    if (!this.isActive || this.openRatio >= 0.999) return;
+
+    // Check collision against Wing 1
+    if (this.wingLength > 0.5) {
+      this._resolveWingCollision(p, this.p1, this.wing1End);
+    }
+    // Check collision against Wing 2
+    if (this.wingLength > 0.5) {
+      this._resolveWingCollision(p, this.wing2Start, this.p2);
+    }
+  }
+
+  _resolveWingCollision(p, a, b) {
+    const abX = b.x - a.x;
+    const abY = b.y - a.y;
+    const abLenSq = abX * abX + abY * abY;
+    let closestX = a.x;
+    let closestY = a.y;
+    if (abLenSq > 0.00001) {
+      const apX = p.pos.x - a.x;
+      const apY = p.pos.y - a.y;
+      const t = Math.max(0, Math.min(1, (apX * abX + apY * abY) / abLenSq));
+      closestX = a.x + t * abX;
+      closestY = a.y + t * abY;
+    }
+    const dx = p.pos.x - closestX;
+    const dy = p.pos.y - closestY;
+    const distSq = dx * dx + dy * dy;
+    const effRad = p.radius + this.thickness * 0.5;
+
+    if (distSq < effRad * effRad) {
+      const dist = Math.sqrt(distSq) || 0.0001;
+      const nx = dx / dist;
+      const ny = dy / dist;
+
+      // Push particle out
+      const pen = effRad - dist;
+      p.pos.x += nx * pen;
+      p.pos.y += ny * pen;
+
+      const velAlongNormal = p.vel.x * nx + p.vel.y * ny;
+      if (velAlongNormal < 0) {
+        let newVx = p.vel.x - 2 * velAlongNormal * nx;
+        let newVy = p.vel.y - 2 * velAlongNormal * ny;
+
+        if (this.conductivity > 0) {
+          const kB = 35.0;
+          const targetSpeedSq = (2 * kB * this.temperature) / p.mass;
+          const curSpeedSq = newVx * newVx + newVy * newVy;
+          const alpha = this.conductivity * 0.8;
+          const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+          const factor = curSpeedSq > 0.001 ? Math.sqrt(blendSq / curSpeedSq) : 1;
+
+          const eBefore = 0.5 * p.mass * curSpeedSq;
+          newVx *= factor;
+          newVy *= factor;
+          const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
+          this.addHeat(-(eAfter - eBefore));
+        }
+
+        p.vel.x = newVx;
+        p.vel.y = newVy;
+
+        const imp = 2 * p.mass * Math.abs(velAlongNormal);
+        // Distinguish side 1 vs side 2 by dot product with wall normal
+        if (nx * this.normal.x + ny * this.normal.y > 0) {
+          this.accumulatedImpulseSide1 += imp;
+        } else {
+          this.accumulatedImpulseSide2 += imp;
+        }
+      }
+    }
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      p1: { x: this.p1.x, y: this.p1.y },
+      p2: { x: this.p2.x, y: this.p2.y },
+      thickness: this.thickness,
+      openRatio: this.openRatio,
+      conductivity: this.conductivity,
+      temperature: this.temperature,
+      isActive: this.isActive
+    };
+  }
+
+  static fromJSON(data) {
+    return new ThrottleValve(data.p1.x, data.p1.y, data.p2.x, data.p2.y, {
+      id: data.id,
+      thickness: data.thickness,
+      openRatio: data.openRatio,
+      conductivity: data.conductivity,
+      temperature: data.temperature,
+      isActive: data.isActive
+    });
+  }
+}
+
+
+// --- src/render/Colormap.js ---
+class Colormap {
+  constructor() {
+    // Exact Blue -> Violet -> Magenta -> Red gradient matching user screenshot
+    this.stops = [
+      { t: 0.00, r: 59,  g: 130, b: 246 }, // Vibrant Blue (#3b82f6)
+      { t: 0.35, r: 124, g: 58,  b: 237 }, // Deep Violet (#7c3aed)
+      { t: 0.65, r: 192, g: 38,  b: 211 }, // Magenta/Purple (#c026d3)
+      { t: 1.00, r: 239, g: 68,  b: 68 }  // Warm Red (#ef4444)
+    ];
+
+    this.lutSize = 256;
+    this.lut = new Array(this.lutSize);
+    this._generateLUT();
+  }
+
+  _generateLUT() {
+    for (let i = 0; i < this.lutSize; i++) {
+      const t = i / (this.lutSize - 1);
+      this.lut[i] = this._sampleGradient(t);
+    }
+  }
+
+  _sampleGradient(t) {
+    t = Math.max(0, Math.min(1, t));
+    let s0 = this.stops[0];
+    let s1 = this.stops[this.stops.length - 1];
+
+    for (let i = 0; i < this.stops.length - 1; i++) {
+      if (t >= this.stops[i].t && t <= this.stops[i + 1].t) {
+        s0 = this.stops[i];
+        s1 = this.stops[i + 1];
+        break;
+      }
+    }
+
+    const range = s1.t - s0.t || 1;
+    const factor = (t - s0.t) / range;
+
+    const r = Math.round(s0.r + factor * (s1.r - s0.r));
+    const g = Math.round(s0.g + factor * (s1.g - s0.g));
+    const b = Math.round(s0.b + factor * (s1.b - s0.b));
+
+    return {
+      r, g, b,
+      rgb: `rgb(${r}, ${g}, ${b})`
+    };
+  }
+
+  getColor(normalizedValue) {
+    const idx = Math.max(0, Math.min(this.lutSize - 1, Math.floor(normalizedValue * (this.lutSize - 1))));
+    return this.lut[idx];
+  }
+}
+
+const thermalColormap = new Colormap();
+
+
+// --- src/render/ParticleGLRenderer.js ---
+
+class ParticleGLRenderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.gl = null;
+    this.isSupported = false;
+
+    try {
+      this.gl = canvas.getContext('webgl2', {
+        alpha: true,
+        antialias: true,
+        premultipliedAlpha: false,
+        depth: false,
+        stencil: false,
+        powerPreference: 'high-performance'
+      });
+      if (this.gl) {
+        this.isSupported = true;
+      }
+    } catch (e) {
+      console.warn('WebGL 2 is not supported, falling back to 2D Canvas:', e);
+      this.isSupported = false;
+      return;
+    }
+
+    if (!this.isSupported) return;
+
+    this.capacity = 50000;
+    // 4 floats per instance: posX, posY, radius, speedNorm
+    this.instanceData = new Float32Array(this.capacity * 4);
+
+    this._initShaders();
+    this._initBuffers();
+    this._initColormapTexture();
+  }
+
+  _initShaders() {
+    const gl = this.gl;
+
+    const vsSource = `#version 300 es
+      precision highp float;
+
+      layout(location = 0) in vec2 aQuad;
+      layout(location = 1) in vec2 aPos;
+      layout(location = 2) in float aRadius;
+      layout(location = 3) in float aSpeedNorm;
+
+      uniform vec2 uViewportSize;
+      uniform vec2 uPan;
+      uniform float uZoom;
+
+      out vec2 vLocalPos;
+      out float vSpeedNorm;
+
+      void main() {
+        vLocalPos = aQuad;
+        vSpeedNorm = aSpeedNorm;
+
+        vec2 screenCenter = aPos * uZoom + uPan;
+        float screenRadius = max(1.0, aRadius * uZoom);
+        vec2 screenPos = screenCenter + aQuad * screenRadius;
+
+        vec2 ndc = vec2((screenPos.x / uViewportSize.x) * 2.0 - 1.0,
+                        1.0 - (screenPos.y / uViewportSize.y) * 2.0);
+
+        gl_Position = vec4(ndc, 0.0, 1.0);
+      }
+    `;
+
+    const fsSource = `#version 300 es
+      precision highp float;
+
+      in vec2 vLocalPos;
+      in float vSpeedNorm;
+
+      uniform sampler2D uColormap;
+      uniform bool uColorByVelocity;
+      uniform vec3 uDefaultColor;
+
+      out vec4 fragColor;
+
+      void main() {
+        float distSq = dot(vLocalPos, vLocalPos);
+        if (distSq > 1.0) {
+          discard;
+        }
+
+        float dist = sqrt(distSq);
+        float delta = fwidth(dist);
+        float alpha = 1.0 - smoothstep(1.0 - delta * 1.5, 1.0, dist);
+
+        vec3 baseRgb = uColorByVelocity ? texture(uColormap, vec2(clamp(vSpeedNorm, 0.0, 1.0), 0.5)).rgb : uDefaultColor;
+
+        float borderFactor = smoothstep(0.70, 0.95, dist);
+        vec3 finalRgb = mix(baseRgb, vec3(1.0), borderFactor * 0.45);
+
+        fragColor = vec4(finalRgb, alpha);
+      }
+    `;
+
+    const vs = this._compileShader(gl.VERTEX_SHADER, vsSource);
+    const fs = this._compileShader(gl.FRAGMENT_SHADER, fsSource);
+
+    this.program = gl.createProgram();
+    gl.attachShader(this.program, vs);
+    gl.attachShader(this.program, fs);
+    gl.linkProgram(this.program);
+
+    if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) {
+      console.error('ParticleGL program link error:', gl.getProgramInfoLog(this.program));
+      this.isSupported = false;
+      return;
+    }
+
+    this.uViewportSize = gl.getUniformLocation(this.program, 'uViewportSize');
+    this.uPan = gl.getUniformLocation(this.program, 'uPan');
+    this.uZoom = gl.getUniformLocation(this.program, 'uZoom');
+    this.uColormap = gl.getUniformLocation(this.program, 'uColormap');
+    this.uColorByVelocity = gl.getUniformLocation(this.program, 'uColorByVelocity');
+    this.uDefaultColor = gl.getUniformLocation(this.program, 'uDefaultColor');
+  }
+
+  _compileShader(type, source) {
+    const gl = this.gl;
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error('ParticleGL shader compile error:', gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  _initBuffers() {
+    const gl = this.gl;
+
+    this.vao = gl.createVertexArray();
+    gl.bindVertexArray(this.vao);
+
+    // Quad geometry: TRIANGLE_STRIP for unit circle (-1..1)
+    const quadVertices = new Float32Array([
+      -1.0, -1.0,
+       1.0, -1.0,
+      -1.0,  1.0,
+       1.0,  1.0
+    ]);
+
+    this.quadBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
+
+    // Location 0: aQuad
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+    // Instance buffer: posX, posY, radius, speedNorm
+    this.instanceBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.instanceData.byteLength, gl.DYNAMIC_DRAW);
+
+    const stride = 4 * 4; // 4 floats * 4 bytes = 16 bytes
+
+    // Location 1: aPos (vec2)
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribDivisor(1, 1);
+
+    // Location 2: aRadius (float)
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 1, gl.FLOAT, false, stride, 2 * 4);
+    gl.vertexAttribDivisor(2, 1);
+
+    // Location 3: aSpeedNorm (float)
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribPointer(3, 1, gl.FLOAT, false, stride, 3 * 4);
+    gl.vertexAttribDivisor(3, 1);
+
+    gl.bindVertexArray(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
+  _initColormapTexture() {
+    const gl = this.gl;
+    const lutBytes = new Uint8Array(256 * 4);
+
+    for (let i = 0; i < 256; i++) {
+      const c = thermalColormap.lut[i];
+      lutBytes[i * 4 + 0] = c.r;
+      lutBytes[i * 4 + 1] = c.g;
+      lutBytes[i * 4 + 2] = c.b;
+      lutBytes[i * 4 + 3] = 255;
+    }
+
+    this.colormapTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.colormapTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, lutBytes);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  resize(width, height) {
+    if (!this.isSupported) return;
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+    this.gl.viewport(0, 0, width, height);
+  }
+
+  clear() {
+    if (!this.isSupported) return;
+    const gl = this.gl;
+    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+
+  render(particles, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+    if (!this.isSupported) return;
+    const count = particles ? particles.length : 0;
+    if (count === 0) {
+      this.clear();
+      return;
+    }
+
+    // Expand buffer if particle count exceeds capacity
+    if (count > this.capacity) {
+      this.capacity = Math.max(count + 10000, this.capacity * 2);
+      this.instanceData = new Float32Array(this.capacity * 4);
+      const gl = this.gl;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, this.instanceData.byteLength, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    }
+
+    const data = this.instanceData;
+    const invMaxSpeed = 1.0 / Math.max(1, maxSpeedReference);
+
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const p = particles[i];
+      data[ptr++] = p.pos.x;
+      data[ptr++] = p.pos.y;
+      data[ptr++] = p.radius;
+      data[ptr++] = p.getSpeed() * invMaxSpeed;
+    }
+
+    const gl = this.gl;
+
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    gl.useProgram(this.program);
+
+    gl.uniform2f(this.uViewportSize, this.canvas.width, this.canvas.height);
+    gl.uniform2f(this.uPan, panX, panY);
+    gl.uniform1f(this.uZoom, zoom);
+    gl.uniform1i(this.uColorByVelocity, colorByVelocity ? 1 : 0);
+    gl.uniform3f(this.uDefaultColor, 56 / 255, 189 / 255, 248 / 255); // #38bdf8
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.colormapTexture);
+    gl.uniform1i(this.uColormap, 0);
+
+    // Upload only the used instance data
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, count * 4));
+
+    gl.bindVertexArray(this.vao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+
+    gl.bindVertexArray(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+}
+
+
+// --- src/physics/Engine.js ---
+
+class Engine {
+  constructor(width = 2500, height = 2500) {
+    this.width = width;
+    this.height = height;
+
+    this.particles = [];
+    this.walls = [];
+    this.throttleValves = [];
+    this.pistons = [];
+    this.sensors = [];
+    this.reservoirs = [];
+    this.emitters = [];
+    this.sinks = [];
+    this.regulators = [];
+    this.thermalBlocks = [];
+    this.heatExchangers = [];
+    this.regenerators = [];
+    this.textLabels = [];
+    this.particleGroups = [];
+    this.elements = []; // Unified canvas objects layer stack (z-order)
+
+    this.grid = new SpatialGrid(width, height, 25);
+
+    this.subSteps = 4;
+    this.timeScale = 1.0;
+    this.isPaused = true;
+    this.simModel = 'hard_sphere'; // 'hard_sphere' or 'lennard_jones'
+    
+    this.totalTime = 0;
+    this.nextParticleId = 1;
+
+    this.stats = {
+      particleCount: 0,
+      totalKineticEnergy: 0,
+      meanSpeed: 0,
+      systemTemperature: 0,
+      fps: 60
+    };
+
+    // System Telemetry History
+    this.historyTime = [];
+    this.historyTemp = [];
+    this.historyPressure = [];
+    this.historyVolume = [];
+    this.historyCount = [];
+    this.historyKineticEnergy = [];
+  }
+
+  clear() {
+    this.particles = [];
+    this.walls = [];
+    this.throttleValves = [];
+    this.pistons = [];
+    this.sensors = [];
+    this.reservoirs = [];
+    this.emitters = [];
+    this.sinks = [];
+    this.regulators = [];
+    this.thermalBlocks = [];
+    this.heatExchangers = [];
+    this.regenerators = [];
+    this.textLabels = [];
+    this.particleGroups = [];
+    this.elements = [];
+    this.grid.clear();
+    this.totalTime = 0;
+    this.historyTime = [];
+    this.historyTemp = [];
+    this.historyPressure = [];
+    this.historyVolume = [];
+    this.historyCount = [];
+    this.historyKineticEnergy = [];
+    this._updateStats();
+  }
+
+  addParticle(x, y, vx, vy, mass = 1, groupId = null) {
+    const p = new Particle(x, y, vx, vy, mass, this.nextParticleId++, groupId);
+    this.particles.push(p);
+    return p;
+  }
+
+  addWall(x1, y1, x2, y2, options = {}) {
+    const w = new Wall(x1, y1, x2, y2, options);
+    this.walls.push(w);
+    this.elements.push(w);
+    return w;
+  }
+
+  addThrottleValve(x1, y1, x2, y2, options = {}) {
+    const tv = new ThrottleValve(x1, y1, x2, y2, options);
+    this.throttleValves.push(tv);
+    this.elements.push(tv);
+    return tv;
+  }
+
+  addPiston(options = {}) {
+    const p = new Piston(options);
+    this.pistons.push(p);
+    this.elements.push(p);
+    return p;
+  }
+
+  addSensor(options = {}) {
+    const s = new SensorZone(options);
+    this.sensors.push(s);
+    this.elements.push(s);
+    return s;
+  }
+
+  addReservoir(x, y, width, height, options = {}) {
+    const r = new Reservoir(x, y, width, height, options);
+    this.reservoirs.push(r);
+    this.elements.push(r);
+    return r;
+  }
+
+  addEmitter(x, y, width, height, options = {}) {
+    const e = new Emitter(x, y, width, height, options);
+    this.emitters.push(e);
+    this.elements.push(e);
+    return e;
+  }
+
+  addSink(x, y, width, height, options = {}) {
+    const s = new Sink(x, y, width, height, options);
+    this.sinks.push(s);
+    this.elements.push(s);
+    return s;
+  }
+
+  addRegulator(x, y, width, height, options = {}) {
+    const r = new Regulator(x, y, width, height, options);
+    this.regulators.push(r);
+    this.elements.push(r);
+    return r;
+  }
+
+  addThermalBlock(x, y, width, height, options = {}) {
+    const b = new ThermalBlock(x, y, width, height, options);
+    this.thermalBlocks.push(b);
+    this.elements.push(b);
+    return b;
+  }
+
+  addHeatExchanger(x, y, width, height, options = {}) {
+    const hx = new HeatExchanger(x, y, width, height, options);
+    this.heatExchangers.push(hx);
+    this.elements.push(hx);
+    return hx;
+  }
+
+  addRegeneratorMatrix(x, y, width, height, options = {}) {
+    const reg = new RegeneratorMatrix(x, y, width, height, options);
+    this.regenerators.push(reg);
+    this.elements.push(reg);
+    return reg;
+  }
+
+  addTextLabel(x, y, text, options = {}) {
+    const l = new TextLabel(x, y, text, options);
+    this.textLabels.push(l);
+    this.elements.push(l);
+    return l;
+  }
+
+  _randomGaussian(mean = 0, stdDev = 1) {
+    let u = 0, v = 0;
+    while (u === 0) u = Math.random();
+    while (v === 0) v = Math.random();
+    return mean + stdDev * Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  }
+
+  spawnGasRaster(x, y, width, height, count, mass, temperature, velocityMode = 'uniform_speed', groupLabel = null) {
+    const kB = 35.0;
+    const pad = 12;
+    const effW = Math.max(20, width - pad * 2);
+    const effH = Math.max(20, height - pad * 2);
+
+    const aspect = effW / effH;
+    const cols = Math.max(1, Math.round(Math.sqrt(count * aspect)));
+    const rows = Math.max(1, Math.ceil(count / cols));
+    
+    const stepX = cols > 1 ? effW / (cols - 1) : 0;
+    const stepY = rows > 1 ? effH / (rows - 1) : 0;
+
+    const groupId = 'pg_' + Math.random().toString(36).substring(2, 9);
+    const label = groupLabel || `Spawner ${this.particleGroups.length + 1} (${Math.round(temperature)}K)`;
+    const group = new ParticleGroup({
+      id: groupId,
+      label: label,
+      x, y, width, height,
+      temperature, mass, count: 0
+    });
+
+    let spawned = 0;
+    for (let r = 0; r < rows && spawned < count; r++) {
+      for (let c = 0; c < cols && spawned < count; c++) {
+        const px = x + pad + (cols > 1 ? c * stepX : effW * 0.5);
+        const py = y + pad + (rows > 1 ? r * stepY : effH * 0.5);
+
+        let vx = 0, vy = 0;
+        if (velocityMode === 'uniform_speed') {
+          const speed = Math.sqrt((2 * kB * Math.max(5, temperature)) / mass);
+          const theta = Math.random() * Math.PI * 2;
+          vx = speed * Math.cos(theta);
+          vy = speed * Math.sin(theta);
+        } else {
+          const sigma = Math.sqrt((kB * Math.max(5, temperature)) / mass);
+          vx = this._randomGaussian(0, sigma);
+          vy = this._randomGaussian(0, sigma);
+        }
+
+        this.addParticle(px, py, vx, vy, mass, groupId);
+        spawned++;
+      }
+    }
+
+    group.count = spawned;
+    this.particleGroups.push(group);
+    this.elements.push(group);
+    return group;
+  }
+
+  deleteParticleGroup(group) {
+    this.particleGroups = this.particleGroups.filter(g => g !== group && g.id !== group.id);
+    this.elements = this.elements.filter(el => el !== group && el.id !== group.id);
+    const pts = this.particles.filter(p => p.groupId === group.id);
+    this.deleteParticles(pts);
+  }
+
+  setGroupTemperature(group, newT) {
+    group.temperature = newT;
+    const kB = 35.0;
+    const targetSpeed = Math.sqrt((2 * kB * Math.max(5, newT)) / group.mass);
+    const pts = group.getActiveParticles(this);
+    for (const p of pts) {
+      const spd = p.getSpeed();
+      if (spd > 0.001) {
+        p.vel.x = (p.vel.x / spd) * targetSpeed;
+        p.vel.y = (p.vel.y / spd) * targetSpeed;
+      } else {
+        const theta = Math.random() * Math.PI * 2;
+        p.vel.x = targetSpeed * Math.cos(theta);
+        p.vel.y = targetSpeed * Math.sin(theta);
+      }
+    }
+  }
+
+  setGroupMass(group, newM) {
+    group.mass = newM;
+    const pts = group.getActiveParticles(this);
+    for (const p of pts) {
+      p.setMass(newM);
+    }
+  }
+
+  setLoadedProfile(profileState) {
+    if (profileState.profileName) this.currentProfileName = profileState.profileName;
+    this.loadedProfileJSON = JSON.stringify(profileState);
+    this.importState(profileState, false);
+  }
+
+  resetToLoadedProfile() {
+    if (this.loadedProfileJSON) {
+      const state = JSON.parse(this.loadedProfileJSON);
+      this._applyState(state);
+    } else if (this.initialSnapshot) {
+      const state = JSON.parse(this.initialSnapshot);
+      this._applyState(state);
+    }
+    this.totalTime = 0;
+    this.isPaused = true;
+    this._updateStats();
+  }
+
+  saveSimStartSnapshot() {
+    this.simStartSnapshot = JSON.stringify(this.exportState(this.currentProfileName || 'SimStart'));
+  }
+
+  restoreSimStartSnapshot() {
+    if (this.simStartSnapshot) {
+      const state = JSON.parse(this.simStartSnapshot);
+      this._applyState(state);
+    } else {
+      for (let i = 0; i < this.particles.length; i++) this.particles[i].restoreSnapshot();
+      for (let i = 0; i < this.walls.length; i++) this.walls[i].restoreSnapshot();
+      for (let i = 0; i < this.pistons.length; i++) this.pistons[i].restoreSnapshot();
+      for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].restoreSnapshot();
+      for (let i = 0; i < this.reservoirs.length; i++) this.reservoirs[i].restoreSnapshot();
+      for (let i = 0; i < this.heatExchangers.length; i++) this.heatExchangers[i].restoreSnapshot();
+      for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].restoreSnapshot();
+      for (let i = 0; i < this.regulators.length; i++) this.regulators[i].restoreSnapshot();
+    }
+    for (let i = 0; i < this.sensors.length; i++) this.sensors[i].clearHistory();
+    this.totalTime = 0;
+    this.isPaused = true;
+    this._updateStats();
+  }
+
+  saveInitialSnapshot(profileName = null) {
+    if (profileName) this.currentProfileName = profileName;
+    for (let i = 0; i < this.particles.length; i++) this.particles[i].saveSnapshot();
+    for (let i = 0; i < this.walls.length; i++) this.walls[i].saveSnapshot();
+    for (let i = 0; i < this.pistons.length; i++) this.pistons[i].saveSnapshot();
+    for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].saveSnapshot();
+    for (let i = 0; i < this.reservoirs.length; i++) this.reservoirs[i].saveSnapshot();
+    for (let i = 0; i < this.heatExchangers.length; i++) this.heatExchangers[i].saveSnapshot();
+    for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].saveSnapshot();
+    for (let i = 0; i < this.regulators.length; i++) this.regulators[i].saveSnapshot();
+    for (let i = 0; i < (this.throttleValves || []).length; i++) this.throttleValves[i].saveSnapshot();
+    for (let i = 0; i < this.sensors.length; i++) this.sensors[i].clearHistory();
+    this.totalTime = 0;
+    this.initialSnapshot = JSON.stringify(this.exportState(this.currentProfileName || 'Profile'));
+    if (!this.loadedProfileJSON) {
+      this.loadedProfileJSON = this.initialSnapshot;
+    }
+  }
+
+  restoreInitialSnapshot() {
+    this.resetToLoadedProfile();
+  }
+
+  step(dt) {
+    if (this.isPaused || dt <= 0) return;
+
+    const effectiveDt = dt * this.timeScale;
+    const subDt = effectiveDt / this.subSteps;
+
+    // 1. Particle Emitters & Regulators & Throttle Valves
+    for (let i = 0; i < this.emitters.length; i++) {
+      this.emitters[i].update(effectiveDt, this);
+    }
+    for (let i = 0; i < this.regulators.length; i++) {
+      this.regulators[i].update(effectiveDt, this);
+    }
+    for (let i = 0; i < (this.throttleValves || []).length; i++) {
+      this.throttleValves[i].update(effectiveDt);
+    }
+
+    // 2. Sub-step Physics
+    for (let step = 0; step < this.subSteps; step++) {
+      this._subStep(subDt);
+    }
+
+    this.totalTime += effectiveDt;
+
+    // 3. Thermal Coupling: Reservoirs -> Walls
+    for (let i = 0; i < this.reservoirs.length; i++) {
+      const res = this.reservoirs[i];
+      for (let j = 0; j < this.walls.length; j++) {
+        res.applyThermalCoupling(this.walls[j], effectiveDt);
+      }
+    }
+
+    // 4. Thermal Coupling: Walls -> Walls
+    for (let i = 0; i < this.walls.length; i++) {
+      const w1 = this.walls[i];
+      if (w1.conductivity <= 0) continue;
+
+      for (let j = i + 1; j < this.walls.length; j++) {
+        const w2 = this.walls[j];
+        if (w2.conductivity <= 0) continue;
+
+        if (
+          w1.p1.distanceToSq(w2.p1) < 64 ||
+          w1.p1.distanceToSq(w2.p2) < 64 ||
+          w1.p2.distanceToSq(w2.p1) < 64 ||
+          w1.p2.distanceToSq(w2.p2) < 64
+        ) {
+          w1.conductTo(w2, effectiveDt);
+        }
+      }
+    }
+
+    // 5. Update Components
+    for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
+    for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
+    for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
+    for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+    for (let i = 0; i < this.sensors.length; i++) this.sensors[i].updateMeasurements(this.particles, this.totalTime);
+
+    this._updateStats();
+  }
+
+  _subStep(dt) {
+    // 1. Move particles
+    for (let i = 0; i < this.particles.length; i++) {
+      const p = this.particles[i];
+      if (!p.fixed) p.update(dt);
+    }
+
+    // 2. Spatial Grid Particle Collision
+    this.grid.populate(this.particles);
+
+    if (this.simModel === 'lennard_jones') {
+      this.grid.forEachPair((p1, p2) => this._resolveLennardJones(p1, p2, dt));
+    } else {
+      this.grid.forEachPair((p1, p2) => this._resolveParticleCollision(p1, p2));
+    }
+
+    // 3. Wall, Piston, ThermalBlock & Sink Collisions
+    const sinksCount = this.sinks.length;
+    let writeIdx = 0;
+    const count = this.particles.length;
+
+    for (let i = 0; i < count; i++) {
+      const p = this.particles[i];
+      
+      // Sink Check
+      let absorbed = false;
+      if (sinksCount > 0) {
+        for (let s = 0; s < sinksCount; s++) {
+          if (this.sinks[s].tryAbsorb(p)) {
+            absorbed = true;
+            break;
+          }
+        }
+      }
+      if (absorbed) continue;
+
+      // Walls
+      for (let j = 0; j < this.walls.length; j++) {
+        this._resolveWallCollision(p, this.walls[j], dt);
+      }
+
+      // Throttle Valves
+      for (let tv = 0; tv < (this.throttleValves || []).length; tv++) {
+        this.throttleValves[tv].resolveParticleCollision(p, dt);
+      }
+
+      // Pistons
+      for (let k = 0; k < this.pistons.length; k++) {
+        this._resolvePistonCollision(p, this.pistons[k], dt);
+      }
+
+      // Solid Thermal Storage Blocks
+      for (let b = 0; b < this.thermalBlocks.length; b++) {
+        this._resolveThermalBlockCollision(p, this.thermalBlocks[b], dt);
+      }
+
+      // Solid Isothermal Reservoirs
+      for (let r = 0; r < this.reservoirs.length; r++) {
+        this._resolveReservoirCollision(p, this.reservoirs[r], dt);
+      }
+
+      // Permeable Isothermal Heat Exchangers
+      for (let hx = 0; hx < this.heatExchangers.length; hx++) {
+        this._resolveHeatExchanger(p, this.heatExchangers[hx], dt);
+      }
+
+      // Permeable Regenerator Matrices
+      for (let reg = 0; reg < this.regenerators.length; reg++) {
+        this._resolveRegeneratorMatrix(p, this.regenerators[reg], dt);
+      }
+
+      if (writeIdx !== i) {
+        this.particles[writeIdx] = p;
+      }
+      writeIdx++;
+    }
+
+    if (writeIdx < count) {
+      this.particles.length = writeIdx;
+    }
+  }
+
+  _resolveParticleCollision(p1, p2) {
+    const dx = p2.pos.x - p1.pos.x;
+    const dy = p2.pos.y - p1.pos.y;
+    const distSq = dx * dx + dy * dy;
+    const minDist = p1.radius + p2.radius;
+
+    if (distSq < minDist * minDist && distSq > 0.00001) {
+      const dist = Math.sqrt(distSq);
+      const nx = dx / dist;
+      const ny = dy / dist;
+
+      // Position correction
+      const overlap = (minDist - dist) * 0.5;
+      if (!p1.fixed) { p1.pos.x -= nx * overlap; p1.pos.y -= ny * overlap; }
+      if (!p2.fixed) { p2.pos.x += nx * overlap; p2.pos.y += ny * overlap; }
+
+      // Relative velocity
+      const rvx = p2.vel.x - p1.vel.x;
+      const rvy = p2.vel.y - p1.vel.y;
+      const velAlongNormal = rvx * nx + rvy * ny;
+
+      if (velAlongNormal < 0) {
+        const inv1 = p1.fixed ? 0 : 1 / p1.mass;
+        const inv2 = p2.fixed ? 0 : 1 / p2.mass;
+        const invSum = inv1 + inv2;
+
+        if (invSum > 0) {
+          const impMag = (-2.0 * velAlongNormal) / invSum;
+          const ix = impMag * nx;
+          const iy = impMag * ny;
+
+          if (!p1.fixed) { p1.vel.x -= ix * inv1; p1.vel.y -= iy * inv1; }
+          if (!p2.fixed) { p2.vel.x += ix * inv2; p2.vel.y += iy * inv2; }
+        }
+      }
+    }
+  }
+
+  _resolveLennardJones(p1, p2, dt) {
+    const dx = p2.pos.x - p1.pos.x;
+    const dy = p2.pos.y - p1.pos.y;
+    const distSq = dx * dx + dy * dy;
+    const sigma = (p1.radius + p2.radius) * 0.9;
+    const sigmaSq = sigma * sigma;
+    const rCutSq = sigmaSq * 6.25; // 2.5 sigma cutoff
+
+    if (distSq < rCutSq && distSq > 0.0001) {
+      const invDistSq = 1.0 / distSq;
+      const s_r2 = sigmaSq * invDistSq;
+      const s_r6 = s_r2 * s_r2 * s_r2;
+      const s_r12 = s_r6 * s_r6;
+      
+      const epsilon = 30.0;
+      let forceOverDist = 24.0 * epsilon * (2.0 * s_r12 - s_r6) * invDistSq;
+
+      // Force clamping at +/- 1000
+      const fSq = forceOverDist * forceOverDist * distSq;
+      if (fSq > 1000000.0) {
+        const dist = Math.sqrt(distSq);
+        forceOverDist = (forceOverDist > 0 ? 1000.0 : -1000.0) / dist;
+      }
+
+      const fx = forceOverDist * dx;
+      const fy = forceOverDist * dy;
+
+      if (!p1.fixed) {
+        p1.vel.x -= (fx / p1.mass) * dt;
+        p1.vel.y -= (fy / p1.mass) * dt;
+      }
+      if (!p2.fixed) {
+        p2.vel.x += (fx / p2.mass) * dt;
+        p2.vel.y += (fy / p2.mass) * dt;
+      }
+    }
+  }
+
+  _resolveWallCollision(p, wall, dt) {
+    if (wall.type === 'manual_valve' && wall.isOpen) return;
+    if (wall.type === 'relief_valve' && wall.isOpen && wall.reliefMode === 'bidirectional') return;
+
+    if (!this._wallClosestHelper) this._wallClosestHelper = { x: 0, y: 0 };
+    wall.getClosestPointCoords(p.pos.x, p.pos.y, this._wallClosestHelper);
+    const dx = p.pos.x - this._wallClosestHelper.x;
+    const dy = p.pos.y - this._wallClosestHelper.y;
+    const distSq = dx * dx + dy * dy;
+    const effRad = p.radius + wall.thickness * 0.5;
+
+    if (distSq < effRad * effRad) {
+      const dist = Math.sqrt(distSq) || 0.0001;
+      const nx = dx / dist;
+      const ny = dy / dist;
+
+      if (wall.type === 'check_valve' || (wall.type === 'relief_valve' && wall.isOpen && wall.reliefMode === 'oneway')) {
+        const flow = p.vel.x * wall.normal.x + p.vel.y * wall.normal.y;
+        if (flow * wall.allowedDirection > 0) return;
+      }
+
+      const pen = effRad - dist;
+      p.pos.x += nx * pen;
+      p.pos.y += ny * pen;
+
+      const velAlongNormal = p.vel.x * nx + p.vel.y * ny;
+      if (velAlongNormal < 0) {
+        let newVx = p.vel.x - 2 * velAlongNormal * nx;
+        let newVy = p.vel.y - 2 * velAlongNormal * ny;
+
+        if (wall.conductivity > 0) {
+          const kB = 35.0;
+          const targetSpeedSq = (2 * kB * wall.temperature) / p.mass;
+          const curSpeedSq = newVx * newVx + newVy * newVy;
+          const alpha = wall.conductivity * 0.8;
+          const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+          const factor = curSpeedSq > 0.001 ? Math.sqrt(blendSq / curSpeedSq) : 1;
+
+          const eBefore = 0.5 * p.mass * curSpeedSq;
+          newVx *= factor;
+          newVy *= factor;
+          const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
+          wall.addHeat(-(eAfter - eBefore));
+        }
+
+        p.vel.x = newVx;
+        p.vel.y = newVy;
+        wall.recordImpulse(2 * p.mass * Math.abs(velAlongNormal));
+      }
+    }
+  }
+
+  _resolvePistonCollision(p, piston, dt) {
+    const bounds = piston.getBounds();
+    const pr = p.radius;
+
+    if (
+      p.pos.x + pr >= bounds.left &&
+      p.pos.x - pr <= bounds.right &&
+      p.pos.y + pr >= bounds.top &&
+      p.pos.y - pr <= bounds.bottom
+    ) {
+      if (piston.orientation === 'horizontal') {
+        const isLeft = p.pos.x < piston.x;
+        const vPiston = piston.velocity;
+
+        if (isLeft) {
+          p.pos.x = bounds.left - pr;
+          const relVel = p.vel.x - vPiston;
+          if (relVel > 0) {
+            const m1 = p.mass;
+            const m2 = Math.max(1, piston.mass);
+            const imp = (2 * m1 * m2 * (vPiston - p.vel.x)) / (m1 + m2);
+            p.vel.x += imp / m1;
+            piston.accumulatedImpulseLeft += Math.abs(imp);
+          }
+        } else {
+          p.pos.x = bounds.right + pr;
+          const relVel = p.vel.x - vPiston;
+          if (relVel < 0) {
+            const m1 = p.mass;
+            const m2 = Math.max(1, piston.mass);
+            const imp = (2 * m1 * m2 * (vPiston - p.vel.x)) / (m1 + m2);
+            p.vel.x += imp / m1;
+            piston.accumulatedImpulseRight += Math.abs(imp);
+          }
+        }
+      } else {
+        const isTop = p.pos.y < piston.y;
+        const vPiston = piston.velocity;
+
+        if (isTop) {
+          p.pos.y = bounds.top - pr;
+          const relVel = p.vel.y - vPiston;
+          if (relVel > 0) {
+            p.vel.y = 2 * vPiston - p.vel.y;
+            piston.accumulatedImpulseLeft += 2 * p.mass * Math.abs(relVel);
+          }
+        } else {
+          p.pos.y = bounds.bottom + pr;
+          const relVel = p.vel.y - vPiston;
+          if (relVel < 0) {
+            p.vel.y = 2 * vPiston - p.vel.y;
+            piston.accumulatedImpulseRight += 2 * p.mass * Math.abs(relVel);
+          }
+        }
+      }
+    }
+  }
+
+  _resolveHeatExchanger(p, hx, dt) {
+    if (!hx.isActive || !hx.contains(p.pos.x, p.pos.y)) return;
+    const kB = 35.0;
+    const targetTemp = Math.max(5, hx.temperature);
+    const targetSpeedSq = (2 * kB * targetTemp) / Math.max(0.01, p.mass);
+    const curSpeedSq = p.getSpeedSq();
+    if (curSpeedSq < 0.0001) return;
+
+    const alpha = Math.min(1.0, (hx.conductivity || 0.6) * 6.0 * dt);
+    const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+    if (blendSq > 0 && !isNaN(blendSq)) {
+      const factor = Math.sqrt(blendSq / curSpeedSq);
+      if (!isNaN(factor) && isFinite(factor) && factor > 0) {
+        p.vel.multiplyScalar(factor);
+      }
+    }
+  }
+
+  _resolveRegeneratorMatrix(p, reg, dt) {
+    if (!reg.isActive || !reg.contains(p.pos.x, p.pos.y)) return;
+    const sliceIdx = reg.getSliceIndex(p.pos.x, p.pos.y);
+    if (sliceIdx < 0 || sliceIdx >= reg.sliceCount) return;
+
+    const kB = 35.0;
+    const sliceTemp = Math.max(5, reg.temperatures[sliceIdx] || 300);
+    const targetSpeedSq = (2 * kB * sliceTemp) / Math.max(0.01, p.mass);
+    const curSpeedSq = p.getSpeedSq();
+    if (curSpeedSq < 0.0001) return;
+
+    const alpha = Math.min(1.0, (reg.conductivity || 0.7) * 6.0 * dt);
+    const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+    if (blendSq > 0 && !isNaN(blendSq)) {
+      const factor = Math.sqrt(blendSq / curSpeedSq);
+      if (!isNaN(factor) && isFinite(factor) && factor > 0) {
+        const eBefore = 0.5 * p.mass * curSpeedSq;
+        p.vel.multiplyScalar(factor);
+        const eAfter = 0.5 * p.mass * p.getSpeedSq();
+        reg.addHeatToSlice(sliceIdx, -(eAfter - eBefore));
+      }
+    }
+  }
+
+  _resolveThermalBlockCollision(p, block, dt) {
+    const bounds = block.getBounds();
+    const pr = p.radius;
+
+    if (
+      p.pos.x + pr >= bounds.left &&
+      p.pos.x - pr <= bounds.right &&
+      p.pos.y + pr >= bounds.top &&
+      p.pos.y - pr <= bounds.bottom
+    ) {
+      const dl = Math.abs(p.pos.x - bounds.left);
+      const dr = Math.abs(bounds.right - p.pos.x);
+      const dt_ = Math.abs(p.pos.y - bounds.top);
+      const db = Math.abs(bounds.bottom - p.pos.y);
+      const minD = Math.min(dl, dr, dt_, db);
+
+      if (minD === dl) { p.pos.x = bounds.left - pr; p.vel.x = -Math.abs(p.vel.x); }
+      else if (minD === dr) { p.pos.x = bounds.right + pr; p.vel.x = Math.abs(p.vel.x); }
+      else if (minD === dt_) { p.pos.y = bounds.top - pr; p.vel.y = -Math.abs(p.vel.y); }
+      else { p.pos.y = bounds.bottom + pr; p.vel.y = Math.abs(p.vel.y); }
+
+      if (block.isActive && block.conductivity > 0) {
+        const kB = 35.0;
+        const targetTemp = Math.max(5, block.temperature);
+        const targetSpeedSq = (2 * kB * targetTemp) / Math.max(0.01, p.mass);
+        const curSpeedSq = p.getSpeedSq();
+        if (curSpeedSq > 0.0001) {
+          const alpha = Math.min(1.0, block.conductivity * 0.8);
+          const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+          if (blendSq > 0 && !isNaN(blendSq)) {
+            const factor = Math.sqrt(blendSq / curSpeedSq);
+            if (!isNaN(factor) && isFinite(factor) && factor > 0) {
+              const eBefore = 0.5 * p.mass * curSpeedSq;
+              p.vel.multiplyScalar(factor);
+              const eAfter = 0.5 * p.mass * p.getSpeedSq();
+              block.addHeat(-(eAfter - eBefore));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  _resolveReservoirCollision(p, res, dt) {
+    const bounds = res.getBounds();
+    const pr = p.radius;
+
+    if (
+      p.pos.x + pr >= bounds.left &&
+      p.pos.x - pr <= bounds.right &&
+      p.pos.y + pr >= bounds.top &&
+      p.pos.y - pr <= bounds.bottom
+    ) {
+      const dl = Math.abs(p.pos.x - bounds.left);
+      const dr = Math.abs(bounds.right - p.pos.x);
+      const dt_ = Math.abs(p.pos.y - bounds.top);
+      const db = Math.abs(bounds.bottom - p.pos.y);
+      const minD = Math.min(dl, dr, dt_, db);
+
+      if (minD === dl) { p.pos.x = bounds.left - pr; p.vel.x = -Math.abs(p.vel.x); }
+      else if (minD === dr) { p.pos.x = bounds.right + pr; p.vel.x = Math.abs(p.vel.x); }
+      else if (minD === dt_) { p.pos.y = bounds.top - pr; p.vel.y = -Math.abs(p.vel.y); }
+      else { p.pos.y = bounds.bottom + pr; p.vel.y = Math.abs(p.vel.y); }
+
+      if (res.isActive && res.conductance > 0) {
+        const kB = 35.0;
+        const targetTemp = Math.max(5, res.temperature);
+        const targetSpeedSq = (2 * kB * targetTemp) / Math.max(0.01, p.mass);
+        const curSpeedSq = p.getSpeedSq();
+        if (curSpeedSq > 0.0001) {
+          const alpha = Math.min(1.0, res.conductance * 0.8);
+          const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+          if (blendSq > 0 && !isNaN(blendSq)) {
+            const factor = Math.sqrt(blendSq / curSpeedSq);
+            if (!isNaN(factor) && isFinite(factor) && factor > 0) {
+              p.vel.multiplyScalar(factor);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  _updateStats() {
+    let totalE = 0;
+    let speedSum = 0;
+    const count = this.particles.length;
+
+    for (let i = 0; i < count; i++) {
+      const spd = this.particles[i].getSpeed();
+      speedSum += spd;
+      totalE += 0.5 * this.particles[i].mass * spd * spd;
+    }
+
+    this.stats.particleCount = count;
+    this.stats.totalKineticEnergy = totalE;
+    this.stats.meanSpeed = count > 0 ? speedSum / count : 0;
+    const kB = 35.0;
+    this.stats.systemTemperature = count > 0 ? totalE / (count * kB) : 0;
+
+    // Record continuous time series
+    if (this.historyTime && (this.historyTime.length === 0 || this.totalTime - this.historyTime[this.historyTime.length - 1] >= 0.045)) {
+      this.historyTime.push(this.totalTime);
+      this.historyTemp.push(this.stats.systemTemperature);
+      this.historyPressure.push((count / 2500) * kB * this.stats.systemTemperature * 10);
+      this.historyVolume.push(2500 * 2500);
+      this.historyCount.push(count);
+      this.historyKineticEnergy.push(totalE);
+
+      if (this.historyTime.length > 600) {
+        this.historyTime.shift();
+        this.historyTemp.shift();
+        this.historyPressure.shift();
+        this.historyVolume.shift();
+        this.historyCount.shift();
+        this.historyKineticEnergy.shift();
+      }
+    }
+  }
+
+  exportState(profileName = 'Standardprofil') {
+    return {
+      version: '3.0',
+      profileName: profileName,
+      timestamp: new Date().toISOString(),
+      walls: this.walls.map(w => w.toJSON()),
+      throttleValves: (this.throttleValves || []).map(tv => tv.toJSON()),
+      reservoirs: this.reservoirs.map(r => r.toJSON()),
+      pistons: this.pistons.map(p => p.toJSON()),
+      sensors: this.sensors.map(s => s.toJSON()),
+      emitters: this.emitters.map(e => e.toJSON()),
+      sinks: this.sinks.map(s => s.toJSON()),
+      regulators: this.regulators.map(r => r.toJSON()),
+      thermalBlocks: this.thermalBlocks.map(b => b.toJSON()),
+      heatExchangers: this.heatExchangers.map(h => h.toJSON()),
+      regenerators: this.regenerators.map(r => r.toJSON()),
+      textLabels: this.textLabels.map(l => l.toJSON()),
+      particleGroups: this.particleGroups.map(g => g.toJSON()),
+      particles: this.particles.map(p => ({
+        x: p.initialPos.x,
+        y: p.initialPos.y,
+        vx: p.initialVel.x,
+        vy: p.initialVel.y,
+        mass: p.mass,
+        tag: p.tag,
+        groupId: p.groupId
+      }))
+    };
+  }
+
+  _applyState(state) {
+    this.clear();
+
+    if (state.profileName) this.currentProfileName = state.profileName;
+    if (state.walls) this.walls = state.walls.map(w => Wall.fromJSON(w));
+    if (state.throttleValves) this.throttleValves = state.throttleValves.map(tv => ThrottleValve.fromJSON(tv));
+    if (state.reservoirs) this.reservoirs = state.reservoirs.map(r => Reservoir.fromJSON(r));
+    if (state.pistons) this.pistons = state.pistons.map(p => Piston.fromJSON(p));
+    if (state.sensors) this.sensors = state.sensors.map(s => SensorZone.fromJSON(s));
+    if (state.emitters) this.emitters = state.emitters.map(e => Emitter.fromJSON(e));
+    if (state.sinks) this.sinks = state.sinks.map(s => Sink.fromJSON(s));
+    if (state.regulators) this.regulators = state.regulators.map(r => Regulator.fromJSON(r));
+    if (state.thermalBlocks) this.thermalBlocks = state.thermalBlocks.map(b => ThermalBlock.fromJSON(b));
+    if (state.heatExchangers) this.heatExchangers = state.heatExchangers.map(h => HeatExchanger.fromJSON(h));
+    if (state.regenerators) this.regenerators = state.regenerators.map(r => RegeneratorMatrix.fromJSON(r));
+    if (state.textLabels) this.textLabels = state.textLabels.map(l => TextLabel.fromJSON(l));
+    if (state.particleGroups) this.particleGroups = state.particleGroups.map(g => ParticleGroup.fromJSON(g));
+
+    this.elements = [
+      ...this.walls,
+      ...(this.throttleValves || []),
+      ...this.reservoirs,
+      ...this.thermalBlocks,
+      ...this.heatExchangers,
+      ...this.regenerators,
+      ...this.sensors,
+      ...this.emitters,
+      ...this.sinks,
+      ...this.regulators,
+      ...this.textLabels,
+      ...this.particleGroups,
+      ...this.pistons
+    ];
+
+    if (state.particles) {
+      for (let i = 0; i < state.particles.length; i++) {
+        const pd = state.particles[i];
+        this.addParticle(pd.x, pd.y, pd.vx, pd.vy, pd.mass || 1, pd.groupId || null);
+      }
+    }
+
+    for (let i = 0; i < this.sensors.length; i++) this.sensors[i].clearHistory();
+    this.totalTime = 0;
+    this.isPaused = true;
+    this._updateStats();
+  }
+
+  importState(state, updateProfile = true) {
+    this._applyState(state);
+    this.initialSnapshot = JSON.stringify(state);
+    if (updateProfile || !this.loadedProfileJSON) {
+      this.loadedProfileJSON = JSON.stringify(state);
+    }
+  }
+
+  // Particle Queries & Deletion
+  findParticleAt(wx, wy, hitRadius = 10) {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      const dx = p.pos.x - wx;
+      const dy = p.pos.y - wy;
+      const r = Math.max(p.radius + 3, hitRadius);
+      if (dx * dx + dy * dy <= r * r) {
+        return p;
+      }
+    }
+    return null;
+  }
+
+  findParticlesInRect(minX, minY, maxX, maxY) {
+    const matched = [];
+    for (let i = 0; i < this.particles.length; i++) {
+      const p = this.particles[i];
+      if (p.pos.x >= minX && p.pos.x <= maxX && p.pos.y >= minY && p.pos.y <= maxY) {
+        matched.push(p);
+      }
+    }
+    return matched;
+  }
+
+  deleteParticles(particlesToDelete) {
+    if (!particlesToDelete || particlesToDelete.length === 0) return;
+    const deleteSet = new Set(Array.isArray(particlesToDelete) ? particlesToDelete : [particlesToDelete]);
+    this.particles = this.particles.filter(p => !deleteSet.has(p));
+    this._updateStats();
+  }
+
+  // Unified Layer Ordering (Z-Index) across ALL canvas elements
+  reorderElements(fromIndex, toIndex) {
+    if (
+      fromIndex < 0 || fromIndex >= this.elements.length ||
+      toIndex < 0 || toIndex >= this.elements.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
+    const [item] = this.elements.splice(fromIndex, 1);
+    this.elements.splice(toIndex, 0, item);
+  }
+
+  bringToFront(item) {
+    const idx = this.elements.indexOf(item);
+    if (idx !== -1 && idx < this.elements.length - 1) {
+      this.elements.splice(idx, 1);
+      this.elements.push(item);
+    }
+  }
+
+  sendToBack(item) {
+    const idx = this.elements.indexOf(item);
+    if (idx > 0) {
+      this.elements.splice(idx, 1);
+      this.elements.unshift(item);
+    }
+  }
+
+  bringForward(item) {
+    const idx = this.elements.indexOf(item);
+    if (idx !== -1 && idx < this.elements.length - 1) {
+      const temp = this.elements[idx];
+      this.elements[idx] = this.elements[idx + 1];
+      this.elements[idx + 1] = temp;
+    }
+  }
+
+  sendBackward(item) {
+    const idx = this.elements.indexOf(item);
+    if (idx > 0) {
+      const temp = this.elements[idx];
+      this.elements[idx] = this.elements[idx - 1];
+      this.elements[idx - 1] = temp;
+    }
+  }
+}
+
+
+// --- src/render/Renderer.js ---
+
+class Renderer {
+  constructor(canvas, glCanvas = null) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.glCanvas = null;
+    this.glRenderer = null;
+    this.useWebGL = false;
+
+    if (glCanvas) {
+      this.setGLCanvas(glCanvas);
+    }
+    
+    // Viewport Camera (Pan & Zoom)
+    this.panX = 0;
+    this.panY = 0;
+    this.zoom = 1.0;
+    this.minZoom = 0.20; // Maximum zoom-out clamped to 20%
+    this.maxZoom = 3.5;
+
+    // Grid & View settings
+    this.showGrid = true;
+    this.gridSize = 20;
+    this.snapToGrid = true;
+    this.showVectors = false;
+    this.colorByVelocity = true;
+    this.snapCursor = null; // { x, y } in world coordinates
+
+    this.maxSpeedReference = 380;
+  }
+
+  setGLCanvas(glCanvas) {
+    this.glCanvas = glCanvas;
+    try {
+      this.glRenderer = glCanvas ? new ParticleGLRenderer(glCanvas) : null;
+      this.useWebGL = !!(this.glRenderer && this.glRenderer.isSupported);
+    } catch (e) {
+      console.warn('Failed to initialize ParticleGLRenderer, using 2D Canvas fallback:', e);
+      this.glRenderer = null;
+      this.useWebGL = false;
+    }
+  }
+
+  screenToWorld(screenX, screenY) {
+    return {
+      x: (screenX - this.panX) / this.zoom,
+      y: (screenY - this.panY) / this.zoom
+    };
+  }
+
+  worldToScreen(worldX, worldY) {
+    return {
+      x: worldX * this.zoom + this.panX,
+      y: worldY * this.zoom + this.panY
+    };
+  }
+
+  setViewport(panX, panY, zoom) {
+    this.panX = panX;
+    this.panY = panY;
+    this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, zoom));
+  }
+
+  zoomAt(screenX, screenY, factor) {
+    const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom * factor));
+    const world = this.screenToWorld(screenX, screenY);
+    this.panX = screenX - world.x * newZoom;
+    this.panY = screenY - world.y * newZoom;
+    this.zoom = newZoom;
+  }
+
+  clear() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+
+    if (this.useWebGL) {
+      // Clear 2D overlay canvas to transparent
+      ctx.clearRect(0, 0, w, h);
+    } else {
+      // 2D fallback: dark background
+      ctx.fillStyle = '#101216';
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    if (this.showGrid) {
+      this.drawDotGrid();
+    }
+  }
+
+  drawDotGrid() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const step = this.gridSize;
+
+    const topLeft = this.screenToWorld(0, 0);
+    const bottomRight = this.screenToWorld(w, h);
+
+    const startX = Math.floor(topLeft.x / step) * step;
+    const endX = Math.ceil(bottomRight.x / step) * step;
+    const startY = Math.floor(topLeft.y / step) * step;
+    const endY = Math.ceil(bottomRight.y / step) * step;
+
+    ctx.save();
+    const dotSize = Math.max(1.2, Math.min(2.5, 1.4 * this.zoom));
+    const majorInterval = step * 5;
+
+    // 1. Minor Grid Dots (Smooth alpha with zoom)
+    const minorAlpha = Math.min(0.20, Math.max(0.05, 0.12 * Math.sqrt(this.zoom)));
+    ctx.fillStyle = `rgba(255, 255, 255, ${minorAlpha})`;
+    ctx.beginPath();
+    for (let wx = startX; wx <= endX; wx += step) {
+      for (let wy = startY; wy <= endY; wy += step) {
+        const isMajorX = ((Math.round(wx) % majorInterval + majorInterval) % majorInterval) === 0;
+        const isMajorY = ((Math.round(wy) % majorInterval + majorInterval) % majorInterval) === 0;
+        if (!isMajorX || !isMajorY) {
+          const sx = wx * this.zoom + this.panX;
+          const sy = wy * this.zoom + this.panY;
+          ctx.rect(sx - dotSize * 0.5, sy - dotSize * 0.5, dotSize, dotSize);
+        }
+      }
+    }
+    ctx.fill();
+
+    // 2. Major Grid Dots
+    const majorAlpha = Math.min(0.50, Math.max(0.18, 0.32 * Math.sqrt(this.zoom)));
+    ctx.fillStyle = `rgba(255, 255, 255, ${majorAlpha})`;
+    ctx.beginPath();
+    const majorDotSize = dotSize * 1.5;
+    for (let wx = startX; wx <= endX; wx += step) {
+      for (let wy = startY; wy <= endY; wy += step) {
+        const isMajorX = ((Math.round(wx) % majorInterval + majorInterval) % majorInterval) === 0;
+        const isMajorY = ((Math.round(wy) % majorInterval + majorInterval) % majorInterval) === 0;
+        if (isMajorX && isMajorY) {
+          const sx = wx * this.zoom + this.panX;
+          const sy = wy * this.zoom + this.panY;
+          ctx.rect(sx - majorDotSize * 0.5, sy - majorDotSize * 0.5, majorDotSize, majorDotSize);
+        }
+      }
+    }
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  render(engine, selectedItems = []) {
+    const isItemSelected = (item) => Array.isArray(selectedItems) ? selectedItems.includes(item) : selectedItems === item;
+
+    this.clear();
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(this.panX, this.panY);
+    ctx.scale(this.zoom, this.zoom);
+
+    // 1. Canvas Physical Elements in Unified Layer Order (Z-Index)
+    const elements = engine.elements || [];
+    for (let i = 0; i < elements.length; i++) {
+      const item = elements[i];
+      const selected = isItemSelected(item);
+      if (item instanceof SensorZone) {
+        this.drawSensor(item, selected);
+      } else if (item instanceof Reservoir) {
+        this.drawReservoir(item, selected);
+      } else if (item instanceof HeatExchanger) {
+        this.drawHeatExchanger(item, selected);
+      } else if (item instanceof RegeneratorMatrix) {
+        this.drawRegeneratorMatrix(item, selected);
+      } else if (item instanceof ThermalBlock) {
+        this.drawThermalBlock(item, selected);
+      } else if (item instanceof Emitter) {
+        this.drawEmitter(item, selected);
+      } else if (item instanceof Sink) {
+        this.drawSink(item, selected);
+      } else if (item instanceof Regulator) {
+        this.drawRegulator(item, selected);
+      } else if (item instanceof TextLabel) {
+        this.drawTextLabel(item, selected);
+      } else if (item instanceof Wall) {
+        this.drawWall(item, selected);
+      } else if (item instanceof ThrottleValve) {
+        this.drawThrottleValve(item, selected);
+      } else if (item instanceof Piston) {
+        this.drawPiston(item, selected);
+      }
+    }
+
+    // 2. Particles (Rendered on top of physical structures)
+    if (this.useWebGL) {
+      this.glRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+      const pCount = engine.particles.length;
+      for (let i = 0; i < pCount; i++) {
+        const p = engine.particles[i];
+        if (p.selected || this.showVectors) {
+          this.drawParticleOverlay(p);
+        }
+      }
+    } else {
+      if (this.glRenderer) this.glRenderer.clear();
+      for (let i = 0; i < engine.particles.length; i++) {
+        this.drawParticle(engine.particles[i]);
+      }
+    }
+
+    // 9. Selected Group Bounding Frames & Resize Handles
+    if (Array.isArray(selectedItems) && selectedItems.length > 0) {
+      const groupsMap = new Map();
+      for (let i = 0; i < selectedItems.length; i++) {
+        const item = selectedItems[i];
+        if (item.groupId) {
+          if (!groupsMap.has(item.groupId)) groupsMap.set(item.groupId, []);
+          groupsMap.get(item.groupId).push(item);
+        }
+      }
+
+      groupsMap.forEach((gItems, gid) => {
+        if (gItems.length > 1) {
+          this.drawGroupBoundingBox(gItems, gid);
+        }
+      });
+
+      for (let i = 0; i < selectedItems.length; i++) {
+        const sel = selectedItems[i];
+        if (sel instanceof ParticleGroup) {
+          this.drawParticleGroupHighlight(engine, sel);
+        } else {
+          this.drawResizeHandles(sel);
+        }
+      }
+    }
+
+    // 10. Draft Previews (Valves, Walls, Rectangles, Marquee Selection)
+    if (this.draftInfo && this.draftInfo.isDrafting) {
+      this.drawDraft(this.draftInfo);
+    }
+
+    // 11. Snap Cursor Indicator
+    if (this.snapCursor) {
+      this.drawSnapIndicator(this.snapCursor.x, this.snapCursor.y, this.snapCursor.isVertex);
+    }
+
+    ctx.restore();
+  }
+
+  drawDraft(draft) {
+    const ctx = this.ctx;
+    ctx.save();
+    const { tool, start, current, shape, vtype } = draft;
+
+    if (!start || !current) {
+      ctx.restore();
+      return;
+    }
+
+    const minX = Math.min(start.x, current.x), minY = Math.min(start.y, current.y);
+    const w = Math.abs(current.x - start.x), h = Math.abs(current.y - start.y);
+
+    if (tool === 'wall') {
+      if (shape === 'rect') {
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(minX, minY, w, h);
+      } else if (shape === 'circle') {
+        const radius = Math.hypot(current.x - start.x, current.y - start.y);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.08)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.arc(start.x, start.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Center point & radius line guide
+        ctx.beginPath();
+        ctx.arc(start.x, start.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(current.x, current.y);
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 10px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Circle Wall (R: ${Math.round(radius)}px)`, (start.x + current.x) * 0.5, (start.y + current.y) * 0.5 - 8);
+      } else {
+        // Line draft
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(current.x, current.y);
+        ctx.stroke();
+      }
+    } else if (tool === 'valve') {
+      ctx.strokeStyle = vtype === 'relief_valve' ? '#ec4899' : (vtype === 'check_valve' ? '#10b981' : '#f59e0b');
+      ctx.lineWidth = 3;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(current.x, current.y);
+      ctx.stroke();
+
+      const midX = (start.x + current.x) * 0.5;
+      const midY = (start.y + current.y) * 0.5;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(midX, midY, 6, 0, Math.PI * 2);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fill();
+    } else if (tool === 'throttle_valve') {
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(current.x, current.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const midX = (start.x + current.x) * 0.5;
+      const midY = (start.y + current.y) * 0.5;
+      const len = Math.round(Math.hypot(current.x - start.x, current.y - start.y));
+      ctx.fillStyle = '#f59e0b';
+      ctx.font = 'bold 10px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Throttle Valve (${len}px)`, midX, midY - 12);
+    } else if (tool === 'heat_exchanger') {
+      ctx.fillStyle = 'rgba(45, 212, 191, 0.15)';
+      ctx.fillRect(minX, minY, w, h);
+      ctx.strokeStyle = '#2dd4bf';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(minX, minY, w, h);
+
+      // Preview cross-hatch (X)
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(minX, minY, w, h);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(45, 212, 191, 0.35)';
+      ctx.lineWidth = 1;
+      const step = 14;
+      for (let x = minX - h; x < minX + w + h; x += step) {
+        ctx.beginPath();
+        ctx.moveTo(x, minY); ctx.lineTo(x + h, minY + h);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x + h, minY); ctx.lineTo(x, minY + h);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      ctx.fillStyle = '#2dd4bf';
+      ctx.font = 'bold 10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Heat Exchanger (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
+
+    } else if (tool === 'regenerator' || tool === 'matrix') {
+      ctx.fillStyle = 'rgba(168, 85, 247, 0.15)';
+      ctx.fillRect(minX, minY, w, h);
+      ctx.strokeStyle = '#a855f7';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(minX, minY, w, h);
+
+      // Preview parallel lines
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(minX, minY, w, h);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(168, 85, 247, 0.35)';
+      ctx.lineWidth = 1;
+      const isHoriz = w >= h;
+      const lineGap = 10;
+      if (isHoriz) {
+        for (let y = minY + lineGap; y < minY + h; y += lineGap) {
+          ctx.beginPath(); ctx.moveTo(minX, y); ctx.lineTo(minX + w, y); ctx.stroke();
+        }
+      } else {
+        for (let x = minX + lineGap; x < minX + w; x += lineGap) {
+          ctx.beginPath(); ctx.moveTo(x, minY); ctx.lineTo(x, minY + h); ctx.stroke();
+        }
+      }
+      ctx.restore();
+
+      ctx.fillStyle = '#c084fc';
+      ctx.font = 'bold 10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Regenerator (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
+
+    } else if (tool === 'solid_res' || tool === 'reservoir') {
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.15)';
+      ctx.fillRect(minX, minY, w, h);
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.8;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(minX, minY, w, h);
+
+      ctx.fillStyle = '#7dd3fc';
+      ctx.font = 'bold 10.5px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Sink (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
+
+    } else if (tool === 'storage_block' || tool === 'solidblock') {
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.15)';
+      ctx.fillRect(minX, minY, w, h);
+
+      // Dotted matrix preview
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(minX, minY, w, h);
+      ctx.clip();
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.45)';
+      const dotSpacing = 14;
+      for (let x = minX + dotSpacing * 0.5; x < minX + w; x += dotSpacing) {
+        for (let y = minY + dotSpacing * 0.5; y < minY + h; y += dotSpacing) {
+          ctx.beginPath();
+          ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 1.8;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(minX, minY, w, h);
+
+      ctx.fillStyle = '#fde047';
+      ctx.font = 'bold 10.5px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Ressavoir (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
+
+    } else if (tool === 'regulator') {
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+      ctx.fillRect(minX, minY, w, h);
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 1.8;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(minX, minY, w, h);
+
+      ctx.fillStyle = '#6ee7b7';
+      ctx.font = 'bold 10.5px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Regulator (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
+
+    } else if (tool === 'select' || tool === 'gas' || tool === 'emitter' || tool === 'sink' || tool === 'sensor' || tool === 'piston') {
+      let color = '#38bdf8';
+      let fill = 'rgba(56, 189, 248, 0.08)';
+      if (tool === 'piston') { color = '#eab308'; fill = 'rgba(234, 179, 8, 0.1)'; }
+      else if (tool === 'gas') { color = '#22c55e'; fill = 'rgba(34, 197, 94, 0.15)'; }
+      else if (tool === 'emitter') { color = '#22c55e'; fill = 'rgba(34, 197, 94, 0.1)'; }
+      else if (tool === 'sink') { color = '#a855f7'; fill = 'rgba(168, 85, 247, 0.1)'; }
+      else if (tool === 'sensor') { color = '#38bdf8'; fill = 'rgba(56, 189, 248, 0.12)'; }
+
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.fillRect(minX, minY, w, h);
+      ctx.strokeRect(minX, minY, w, h);
+
+      if (tool === 'piston') {
+        const isVertical = h >= w;
+        const centerX = (start.x + current.x) * 0.5, centerY = (start.y + current.y) * 0.5;
+        ctx.strokeStyle = '#eab308';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        if (isVertical) {
+          ctx.moveTo(centerX - 140, centerY); ctx.lineTo(centerX + 140, centerY);
+        } else {
+          ctx.moveTo(centerX, centerY - 140); ctx.lineTo(centerX, centerY + 140);
+        }
+        ctx.stroke();
+      } else if (w >= 30 && h >= 20) {
+        ctx.fillStyle = color;
+        ctx.font = 'bold 10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        let label = '';
+        if (tool === 'gas') label = `Spawner (${Math.round(w)}×${Math.round(h)})`;
+        else if (tool === 'emitter') label = `Emitter (${Math.round(w)}×${Math.round(h)})`;
+        else if (tool === 'sink') label = `Sink (${Math.round(w)}×${Math.round(h)})`;
+        else if (tool === 'sensor') label = `Sensor (${Math.round(w)}×${Math.round(h)})`;
+        if (label) {
+          ctx.fillText(label, minX + w * 0.5, minY + h * 0.5 + 4);
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  drawSnapIndicator(wx, wy, isVertex = false) {
+    const ctx = this.ctx;
+    ctx.save();
+    
+    if (isVertex) {
+      // Magnetic Vertex Snap Indicator (Highlight wall endpoint)
+      ctx.strokeStyle = '#22c55e';
+      ctx.fillStyle = 'rgba(34, 197, 94, 0.4)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(wx, wy, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(wx, wy, 2, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    } else {
+      // Standard Grid Snap Crosshair
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 1.5;
+      
+      const s = 6;
+      ctx.beginPath();
+      ctx.moveTo(wx - s, wy); ctx.lineTo(wx + s, wy);
+      ctx.moveTo(wx, wy - s); ctx.lineTo(wx, wy + s);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(wx, wy, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#22c55e';
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  drawSensor(sensor, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Dedicated chamber color for border and charts (never overwritten)
+    const dedicatedColor = sensor.color || '#38bdf8';
+    const hasParticles = sensor.particleCount > 0;
+
+    // Interior fill represents live temperature via thermal colormap
+    if (hasParticles && sensor.temperature !== undefined) {
+      const minT = 50;
+      const maxT = 600;
+      const norm = Math.max(0, Math.min(1.0, (sensor.temperature - minT) / (maxT - minT)));
+      const tColor = thermalColormap.getColor(norm);
+      ctx.fillStyle = `rgba(${tColor.r}, ${tColor.g}, ${tColor.b}, 0.22)`;
+    } else {
+      ctx.fillStyle = 'rgba(71, 85, 105, 0.08)';
+    }
+    ctx.fillRect(sensor.x, sensor.y, sensor.width, sensor.height);
+
+    // Dedicated persistent border for clear identification across canvas and charts
+    ctx.strokeStyle = isSelected ? '#ffffff' : dedicatedColor;
+    ctx.lineWidth = isSelected ? 3 : 2.0;
+    ctx.setLineDash([6, 6]);
+    ctx.strokeRect(sensor.x, sensor.y, sensor.width, sensor.height);
+    ctx.setLineDash([]);
+
+    // Header label with chamber name in dedicated color and live temperature
+    ctx.fillStyle = isSelected ? '#ffffff' : dedicatedColor;
+    ctx.font = 'bold 11.5px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    const tempText = hasParticles ? ` [${Math.round(sensor.temperature)} K]` : ' (Empty)';
+    ctx.fillText(`${sensor.label}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
+
+    ctx.restore();
+  }
+
+  drawReservoir(res, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const isActive = res.isActive !== false;
+    const isCold = res.temperature < 250;
+    const isHot = res.temperature > 350;
+
+    let baseColor = isCold ? '#38bdf8' : (isHot ? '#ef4444' : '#10b981');
+    if (!isActive) baseColor = '#64748b';
+
+    ctx.fillStyle = isActive ? `${baseColor}22` : 'rgba(71, 85, 105, 0.12)';
+    ctx.fillRect(res.x, res.y, res.width, res.height);
+
+    ctx.strokeStyle = isSelected ? '#ffffff' : baseColor;
+    ctx.lineWidth = isSelected ? 3.5 : (isActive ? 2 : 1.5);
+    if (!isActive) ctx.setLineDash([4, 4]);
+    ctx.strokeRect(res.x, res.y, res.width, res.height);
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = isActive ? (isSelected ? '#ffffff' : '#f8fafc') : '#94a3b8';
+    ctx.font = 'bold 11px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Sink ${Math.round(res.temperature)}K (Const)`, res.x + res.width * 0.5, res.y + res.height * 0.5 + 4);
+
+    ctx.restore();
+  }
+
+  drawHeatExchanger(hx, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const isActive = hx.isActive !== false;
+    const isCold = hx.temperature < 250;
+    const isHot = hx.temperature > 350;
+
+    let themeColor = isCold ? '#38bdf8' : (isHot ? '#f97316' : '#2dd4bf');
+    if (!isActive) themeColor = '#64748b';
+
+    // Permeable background
+    ctx.fillStyle = isActive ? `${themeColor}18` : 'rgba(71, 85, 105, 0.1)';
+    ctx.fillRect(hx.x, hx.y, hx.width, hx.height);
+
+    // Permeable dashed boundary
+    ctx.strokeStyle = isSelected ? '#ffffff' : themeColor;
+    ctx.lineWidth = isSelected ? 2.5 : 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(hx.x, hx.y, hx.width, hx.height);
+    ctx.setLineDash([]);
+
+    // Cross-Hatch Pattern (X)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(hx.x, hx.y, hx.width, hx.height);
+    ctx.clip();
+
+    ctx.strokeStyle = isActive ? `${themeColor}44` : 'rgba(100, 116, 139, 0.15)';
+    ctx.lineWidth = 1.2;
+
+    const step = 14;
+    for (let x = hx.x - hx.height; x < hx.x + hx.width + hx.height; x += step) {
+      ctx.beginPath();
+      ctx.moveTo(x, hx.y);
+      ctx.lineTo(x + hx.height, hx.y + hx.height);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x + hx.height, hx.y);
+      ctx.lineTo(x, hx.y + hx.height);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Label without emoji
+    ctx.fillStyle = isActive ? '#ffffff' : '#94a3b8';
+    ctx.font = 'bold 10.5px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Heat Exchanger ${Math.round(hx.temperature)}K`, hx.x + hx.width * 0.5, hx.y + hx.height * 0.5 + 4);
+
+    ctx.restore();
+  }
+
+  drawRegeneratorMatrix(reg, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const isActive = reg.isActive !== false;
+    const n = reg.sliceCount || 10;
+    const isHoriz = reg.orientation === 'horizontal';
+
+    // Render spatial multi-slice gradient parallel to flow lines
+    for (let i = 0; i < n; i++) {
+      const t = reg.temperatures[i] || 300;
+      const isCold = t < 250;
+      const isHot = t > 350;
+      let sliceColor = isCold ? '#38bdf8' : (isHot ? '#f43f5e' : '#10b981');
+      if (!isActive) sliceColor = '#64748b';
+
+      ctx.fillStyle = isActive ? `${sliceColor}22` : 'rgba(71, 85, 105, 0.1)';
+      if (isHoriz) {
+        // Horizontal bands parallel to horizontal flow lines
+        const sh = reg.height / n;
+        ctx.fillRect(reg.x, reg.y + i * sh, reg.width, sh);
+      } else {
+        // Vertical bands parallel to vertical flow lines
+        const sw = reg.width / n;
+        ctx.fillRect(reg.x + i * sw, reg.y, sw, reg.height);
+      }
+    }
+
+    // Permeable dashed outline
+    ctx.strokeStyle = isSelected ? '#ffffff' : (isActive ? '#38bdf8' : '#64748b');
+    ctx.lineWidth = isSelected ? 2.5 : 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(reg.x, reg.y, reg.width, reg.height);
+    ctx.setLineDash([]);
+
+    // Directional Parallel Flow Lines (Parallel to temperature bands)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(reg.x, reg.y, reg.width, reg.height);
+    ctx.clip();
+
+    ctx.strokeStyle = isActive ? 'rgba(56, 189, 248, 0.45)' : 'rgba(100, 116, 139, 0.2)';
+    ctx.lineWidth = 1.2;
+
+    if (isHoriz) {
+      const lineGap = 10;
+      for (let y = reg.y + lineGap; y < reg.y + reg.height; y += lineGap) {
+        ctx.beginPath();
+        ctx.moveTo(reg.x, y);
+        ctx.lineTo(reg.x + reg.width, y);
+        ctx.stroke();
+      }
+    } else {
+      const lineGap = 10;
+      for (let x = reg.x + lineGap; x < reg.x + reg.width; x += lineGap) {
+        ctx.beginPath();
+        ctx.moveTo(x, reg.y);
+        ctx.lineTo(x, reg.y + reg.height);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+
+    // Gradient Span Label without emoji
+    const minT = Math.round(Math.min(...reg.temperatures));
+    const maxT = Math.round(Math.max(...reg.temperatures));
+    ctx.fillStyle = isActive ? '#ffffff' : '#94a3b8';
+    ctx.font = 'bold 10px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Regenerator [${minT}-${maxT}K]`, reg.x + reg.width * 0.5, reg.y + reg.height * 0.5 + 4);
+
+    ctx.restore();
+  }
+
+  drawThermalBlock(block, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const isActive = block.isActive !== false;
+    ctx.fillStyle = isActive ? 'rgba(245, 158, 11, 0.20)' : 'rgba(71, 85, 105, 0.12)';
+    ctx.fillRect(block.x, block.y, block.width, block.height);
+
+    // Dotted Stipple Matrix Pattern / Hatching
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(block.x, block.y, block.width, block.height);
+    ctx.clip();
+
+    ctx.fillStyle = isActive ? 'rgba(245, 158, 11, 0.55)' : 'rgba(100, 116, 139, 0.35)';
+    const dotSpacing = 14;
+    const dotR = 1.4;
+    for (let x = block.x + dotSpacing * 0.5; x < block.x + block.width; x += dotSpacing) {
+      for (let y = block.y + dotSpacing * 0.5; y < block.y + block.height; y += dotSpacing) {
+        ctx.beginPath();
+        ctx.arc(x, y, dotR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = isSelected ? '#ffffff' : (isActive ? '#f59e0b' : '#64748b');
+    ctx.lineWidth = isSelected ? 3.5 : (isActive ? 2 : 1.5);
+    if (!isActive) ctx.setLineDash([4, 4]);
+    ctx.strokeRect(block.x, block.y, block.width, block.height);
+    ctx.setLineDash([]);
+
+    // Label with solid background badge for clear readability
+    const textStr = `Ressavoir ${Math.round(block.temperature)}K`;
+    ctx.font = 'bold 11px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    const textWidth = ctx.measureText(textStr).width;
+    const midX = block.x + block.width * 0.5;
+    const midY = block.y + block.height * 0.5;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+    ctx.fillRect(midX - textWidth * 0.5 - 4, midY - 8, textWidth + 8, 16);
+
+    ctx.fillStyle = isActive ? '#fef08a' : '#94a3b8';
+    ctx.fillText(textStr, midX, midY + 4);
+
+    ctx.restore();
+  }
+
+  drawEmitter(emitter, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const isEnabled = emitter.enabled !== false;
+    ctx.fillStyle = isEnabled ? 'rgba(34, 197, 94, 0.2)' : 'rgba(100, 116, 139, 0.2)';
+    ctx.fillRect(emitter.x, emitter.y, emitter.width, emitter.height);
+
+    ctx.strokeStyle = isSelected ? '#38bdf8' : (isEnabled ? '#22c55e' : '#64748b');
+    ctx.lineWidth = isSelected ? 3 : 2;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(emitter.x, emitter.y, emitter.width, emitter.height);
+    ctx.setLineDash([]);
+
+    const cx = emitter.x + emitter.width * 0.5;
+    const cy = emitter.y + emitter.height * 0.5;
+    ctx.strokeStyle = isEnabled ? '#22c55e' : '#64748b';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (emitter.direction === 'right') {
+      ctx.moveTo(cx - 8, cy); ctx.lineTo(cx + 8, cy);
+      ctx.lineTo(cx + 4, cy - 4); ctx.moveTo(cx + 8, cy); ctx.lineTo(cx + 4, cy + 4);
+    } else if (emitter.direction === 'left') {
+      ctx.moveTo(cx + 8, cy); ctx.lineTo(cx - 8, cy);
+      ctx.lineTo(cx - 4, cy - 4); ctx.moveTo(cx - 8, cy); ctx.lineTo(cx - 4, cy + 4);
+    } else if (emitter.direction === 'down') {
+      ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
+      ctx.lineTo(cx - 4, cy + 4); ctx.moveTo(cx, cy + 8); ctx.lineTo(cx + 4, cy + 4);
+    } else if (emitter.direction === 'up') {
+      ctx.moveTo(cx, cy + 8); ctx.lineTo(cx, cy - 8);
+      ctx.lineTo(cx - 4, cy - 4); ctx.moveTo(cx, cy - 8); ctx.lineTo(cx + 4, cy - 4);
+    } else { // 360 / radial
+      ctx.moveTo(cx - 7, cy); ctx.lineTo(cx + 7, cy);
+      ctx.moveTo(cx, cy - 7); ctx.lineTo(cx, cy + 7);
+      ctx.moveTo(cx - 5, cy - 5); ctx.lineTo(cx + 5, cy + 5);
+      ctx.moveTo(cx - 5, cy + 5); ctx.lineTo(cx + 5, cy - 5);
+    }
+    ctx.stroke();
+
+    // Emitter label & count progress
+    ctx.fillStyle = isEnabled ? '#86efac' : '#94a3b8';
+    ctx.font = '10px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    const limitText = emitter.maxParticles > 0 ? ` (${emitter.emittedCount}/${emitter.maxParticles})` : '';
+    ctx.fillText(`${emitter.rate}/s [${isEnabled ? 'ON' : 'OFF'}]${limitText}`, cx, emitter.y + emitter.height + 14);
+
+    ctx.restore();
+  }
+
+  drawSink(sink, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    ctx.fillStyle = 'rgba(168, 85, 247, 0.2)';
+    ctx.fillRect(sink.x, sink.y, sink.width, sink.height);
+
+    ctx.strokeStyle = isSelected ? '#38bdf8' : '#a855f7';
+    ctx.lineWidth = isSelected ? 3 : 2;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(sink.x, sink.y, sink.width, sink.height);
+    ctx.setLineDash([]);
+
+    const cx = sink.x + sink.width * 0.5;
+    const cy = sink.y + sink.height * 0.5;
+    ctx.strokeStyle = '#c084fc';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = '#d8b4fe';
+    ctx.font = '10px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Absorber', cx, sink.y + sink.height + 14);
+
+    ctx.restore();
+  }
+
+  drawRegulator(reg, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const isActive = reg.isActive !== false;
+    const count = reg.currentCount !== undefined ? reg.currentCount : 0;
+    const target = reg.targetCount || 50;
+
+    // Permeable soft emerald/teal background
+    ctx.fillStyle = isActive ? 'rgba(16, 185, 129, 0.12)' : 'rgba(71, 85, 105, 0.1)';
+    ctx.fillRect(reg.x, reg.y, reg.width, reg.height);
+
+    // Permeable dashed border
+    let borderColor = isActive ? '#10b981' : '#64748b';
+    if (isSelected) borderColor = '#ffffff';
+    else if (reg.regulationState === 'emitting') borderColor = '#34d399';
+    else if (reg.regulationState === 'absorbing') borderColor = '#f43f5e';
+
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = isSelected ? 3 : 1.8;
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(reg.x, reg.y, reg.width, reg.height);
+    ctx.setLineDash([]);
+
+    const cx = reg.x + reg.width * 0.5;
+    const cy = reg.y + reg.height * 0.5;
+
+    // Header label with live particle counter
+    let stateTag = '';
+    if (isActive) {
+      if (reg.regulationState === 'emitting') stateTag = ' [Emitting]';
+      else if (reg.regulationState === 'absorbing') stateTag = ' [Absorbing]';
+    }
+    ctx.fillStyle = isActive ? (isSelected ? '#ffffff' : '#a7f3d0') : '#94a3b8';
+    ctx.font = 'bold 10.5px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    const statusText = isActive ? `Regulator [${count} / ${target} pts]${stateTag}` : `Regulator [OFF]`;
+    ctx.fillText(statusText, cx, reg.y + 16);
+
+    // Center regulation target symbol
+    ctx.strokeStyle = isActive ? 'rgba(16, 185, 129, 0.4)' : 'rgba(100, 116, 139, 0.2)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(cx, cy + 4, 8, 0, Math.PI * 2);
+    ctx.moveTo(cx - 5, cy + 4); ctx.lineTo(cx + 5, cy + 4);
+    ctx.moveTo(cx, cy - 1); ctx.lineTo(cx, cy + 9);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  drawTextLabel(label, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+    const b = label.getBounds ? label.getBounds() : { left: label.x, top: label.y, right: label.x + 80, bottom: label.y + 24, width: 80, height: 24 };
+
+    // Background fill when selected
+    if (isSelected) {
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.08)';
+      ctx.fillRect(b.left, b.top, b.width, b.height);
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(b.left, b.top, b.width, b.height);
+      ctx.setLineDash([]);
+    }
+
+    ctx.font = `600 ${label.fontSize}px Inter, sans-serif`;
+    ctx.fillStyle = isSelected ? '#38bdf8' : label.color;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label.text, label.x + 6, label.y + b.height * 0.5);
+
+    ctx.restore();
+  }
+
+  drawWall(wall, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    let strokeColor = '#ffffff';
+    if (wall.conductivity > 0) {
+      strokeColor = '#eab308';
+    } else if (wall.type === 'manual_valve') {
+      strokeColor = wall.isOpen ? '#22c55e' : '#f59e0b';
+    } else if (wall.type === 'check_valve') {
+      strokeColor = '#a855f7';
+    } else if (wall.type === 'relief_valve') {
+      strokeColor = wall.isOpen ? '#22c55e' : '#38bdf8';
+    }
+
+    if (isSelected) {
+      strokeColor = '#38bdf8';
+    }
+
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = isSelected ? wall.thickness + 2 : wall.thickness;
+    ctx.lineCap = 'round';
+
+    if (wall.isOpen) {
+      ctx.setLineDash([6, 6]);
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(wall.p1.x, wall.p1.y);
+    ctx.lineTo(wall.p2.x, wall.p2.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const midX = (wall.p1.x + wall.p2.x) * 0.5;
+    const midY = (wall.p1.y + wall.p2.y) * 0.5;
+
+    if (wall.type === 'check_valve') {
+      const nx = wall.normal.x * wall.allowedDirection;
+      const ny = wall.normal.y * wall.allowedDirection;
+
+      ctx.strokeStyle = '#a855f7';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(midX - nx * 8, midY - ny * 8);
+      ctx.lineTo(midX + nx * 10, midY + ny * 10);
+      ctx.lineTo(midX + nx * 5 - ny * 4, midY + ny * 5 + nx * 4);
+      ctx.moveTo(midX + nx * 10, midY + ny * 10);
+      ctx.lineTo(midX + nx * 5 + ny * 4, midY + ny * 5 - nx * 4);
+      ctx.stroke();
+    }
+
+    if (wall.type === 'manual_valve') {
+      ctx.fillStyle = wall.isOpen ? '#22c55e' : '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(midX, midY, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (wall.type === 'relief_valve') {
+      ctx.fillStyle = wall.isOpen ? '#22c55e' : '#0284c7';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(midX, midY, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      if (wall.reliefMode === 'oneway') {
+        const nx = wall.normal.x * (wall.allowedDirection || 1);
+        const ny = wall.normal.y * (wall.allowedDirection || 1);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(midX - nx * 7, midY - ny * 7);
+        ctx.lineTo(midX + nx * 9, midY + ny * 9);
+        ctx.lineTo(midX + nx * 4 - ny * 3, midY + ny * 4 + nx * 3);
+        ctx.moveTo(midX + nx * 9, midY + ny * 9);
+        ctx.lineTo(midX + nx * 4 + ny * 3, midY + ny * 4 - nx * 3);
+        ctx.stroke();
+      }
+
+      ctx.font = 'bold 9px JetBrains Mono, monospace';
+      ctx.fillStyle = wall.isOpen ? '#86efac' : '#7dd3fc';
+      ctx.textAlign = 'center';
+      ctx.fillText(`P:${Math.round(wall.smoothedPressure || 0)}/${wall.triggerPressure}`, midX, midY - 10);
+    }
+
+    ctx.restore();
+  }
+
+  drawThrottleValve(tv, isSelected = false) {
+    const ctx = this.ctx;
+    ctx.save();
+
+    const isActive = tv.isActive !== false;
+    let baseColor = isActive ? '#f59e0b' : '#64748b'; // Warm amber or muted gray
+    if (isSelected) baseColor = '#ffffff';
+
+    const th = tv.thickness || 6;
+    const nx = tv.normal.x;
+    const ny = tv.normal.y;
+    const ux = tv.unitDir.x;
+    const uy = tv.unitDir.y;
+
+    // Wing 1 (Solid segment with wedge tip at wing1End)
+    if (tv.wingLength > 0.5) {
+      ctx.strokeStyle = baseColor;
+      ctx.lineWidth = th;
+      ctx.lineCap = 'butt';
+      ctx.beginPath();
+      ctx.moveTo(tv.p1.x, tv.p1.y);
+      ctx.lineTo(tv.wing1End.x, tv.wing1End.y);
+      ctx.stroke();
+
+      // Wedge jaw tip tapering toward gap
+      ctx.fillStyle = baseColor;
+      ctx.beginPath();
+      ctx.moveTo(tv.wing1End.x + nx * (th * 0.9), tv.wing1End.y + ny * (th * 0.9));
+      ctx.lineTo(tv.wing1End.x - nx * (th * 0.9), tv.wing1End.y - ny * (th * 0.9));
+      ctx.lineTo(tv.wing1End.x + ux * Math.min(6, Math.max(2, tv.gapWidth * 0.25)), tv.wing1End.y + uy * Math.min(6, Math.max(2, tv.gapWidth * 0.25)));
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Wing 2 (Solid segment with wedge tip at wing2Start)
+    if (tv.wingLength > 0.5) {
+      ctx.strokeStyle = baseColor;
+      ctx.lineWidth = th;
+      ctx.lineCap = 'butt';
+      ctx.beginPath();
+      ctx.moveTo(tv.wing2Start.x, tv.wing2Start.y);
+      ctx.lineTo(tv.p2.x, tv.p2.y);
+      ctx.stroke();
+
+      // Wedge jaw tip tapering toward gap
+      ctx.fillStyle = baseColor;
+      ctx.beginPath();
+      ctx.moveTo(tv.wing2Start.x + nx * (th * 0.9), tv.wing2Start.y + ny * (th * 0.9));
+      ctx.lineTo(tv.wing2Start.x - nx * (th * 0.9), tv.wing2Start.y - ny * (th * 0.9));
+      ctx.lineTo(tv.wing2Start.x - ux * Math.min(6, Math.max(2, tv.gapWidth * 0.25)), tv.wing2Start.y - uy * Math.min(6, Math.max(2, tv.gapWidth * 0.25)));
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Central Orifice Gap visualization
+    if (tv.gapWidth > 1) {
+      ctx.strokeStyle = isActive ? 'rgba(245, 158, 11, 0.45)' : 'rgba(100, 116, 139, 0.3)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(tv.wing1End.x, tv.wing1End.y);
+      ctx.lineTo(tv.wing2Start.x, tv.wing2Start.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Midpoint Label with Opening Ratio & Pressure Drop
+    const midX = tv.midPoint.x;
+    const midY = tv.midPoint.y;
+    const offsetDist = Math.max(14, th + 8);
+    const labelX = midX + nx * offsetDist;
+    const labelY = midY + ny * offsetDist;
+
+    ctx.font = 'bold 10px JetBrains Mono, monospace';
+    ctx.fillStyle = isSelected ? '#ffffff' : (isActive ? '#fbbf24' : '#94a3b8');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const pct = Math.round(tv.openRatio * 100);
+    const dPText = (tv.deltaP && tv.deltaP > 1) ? ` ΔP:${Math.round(tv.deltaP)}Pa` : '';
+    ctx.fillText(`Throttle ${pct}%${dPText}`, labelX, labelY);
+
+    ctx.restore();
+  }
+
+  drawPiston(piston, isSelected = false) {
+    const ctx = this.ctx;
+    const bounds = piston.getBounds();
+    const w = bounds.right - bounds.left;
+    const h = bounds.bottom - bounds.top;
+
+    ctx.save();
+
+    // Guide Rails
+    ctx.strokeStyle = isSelected ? '#38bdf8' : 'rgba(234, 179, 8, 0.5)';
+    ctx.lineWidth = isSelected ? 2 : 1.5;
+    ctx.setLineDash([4, 4]);
+
+    if (piston.orientation === 'horizontal') {
+      ctx.beginPath();
+      ctx.moveTo(piston.minPos, piston.y);
+      ctx.lineTo(piston.maxPos, piston.y);
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(piston.minPos, piston.y - 12);
+      ctx.lineTo(piston.minPos, piston.y + 12);
+      ctx.moveTo(piston.maxPos, piston.y - 12);
+      ctx.lineTo(piston.maxPos, piston.y + 12);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(piston.x, piston.minPos);
+      ctx.lineTo(piston.x, piston.maxPos);
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(piston.x - 12, piston.minPos);
+      ctx.lineTo(piston.x + 12, piston.minPos);
+      ctx.moveTo(piston.x - 12, piston.maxPos);
+      ctx.lineTo(piston.x + 12, piston.maxPos);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Spring
+    if (piston.mode === 'spring') {
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const startPos = piston.maxPos;
+      const endPos = piston.orientation === 'horizontal' ? piston.x + w / 2 : piston.y + h / 2;
+      const numCoils = 6;
+      const step = (endPos - startPos) / (numCoils * 2 || 1);
+      
+      if (piston.orientation === 'vertical') {
+        ctx.moveTo(piston.x, startPos);
+        for (let i = 1; i <= numCoils * 2; i++) {
+          const cy = startPos + i * step;
+          const cx = piston.x + (i % 2 === 0 ? 6 : -6);
+          ctx.lineTo(cx, cy);
+        }
+        ctx.lineTo(piston.x, endPos);
+      } else {
+        ctx.moveTo(startPos, piston.y);
+        for (let i = 1; i <= numCoils * 2; i++) {
+          const cx = startPos + i * step;
+          const cy = piston.y + (i % 2 === 0 ? 6 : -6);
+          ctx.lineTo(cx, cy);
+        }
+        ctx.lineTo(endPos, piston.y);
+      }
+      ctx.stroke();
+    }
+
+    // Damper Symbol / Indicator
+    if (piston.mode === 'damper') {
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2;
+      const startPos = piston.minPos;
+      const endPos = piston.orientation === 'horizontal' ? piston.x - w / 2 : piston.y - h / 2;
+      ctx.beginPath();
+      if (piston.orientation === 'vertical') {
+        ctx.moveTo(piston.x, startPos);
+        ctx.lineTo(piston.x, endPos);
+      } else {
+        ctx.moveTo(startPos, piston.y);
+        ctx.lineTo(endPos, piston.y);
+      }
+      ctx.stroke();
+    }
+
+    // Piston Body
+    const isPActive = piston.isActive !== false;
+    let pColor = '#38bdf8';
+    if (!isPActive) pColor = '#64748b';
+    else if (piston.mode === 'motorized') pColor = '#a855f7';
+    else if (piston.mode === 'damper') pColor = '#f59e0b';
+    else if (piston.mode === 'spring') pColor = '#22c55e';
+
+    ctx.fillStyle = isSelected ? '#0284c7' : (isPActive ? pColor : 'rgba(71, 85, 105, 0.25)');
+    ctx.strokeStyle = isSelected ? '#ffffff' : (isPActive ? '#0f172a' : '#64748b');
+    ctx.lineWidth = 2;
+    if (!isPActive) ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.roundRect(bounds.left, bounds.top, w, h, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = isPActive ? '#0f172a' : '#94a3b8';
+    ctx.font = 'bold 11px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    const modeSymbol = piston.mode === 'motorized' ? 'C' : (piston.mode === 'damper' ? 'E' : (piston.mode === 'spring' ? 'A' : 'D'));
+    ctx.fillText(modeSymbol, piston.x, piston.y + 4);
+
+    ctx.restore();
+  }
+
+  drawParticle(p) {
+    const ctx = this.ctx;
+    const speed = p.getSpeed();
+    let fillStyle = '#38bdf8';
+
+    if (this.colorByVelocity) {
+      const norm = Math.min(1.0, speed / this.maxSpeedReference);
+      const colorObj = thermalColormap.getColor(norm);
+      fillStyle = colorObj.rgb;
+    }
+
+    // Particle circle
+    ctx.beginPath();
+    ctx.arc(p.pos.x, p.pos.y, p.radius, 0, Math.PI * 2);
+    ctx.fillStyle = fillStyle;
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Highlight selected particle
+    if (p.selected) {
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(p.pos.x, p.pos.y, p.radius + 3.5, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.3)';
+      ctx.beginPath();
+      ctx.arc(p.pos.x, p.pos.y, p.radius + 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Optional Velocity Vector Arrow
+    if (this.showVectors && speed > 2) {
+      const scale = 0.09;
+      const vx = p.vel.x * scale;
+      const vy = p.vel.y * scale;
+      const endX = p.pos.x + vx;
+      const endY = p.pos.y + vy;
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(p.pos.x, p.pos.y);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  drawParticleOverlay(p) {
+    const ctx = this.ctx;
+    const speed = p.getSpeed();
+
+    // Highlight selected particle
+    if (p.selected) {
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(p.pos.x, p.pos.y, p.radius + 3.5, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.3)';
+      ctx.beginPath();
+      ctx.arc(p.pos.x, p.pos.y, p.radius + 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Optional Velocity Vector Arrow
+    if (this.showVectors && speed > 2) {
+      const scale = 0.09;
+      const vx = p.vel.x * scale;
+      const vy = p.vel.y * scale;
+      const endX = p.pos.x + vx;
+      const endY = p.pos.y + vy;
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(p.pos.x, p.pos.y);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Draw Resize / Node Handles for Selected Items
+  drawResizeHandles(item) {
+    const handles = this.getResizeHandles(item);
+    if (!handles || handles.length === 0) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = '#38bdf8';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+
+    for (let i = 0; i < handles.length; i++) {
+      const h = handles[i];
+      ctx.beginPath();
+      if (h.type === 'square') {
+        ctx.fillRect(h.x - 4, h.y - 4, 8, 8);
+        ctx.strokeRect(h.x - 4, h.y - 4, 8, 8);
+      } else {
+        ctx.arc(h.x, h.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Get interactive handle positions for selected objects
+  getResizeHandles(item) {
+    if (!item) return [];
+
+    if (item instanceof Wall) {
+      return [
+        { id: 'p1', x: item.p1.x, y: item.p1.y, type: 'circle' },
+        { id: 'p2', x: item.p2.x, y: item.p2.y, type: 'circle' }
+      ];
+    } else if (item instanceof ThrottleValve) {
+      return [
+        { id: 'p1', x: item.p1.x, y: item.p1.y, type: 'circle' },
+        { id: 'p2', x: item.p2.x, y: item.p2.y, type: 'circle' },
+        { id: 'gap1', x: item.wing1End.x, y: item.wing1End.y, type: 'square' },
+        { id: 'gap2', x: item.wing2Start.x, y: item.wing2Start.y, type: 'square' }
+      ];
+    } else if (item instanceof Piston) {
+      const handles = item.getHandlePositions();
+      return [
+        { id: 'minPos', x: handles.minHandle.x, y: handles.minHandle.y, type: 'circle' },
+        { id: 'maxPos', x: handles.maxHandle.x, y: handles.maxHandle.y, type: 'circle' }
+      ];
+    } else if (item.getBounds && typeof item.getBounds === 'function') {
+      const b = item.getBounds();
+      return [
+        { id: 'tl', x: b.left, y: b.top, type: 'square' },
+        { id: 'tr', x: b.right, y: b.top, type: 'square' },
+        { id: 'br', x: b.right, y: b.bottom, type: 'square' },
+        { id: 'bl', x: b.left, y: b.bottom, type: 'square' }
+      ];
+    } else if (!(item instanceof ParticleGroup) && item.x !== undefined && item.y !== undefined && item.width !== undefined && item.height !== undefined) {
+      // Box items: Reservoir, SensorZone, Emitter, Sink, ThermalBlock
+      return [
+        { id: 'tl', x: item.x, y: item.y, type: 'square' },
+        { id: 'tr', x: item.x + item.width, y: item.y, type: 'square' },
+        { id: 'br', x: item.x + item.width, y: item.y + item.height, type: 'square' },
+        { id: 'bl', x: item.x, y: item.y + item.height, type: 'square' }
+      ];
+    }
+    return [];
+  }
+
+  drawParticleGroupHighlight(engine, group) {
+    const pts = group.getActiveParticles(engine);
+    if (!pts || pts.length === 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.8;
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      ctx.beginPath();
+      ctx.arc(p.pos.x, p.pos.y, (p.radius || 3.5) + 3.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Draw a bounding box with badge for elements grouped together
+  drawGroupBoundingBox(items, gid) {
+    if (!items || items.length < 2) return;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item instanceof Wall) {
+        minX = Math.min(minX, item.p1.x, item.p2.x);
+        minY = Math.min(minY, item.p1.y, item.p2.y);
+        maxX = Math.max(maxX, item.p1.x, item.p2.x);
+        maxY = Math.max(maxY, item.p1.y, item.p2.y);
+      } else if (item instanceof Piston) {
+        const b = item.getBounds();
+        minX = Math.min(minX, b.left);
+        minY = Math.min(minY, b.top);
+        maxX = Math.max(maxX, b.right);
+        maxY = Math.max(maxY, b.bottom);
+      } else if (item.x !== undefined && item.y !== undefined && item.width !== undefined && item.height !== undefined) {
+        minX = Math.min(minX, item.x);
+        minY = Math.min(minY, item.y);
+        maxX = Math.max(maxX, item.x + item.width);
+        maxY = Math.max(maxY, item.y + item.height);
+      } else if (item.x !== undefined && item.y !== undefined) {
+        minX = Math.min(minX, item.x - 20);
+        minY = Math.min(minY, item.y - 10);
+        maxX = Math.max(maxX, item.x + 80);
+        maxY = Math.max(maxY, item.y + 20);
+      }
+    }
+
+    if (minX === Infinity) return;
+
+    const pad = 10;
+    const gx = minX - pad;
+    const gy = minY - pad;
+    const gw = (maxX - minX) + 2 * pad;
+    const gh = (maxY - minY) + 2 * pad;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Group bounding fill & outline
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.04)';
+    ctx.fillRect(gx, gy, gw, gh);
+
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(gx, gy, gw, gh);
+    ctx.setLineDash([]);
+
+    // Corner brackets
+    const cLen = 8;
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.beginPath();
+    // Top-Left
+    ctx.moveTo(gx, gy + cLen); ctx.lineTo(gx, gy); ctx.lineTo(gx + cLen, gy);
+    // Top-Right
+    ctx.moveTo(gx + gw - cLen, gy); ctx.lineTo(gx + gw, gy); ctx.lineTo(gx + gw, gy + cLen);
+    // Bottom-Right
+    ctx.moveTo(gx + gw, gy + gh - cLen); ctx.lineTo(gx + gw, gy + gh); ctx.lineTo(gx + gw - cLen, gy + gh);
+    // Bottom-Left
+    ctx.moveTo(gx + cLen, gy + gh); ctx.lineTo(gx, gy + gh); ctx.lineTo(gx, gy + gh - cLen);
+    ctx.stroke();
+
+    // Group Badge
+    const badgeText = `⧉ Group (${items.length})`;
+    ctx.font = 'bold 10px Inter, sans-serif';
+    const textWidth = ctx.measureText(badgeText).width;
+    const badgeW = textWidth + 12;
+    const badgeH = 18;
+    const badgeX = gx;
+    const badgeY = gy - badgeH - 4;
+
+    ctx.fillStyle = '#0284c7';
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 4);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(badgeText, badgeX + 6, badgeY + badgeH * 0.5);
+
+    ctx.restore();
+  }
+}
+
+
+// --- src/analytics/TempTimeChart.js ---
+class TempTimeChart {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.mode = 'temp'; // 'temp' or 'pv'
+  }
+
+  setMode(mode) {
+    this.mode = mode;
+  }
+
+  render(engine) {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#12141a';
+    ctx.fillRect(0, 0, w, h);
+
+    if (this.mode === 'pv') {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '11px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('P-V Diagram Active', w / 2, h / 2);
+      return;
+    }
+
+    const padL = 36;
+    const padR = 12;
+    const padT = 12;
+    const padB = 20;
+    const chartW = w - padL - padR;
+    const chartH = h - padT - padB;
+
+    // Grid lines
+    ctx.strokeStyle = '#242935';
+    ctx.lineWidth = 1;
+    for (let y = padB; y <= h - padT; y += 22) {
+      ctx.beginPath();
+      ctx.moveTo(padL, h - y);
+      ctx.lineTo(w - padR, h - y);
+      ctx.stroke();
+    }
+
+    // Determine data source: Sensors if present, otherwise Global System Telemetry
+    const sensors = engine.sensors;
+    const hasSensorData = sensors.length > 0 && sensors.some(s => s.historyTemp && s.historyTemp.length >= 2);
+    const hasGlobalData = engine.historyTemp && engine.historyTemp.length >= 2;
+
+    if (!hasSensorData && !hasGlobalData) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Waiting for telemetry...', w / 2, h / 2);
+      return;
+    }
+
+    // Dynamic scale computation
+    let minVal = Infinity;
+    let maxVal = -Infinity;
+    let minTime = Infinity;
+    let maxTime = -Infinity;
+
+    if (hasSensorData) {
+      sensors.forEach(s => {
+        if (!s.historyTemp || s.historyTemp.length === 0) return;
+        s.historyTemp.forEach(v => {
+          if (v < minVal) minVal = v;
+          if (v > maxVal) maxVal = v;
+        });
+        if (s.historyTime && s.historyTime.length > 0) {
+          if (s.historyTime[0] < minTime) minTime = s.historyTime[0];
+          if (s.historyTime[s.historyTime.length - 1] > maxTime) maxTime = s.historyTime[s.historyTime.length - 1];
+        }
+      });
+    } else if (hasGlobalData) {
+      engine.historyTemp.forEach(v => {
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+      });
+      minTime = engine.historyTime[0];
+      maxTime = engine.historyTime[engine.historyTime.length - 1];
+    }
+
+    if (minVal === maxVal || minVal === Infinity) {
+      minVal = 250;
+      maxVal = 350;
+    } else {
+      minVal = Math.max(0, Math.floor(minVal - 10));
+      maxVal = Math.ceil(maxVal + 10);
+    }
+    const rangeVal = maxVal - minVal || 1;
+    const duration = Math.max(1.0, maxTime - minTime);
+
+    const chamberColors = ['#38bdf8', '#ef4444', '#22c55e', '#f59e0b', '#a855f7'];
+
+    // Draw sensor traces
+    if (hasSensorData) {
+      sensors.forEach((sensor, sIdx) => {
+        const histT = sensor.historyTemp;
+        const histTime = sensor.historyTime;
+        if (!histT || histT.length < 2) return;
+
+        ctx.strokeStyle = sensor.color || chamberColors[sIdx % chamberColors.length];
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+
+        for (let i = 0; i < histT.length; i++) {
+          const tFrac = Math.max(0, Math.min(1, (histTime[i] - minTime) / duration));
+          const valFrac = Math.max(0, Math.min(1, (histT[i] - minVal) / rangeVal));
+          const x = padL + tFrac * chartW;
+          const y = h - padB - valFrac * chartH;
+
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      });
+    } else if (hasGlobalData) {
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      for (let i = 0; i < engine.historyTemp.length; i++) {
+        const tFrac = Math.max(0, Math.min(1, (engine.historyTime[i] - minTime) / duration));
+        const valFrac = Math.max(0, Math.min(1, (engine.historyTemp[i] - minVal) / rangeVal));
+        const x = padL + tFrac * chartW;
+        const y = h - padB - valFrac * chartH;
+
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // Axes
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
+    ctx.stroke();
+
+    // Scale labels
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '8.5px JetBrains Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.round(maxVal)}K`, padL - 4, padT + 8);
+    ctx.fillText(`${Math.round((minVal + maxVal) * 0.5)}K`, padL - 4, padT + chartH * 0.5 + 3);
+    ctx.fillText(`${Math.round(minVal)}K`, padL - 4, h - padB);
+    ctx.textAlign = 'right';
+    ctx.fillText(`${maxTime.toFixed(1)}s`, w - padR, h - padB + 12);
+  }
+}
+
+
+// --- src/analytics/VelHistChart.js ---
+class VelHistChart {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.binRanges = [
+      { label: '0-100', min: 0, max: 100 },
+      { label: '100-200', min: 100, max: 200 },
+      { label: '200-300', min: 200, max: 300 },
+      { label: '300-400', min: 300, max: 400 },
+      { label: '400-500', min: 400, max: 500 },
+      { label: '500-600', min: 500, max: 9999 }
+    ];
+  }
+
+  render(engine) {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#181a1f';
+    ctx.fillRect(0, 0, w, h);
+
+    const padLeft = 24;
+    const padRight = 10;
+    const padTop = 10;
+    const padBottom = 20;
+    const chartW = w - padLeft - padRight;
+    const chartH = h - padTop - padBottom;
+
+    const particles = engine.particles;
+    const N = particles.length;
+
+    // Grid lines
+    ctx.strokeStyle = '#22262e';
+    ctx.lineWidth = 1;
+    for (let y = padBottom; y <= h - padTop; y += 22) {
+      ctx.beginPath();
+      ctx.moveTo(padLeft, h - y);
+      ctx.lineTo(w - padRight, h - y);
+      ctx.stroke();
+    }
+
+    if (N === 0) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Keine Teilchen', w / 2, h / 2);
+      return;
+    }
+
+    const counts = new Array(this.binRanges.length).fill(0);
+    for (let i = 0; i < N; i++) {
+      const spd = particles[i].getSpeed();
+      for (let b = 0; b < this.binRanges.length; b++) {
+        if (spd >= this.binRanges[b].min && spd < this.binRanges[b].max) {
+          counts[b]++;
+          break;
+        }
+      }
+    }
+
+    const maxCount = Math.max(1, ...counts);
+    const barW = chartW / this.binRanges.length;
+
+    // Draw green bars matching screenshot
+    for (let b = 0; b < this.binRanges.length; b++) {
+      const c = counts[b];
+      const barH = (c / maxCount) * chartH;
+      const bx = padLeft + b * barW;
+      const by = h - padBottom - barH;
+
+      ctx.fillStyle = '#22c55e'; // Crisp vibrant green
+      ctx.fillRect(bx + 2, by, barW - 4, barH);
+    }
+
+    // Axes
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(padLeft, padTop);
+    ctx.lineTo(padLeft, h - padBottom);
+    ctx.lineTo(w - padRight, h - padBottom);
+    ctx.stroke();
+
+    // Axis labels
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '8px JetBrains Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${maxCount}`, padLeft - 3, padTop + 8);
+    ctx.fillText('0', padLeft - 3, h - padBottom);
+
+    ctx.textAlign = 'center';
+    for (let b = 0; b < this.binRanges.length; b++) {
+      const bx = padLeft + b * barW + barW * 0.5;
+      ctx.fillText(this.binRanges[b].label, bx, h - 6);
+    }
+  }
+}
+
+
+// --- src/analytics/ChamberChart.js ---
+class ChamberChart {
+  static render(canvas, sensor, metric = 'temp') {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#101216';
+    ctx.fillRect(0, 0, w, h);
+
+    const data = metric === 'temp' ? sensor.historyTemp : sensor.historyPressure;
+    const time = sensor.historyTime;
+
+    if (!data || data.length < 2) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Collecting data...', w / 2, h / 2 + 3);
+      return;
+    }
+
+    const padL = 34, padR = 10, padT = 8, padB = 16;
+    const chartW = w - padL - padR, chartH = h - padT - padB;
+
+    let minVal = Math.min(...data);
+    let maxVal = Math.max(...data);
+    if (minVal === maxVal) {
+      minVal -= 5;
+      maxVal += 5;
+    }
+    const range = maxVal - minVal || 1;
+    const minTime = time[0] || 0;
+    const maxTime = Math.max(minTime + 1.0, time[time.length - 1] || 1);
+    const duration = maxTime - minTime || 1;
+
+    // Grid lines
+    ctx.strokeStyle = '#242935';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
+    ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB);
+    ctx.stroke();
+
+    // Data Line
+    const strokeColor = metric === 'temp' ? (sensor.color || '#38bdf8') : '#f59e0b';
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+
+    for (let i = 0; i < data.length; i++) {
+      const timeFrac = Math.max(0, Math.min(1, ((time[i] || minTime) - minTime) / duration));
+      const valFrac = Math.max(0, Math.min(1, (data[i] - minVal) / range));
+      const x = padL + timeFrac * chartW;
+      const y = h - padB - valFrac * chartH;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Labels
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '8px JetBrains Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.round(maxVal)}`, padL - 3, padT + 8);
+    ctx.fillText(`${Math.round(minVal)}`, padL - 3, h - padB);
+  }
+}
+
+class DashboardChart {
+  constructor(id, target, metric, canvas = null) {
+    this.id = id;
+    this.target = target; // 'global' or sensor instance
+    this.metric = metric; // 'temp', 'pressure', 'volume', 'count', 'kinetic', 'drift', 'pv'
+    this.canvas = canvas;
+    this.ctx = canvas ? canvas.getContext('2d') : null;
+  }
+
+  getTitle() {
+    const targetName = this.target === 'global' ? 'Global System' : (this.target.label || 'Chamber');
+    const metricLabels = {
+      temp: 'Temperature T(t) [K]',
+      pressure: 'Pressure P(t) [Pa]',
+      volume: 'Volume V(t) [px²]',
+      count: 'Particles N(t)',
+      kinetic: 'Kinetic Energy E_kin(t) [J]',
+      drift: 'Drift Velocity |v_drift|(t) [px/s]',
+      pv: 'P-V Indicator Diagram'
+    };
+    return `${metricLabels[this.metric] || this.metric} · ${targetName}`;
+  }
+
+  render(engine) {
+    if (!this.canvas) return;
+    if (!this.ctx) this.ctx = this.canvas.getContext('2d');
+    const ctx = this.ctx;
+    if (!ctx) return;
+
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#101216';
+    ctx.fillRect(0, 0, w, h);
+
+    const padL = 36;
+    const padR = 10;
+    const padT = 8;
+    const padB = 16;
+    const chartW = w - padL - padR;
+    const chartH = h - padT - padB;
+
+    let timeArr = [];
+    let dataArr = [];
+    let strokeColor = '#38bdf8';
+
+    if (this.target === 'global') {
+      timeArr = engine.historyTime || [];
+      if (this.metric === 'temp') { dataArr = engine.historyTemp || []; strokeColor = '#38bdf8'; }
+      else if (this.metric === 'pressure') { dataArr = engine.historyPressure || []; strokeColor = '#f59e0b'; }
+      else if (this.metric === 'volume') { dataArr = engine.historyVolume || []; strokeColor = '#22c55e'; }
+      else if (this.metric === 'count') { dataArr = engine.historyCount || []; strokeColor = '#a855f7'; }
+      else if (this.metric === 'kinetic') { dataArr = engine.historyKineticEnergy || []; strokeColor = '#ec4899'; }
+      else if (this.metric === 'drift') { dataArr = [0]; strokeColor = '#22c55e'; }
+    } else {
+      const s = this.target;
+      timeArr = s.historyTime || [];
+      if (this.metric === 'temp') { dataArr = s.historyTemp || []; strokeColor = s.color || '#38bdf8'; }
+      else if (this.metric === 'pressure') { dataArr = s.historyPressure || []; strokeColor = '#f59e0b'; }
+      else if (this.metric === 'volume') { dataArr = s.historyVolume || []; strokeColor = '#22c55e'; }
+      else if (this.metric === 'count') { dataArr = s.historyCount || []; strokeColor = '#a855f7'; }
+      else if (this.metric === 'kinetic') { dataArr = s.historyKineticEnergy || []; strokeColor = '#ec4899'; }
+      else if (this.metric === 'drift') { dataArr = s.historyDrift || []; strokeColor = '#22c55e'; }
+      else if (this.metric === 'pv') {
+        const pArr = s.historyPressure || [];
+        const vArr = s.historyVolume || [];
+        if (pArr.length < 2) {
+          ctx.fillStyle = '#64748b';
+          ctx.font = '10px Inter, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('Collecting P-V loop...', w / 2, h / 2);
+          return;
+        }
+        let minP = Math.min(...pArr), maxP = Math.max(...pArr);
+        let minV = Math.min(...vArr), maxV = Math.max(...vArr);
+        if (minP === maxP) { minP -= 10; maxP += 10; }
+        if (minV === maxV) { minV -= 50; maxV += 50; }
+
+        ctx.strokeStyle = '#242935';
+        ctx.beginPath();
+        ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        for (let i = 0; i < pArr.length; i++) {
+          const x = padL + ((vArr[i] - minV) / (maxV - minV || 1)) * chartW;
+          const y = h - padB - ((pArr[i] - minP) / (maxP - minP || 1)) * chartH;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        return;
+      }
+    }
+
+    if (!dataArr || dataArr.length < 2) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Collecting data...', w / 2, h / 2);
+      return;
+    }
+
+    let minVal = Math.min(...dataArr);
+    let maxVal = Math.max(...dataArr);
+    if (minVal === maxVal) {
+      minVal -= 5;
+      maxVal += 5;
+    }
+    const range = maxVal - minVal || 1;
+    const minTime = timeArr[0] || 0;
+    const maxTime = Math.max(minTime + 1.0, timeArr[timeArr.length - 1] || 1);
+    const duration = maxTime - minTime || 1;
+
+    // Grid lines
+    ctx.strokeStyle = '#242935';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
+    ctx.stroke();
+
+    // Line curve
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+
+    for (let i = 0; i < dataArr.length; i++) {
+      const timeFrac = Math.max(0, Math.min(1, ((timeArr[i] || minTime) - minTime) / duration));
+      const valFrac = Math.max(0, Math.min(1, (dataArr[i] - minVal) / range));
+      const x = padL + timeFrac * chartW;
+      const y = h - padB - valFrac * chartH;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Scale labels
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '8px JetBrains Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.round(maxVal)}`, padL - 3, padT + 7);
+    ctx.fillText(`${Math.round(minVal)}`, padL - 3, h - padB);
+    ctx.fillText(`${maxTime.toFixed(1)}s`, w - padR, h - padB + 11);
+  }
+}
+
+
+// --- src/main.js ---
+
+// Canvas DOM Elements
+const canvas = document.getElementById('simCanvas');
+const glCanvas = document.getElementById('glCanvas');
+const tempChartCanvas = document.getElementById('tempChartCanvas');
+const velChartCanvas = document.getElementById('velChartCanvas');
+
+// Header & Navigation Elements
+const btnToggleGrid = document.getElementById('btnToggleGrid');
+const selectGridSize = document.getElementById('selectGridSize');
+const btnToggleSnap = document.getElementById('btnToggleSnap');
+const btnToggleVectors = document.getElementById('btnToggleVectors');
+const btnToggleColor = document.getElementById('btnToggleColor');
+const btnUndo = document.getElementById('btnUndo');
+const btnRedo = document.getElementById('btnRedo');
+const headerProjectTitle = document.getElementById('headerProjectTitle');
+const fileImportInput = document.getElementById('fileImportInput');
+const btnToolbarReset = document.getElementById('btnToolbarReset');
+const btnToolbarClear = document.getElementById('btnToolbarClear');
+
+// Transform Ribbon Elements
+const btnRotate90 = document.getElementById('btnRotate90');
+const btnFlipH = document.getElementById('btnFlipH');
+const btnFlipV = document.getElementById('btnFlipV');
+const btnGroupSelected = document.getElementById('btnGroupSelected');
+
+// Save Modal Elements
+const saveModal = document.getElementById('saveModal');
+const saveProjectNameInput = document.getElementById('saveProjectNameInput');
+const saveFilenamePreview = document.getElementById('saveFilenamePreview');
+const btnSaveClose = document.getElementById('btnSaveClose');
+const btnSaveCancel = document.getElementById('btnSaveCancel');
+const btnSaveDownload = document.getElementById('btnSaveDownload');
+
+// Custom Chart Dashboard Modal & Elements
+const btnAddCustomChart = document.getElementById('btnAddCustomChart');
+const chartModal = document.getElementById('chartModal');
+const btnChartModalClose = document.getElementById('btnChartModalClose');
+const btnChartCancel = document.getElementById('btnChartCancel');
+const btnChartConfirm = document.getElementById('btnChartConfirm');
+const selectChartTarget = document.getElementById('selectChartTarget');
+const selectChartMetric = document.getElementById('selectChartMetric');
+const customChartsContainer = document.getElementById('customChartsContainer');
+const customCharts = [];
+
+// Left Sidebar & Floating Tool Options Dialog (Onshape CAD Style)
+const sidebarLeft = document.getElementById('sidebarLeft');
+const toolDialogPanel = document.getElementById('toolDialogPanel');
+const toolDialogHeader = document.getElementById('toolDialogHeader');
+const toolDialogTitle = document.getElementById('toolDialogTitle');
+const toolDialogBadge = document.getElementById('toolDialogBadge');
+const btnToolDialogClose = document.getElementById('btnToolDialogClose');
+const toolDialogTitleGroup = document.getElementById('toolDialogTitleGroup');
+const helpArrowIcon = document.getElementById('helpArrowIcon');
+const toolDialogHelpPanel = document.getElementById('toolDialogHelpPanel');
+const toolPropertiesContainer = document.getElementById('toolPropertiesContainer');
+const elementsListContainer = document.getElementById('elementsListContainer');
+const elementCountBadge = document.getElementById('elementCountBadge');
+
+// Context Popup & Menu
+const elementPopup = document.getElementById('elementPopup');
+const popupTitle = document.getElementById('popupTitle');
+const popupBody = document.getElementById('popupBody');
+const btnPopupClose = document.getElementById('btnPopupClose');
+
+const contextMenu = document.getElementById('contextMenu');
+const ctxDuplicate = document.getElementById('ctxDuplicate');
+const ctxGroup = document.getElementById('ctxGroup');
+const ctxBringFront = document.getElementById('ctxBringFront');
+const ctxBringForward = document.getElementById('ctxBringForward');
+const ctxSendBackward = document.getElementById('ctxSendBackward');
+const ctxSendBack = document.getElementById('ctxSendBack');
+const ctxDelete = document.getElementById('ctxDelete');
+
+// Playback Bar & Model Toggle Controls
+const modelToggleGroup = document.getElementById('modelToggleGroup');
+const modelToggleBtns = modelToggleGroup ? modelToggleGroup.querySelectorAll('.model-toggle-btn') : [];
+const btnPlayPause = document.getElementById('btnPlayPause');
+const playIcon = document.getElementById('playIcon');
+const btnStep = document.getElementById('btnStep');
+const btnStepBack = document.getElementById('btnStepBack');
+const btnStopReset = document.getElementById('btnStopReset');
+const speedSlider = document.getElementById('speedSlider');
+const speedVal = document.getElementById('speedVal');
+const timeVal = document.getElementById('timeVal');
+
+// Zoom Controls
+const btnZoomIn = document.getElementById('btnZoomIn');
+const btnZoomOut = document.getElementById('btnZoomOut');
+const btnResetView = document.getElementById('btnResetView');
+const zoomDisplay = document.getElementById('zoomDisplay');
+
+// Stats & Chamber Analytics
+const statN = document.getElementById('statN');
+const statT = document.getElementById('statT');
+const statE = document.getElementById('statE');
+const statV = document.getElementById('statV');
+const chamberCardsContainer = document.getElementById('chamberCardsContainer');
+const tabTemp = document.getElementById('tabTemp');
+const tabPV = document.getElementById('tabPV');
+
+const infoModal = document.getElementById('infoModal');
+const btnInfoClose = document.getElementById('btnInfoClose');
+
+// Canvas Resizing
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  if (glCanvas) {
+    glCanvas.width = window.innerWidth;
+    glCanvas.height = window.innerHeight;
+    if (window.renderer && window.renderer.glRenderer) {
+      window.renderer.glRenderer.resize(window.innerWidth, window.innerHeight);
+    }
+  }
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// Master Physics Engine, Renderer & Analytics
+const engine = new Engine(2500, 2500);
+const renderer = new Renderer(canvas, glCanvas);
+window.engine = engine;
+window.renderer = renderer;
+const tempChart = new TempTimeChart(tempChartCanvas);
+const velChart = new VelHistChart(velChartCanvas);
+
+renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
+
+// App Workflow State
+let currentProjectName = 'Default Profile';
+let isSimulating = false;
+let activeTool = 'select';
+let selectedItems = [];
+let popupTargetItem = null;
+
+// Undo & Redo Stacks for Edit Mode
+const undoStack = [];
+const redoStack = [];
+const MAX_UNDO = 40;
+
+function recordUndoState() {
+  if (isSimulating) return;
+  const snapshot = engine.exportState(currentProjectName);
+  undoStack.push(JSON.stringify(snapshot));
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+  updateElementsList();
+}
+
+function performUndo() {
+  if (isSimulating || undoStack.length === 0) return;
+  const current = engine.exportState(currentProjectName);
+  redoStack.push(JSON.stringify(current));
+  const prevJSON = undoStack.pop();
+  engine.importState(JSON.parse(prevJSON));
+  selectedItems = [];
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+  renderToolProperties(activeTool);
+}
+
+function performRedo() {
+  if (isSimulating || redoStack.length === 0) return;
+  const current = engine.exportState(currentProjectName);
+  undoStack.push(JSON.stringify(current));
+  const nextJSON = redoStack.pop();
+  engine.importState(JSON.parse(nextJSON));
+  selectedItems = [];
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+  renderToolProperties(activeTool);
+}
+
+btnUndo.addEventListener('click', performUndo);
+btnRedo.addEventListener('click', performRedo);
+
+// Playback History buffer for Step Back (⏮)
+const historyBuffer = [];
+const MAX_HISTORY = 120;
+
+function pushHistoryFrame() {
+  if (historyBuffer.length >= MAX_HISTORY) historyBuffer.shift();
+  historyBuffer.push({
+    time: engine.totalTime,
+    particles: engine.particles.map(p => ({ x: p.pos.x, y: p.pos.y, vx: p.vel.x, vy: p.vel.y })),
+    pistons: engine.pistons.map(p => ({ x: p.x, y: p.y, v: p.velocity, temp: p.temperature })),
+    walls: engine.walls.map(w => ({ temp: w.temperature, isOpen: w.isOpen })),
+    thermalBlocks: engine.thermalBlocks.map(b => ({ temp: b.temperature }))
+  });
+}
+
+function popHistoryFrame() {
+  if (historyBuffer.length === 0) {
+    engine.restoreInitialSnapshot();
+    return;
+  }
+  const frame = historyBuffer.pop();
+  engine.totalTime = frame.time;
+  for (let i = 0; i < Math.min(engine.particles.length, frame.particles.length); i++) {
+    engine.particles[i].pos.set(frame.particles[i].x, frame.particles[i].y);
+    engine.particles[i].vel.set(frame.particles[i].vx, frame.particles[i].vy);
+  }
+  for (let i = 0; i < Math.min(engine.pistons.length, frame.pistons.length); i++) {
+    engine.pistons[i].x = frame.pistons[i].x;
+    engine.pistons[i].y = frame.pistons[i].y;
+    engine.pistons[i].velocity = frame.pistons[i].v;
+    engine.pistons[i].temperature = frame.pistons[i].temp;
+  }
+  for (let i = 0; i < Math.min(engine.walls.length, frame.walls.length); i++) {
+    engine.walls[i].temperature = frame.walls[i].temp;
+    engine.walls[i].isOpen = frame.walls[i].isOpen;
+  }
+  for (let i = 0; i < Math.min(engine.thermalBlocks.length, frame.thermalBlocks.length); i++) {
+    engine.thermalBlocks[i].temperature = frame.thermalBlocks[i].temp;
+  }
+}
+
+// Mouse & Drag State
+let isMouseDown = false;
+let isPanning = false;
+let panStartScreen = { x: 0, y: 0 };
+let panStartCamera = { x: 0, y: 0 };
+let dragStartWorld = null;
+let currentCursorWorld = null;
+let polygonPoints = [];
+let polygonGroupId = null;
+let polygonWalls = [];
+
+function resetPolygonDraft() {
+  polygonPoints = [];
+  polygonGroupId = null;
+  polygonWalls = [];
+}
+let arcSteps = [];
+let draggingHandle = null;
+let isMovingSelection = false;
+let moveStartWorld = null;
+
+// Open chamber cards in right sidebar
+const openChamberCardIds = new Set();
+
+// Grid Snapping
+function snapToGrid(v) {
+  if (!renderer.snapToGrid) return v;
+  return Math.round(v / renderer.gridSize) * renderer.gridSize;
+}
+
+// Synchronized Dual Slider + Number Input Helpers
+function makeDualInput(label, id, min, max, step, value, unit = '') {
+  return `
+    <div class="field-row">
+      <div class="field-label"><span>${label}</span></div>
+      <div class="dual-input-row">
+        <input type="range" id="${id}_slider" min="${min}" max="${max}" step="${step}" value="${value}" class="styled-slider">
+        <input type="number" id="${id}_num" min="${min}" max="${max}" step="${step}" value="${value}" class="dual-num-input">
+        ${unit ? `<span style="font-size:10px; color:var(--text-dim);">${unit}</span>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function attachDualInput(id, onChange) {
+  const slider = document.getElementById(`${id}_slider`);
+  const num = document.getElementById(`${id}_num`);
+  if (!slider || !num) return;
+
+  slider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    num.value = val;
+    onChange(val);
+  });
+
+  num.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    if (!isNaN(val)) {
+      slider.value = val;
+      onChange(val);
+    }
+  });
+}
+
+// Tool Configurations
+const toolConfigs = {
+  wall: { shape: 'polygon', conductivity: 0.0, thickness: 4 },
+  piston: { mass: 30, mode: 'free', springK: 50, frequency: 0.8, amplitude: 50, phase: 0, dampingCoeff: 25.0, conductivity: 0.2 },
+  solid_res: { temperature: 500, conductance: 0.8 },
+  heat_exchanger: { temperature: 300, conductivity: 0.6 },
+  regenerator: { temperature: 300, heatCapacity: 400, conductivity: 0.7, orientation: 'horizontal', sliceCount: 10 },
+  storage_block: { temperature: 300, heatCapacity: 300, conductivity: 0.6 },
+  valve: { type: 'manual_valve', conductivity: 0.0, allowedDirection: 1, triggerPressure: 250, reliefMode: 'oneway' },
+  throttle_valve: { openRatio: 0.3, thickness: 6 },
+  gas: { count: 30, temperature: 300, mass: 1.0, velocityMode: 'uniform_speed' },
+  regulator: { targetCount: 50, hysteresis: 3, temperature: 300, mass: 1.0, rate: 15 },
+  emitter: { rate: 8, temperature: 350, mass: 1.0, direction: 'right', speed: 120, maxParticles: 0 },
+  sink: { absorptionEfficiency: 1.0 },
+  sensor: { label: 'Chamber' },
+  text: { text: 'Note', fontSize: 14, color: '#94a3b8' }
+};
+
+// ============================================================================
+// IPE Toolbar Ribbon & Dedicated Mode Tool Binding
+// ============================================================================
+const ribbonToolBtns = document.querySelectorAll('.ribbon-tool-btn');
+
+function selectToolButton(btn) {
+  ribbonToolBtns.forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const tool = btn.dataset.tool;
+  activeTool = tool;
+
+  if (tool === 'wall' && btn.dataset.wshape) {
+    toolConfigs.wall.shape = btn.dataset.wshape;
+  } else if (tool === 'piston' && btn.dataset.pmode) {
+    toolConfigs.piston.mode = btn.dataset.pmode;
+  } else if (tool === 'valve' && btn.dataset.vtype) {
+    toolConfigs.valve.type = btn.dataset.vtype;
+  }
+
+  resetPolygonDraft();
+  arcSteps = [];
+  renderer.draftInfo = null;
+  closePopup();
+  closeContextMenu();
+  renderToolProperties(tool);
+}
+
+ribbonToolBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (isSimulating) return;
+    selectToolButton(btn);
+  });
+});
+
+// ============================================================================
+// Tool Explanations & Dedicated Active Tool Properties Inspector (CAD Style)
+// ============================================================================
+const toolHelpDescriptions = {
+  wall: 'Defines rigid, thermally insulating or conductive walls to contain particles and direct flow.',
+  piston: 'Movable piston with mass, damping, or motor drive for expansion, compression, and work extraction.',
+  valve: 'Flow control valve (Manual, One-Way Check, or Pressure Relief) to regulate fluid flow between chambers.',
+  throttle_valve: 'Continuous adjustable constriction (orifice) inducing localized pressure drops and expansion.',
+  gas: 'Places a thermalized particle lattice with defined initial temperature, particle mass, and count.',
+  regulator: 'Maintains target particle count in the zone automatically by injecting or extracting particles.',
+  emitter: 'Continuous particle source generating directed flow at defined rate, temperature, and speed.',
+  sink: 'Absorbs colliding particles to simulate a vacuum, exhaust port, or open atmosphere.',
+  sensor: 'Measurement zone monitoring pressure, temperature, particle count, and net drift velocity.',
+  solid_res: 'Constant-temperature thermal reservoir with infinite heat capacity acting as heat source or sink.',
+  heat_exchanger: 'Permeable thermal body that exchanges heat directly with particles flowing through it.',
+  regenerator: 'Thermal matrix developing a temperature gradient to reversibly store and release thermal energy.',
+  storage_block: 'Solid thermal block with finite heat capacity exchanging heat via boundary conduction.',
+  text: 'Creates text annotations to document experimental setups and label chambers on the canvas.'
+};
+
+function syncActiveToolWithSelection(tool, updateFn) {
+  if (!selectedItems || selectedItems.length === 0) return;
+  let hasModified = false;
+
+  for (const item of selectedItems) {
+    let matches = false;
+    if (tool === 'wall') {
+      matches = (item instanceof Wall) && (item.type === 'standard' || item.type === 'normal' || !item.type);
+    } else if (tool === 'valve') {
+      matches = (item instanceof Wall) && (item.type === 'manual_valve' || item.type === 'check_valve' || item.type === 'relief_valve');
+    } else if (tool === 'throttle_valve') {
+      matches = (item instanceof ThrottleValve);
+    } else if (tool === 'piston') {
+      matches = (item instanceof Piston);
+    } else if (tool === 'solid_res') {
+      matches = (item instanceof Reservoir);
+    } else if (tool === 'heat_exchanger') {
+      matches = (item instanceof HeatExchanger);
+    } else if (tool === 'regenerator') {
+      matches = (item instanceof RegeneratorMatrix);
+    } else if (tool === 'storage_block') {
+      matches = (item instanceof ThermalBlock);
+    } else if (tool === 'emitter') {
+      matches = (item instanceof Emitter);
+    } else if (tool === 'sink') {
+      matches = (item instanceof Sink);
+    } else if (tool === 'sensor') {
+      matches = (item instanceof SensorZone);
+    } else if (tool === 'text') {
+      matches = (item instanceof TextLabel);
+    } else if (tool === 'regulator') {
+      matches = (item instanceof Regulator);
+    } else if (tool === 'gas') {
+      matches = (item instanceof ParticleGroup);
+    }
+
+    if (matches) {
+      updateFn(item);
+      hasModified = true;
+    }
+  }
+
+  if (hasModified) {
+    updateElementsList();
+  }
+}
+
+function renderToolProperties(tool) {
+  if (!toolPropertiesContainer) return;
+
+  const toolNames = {
+    select: 'Select',
+    text: 'Text',
+    wall: toolConfigs.wall.shape === 'polygon' ? 'Polyline' : (toolConfigs.wall.shape === 'rect' ? 'Rect' : (toolConfigs.wall.shape === 'circle' ? 'Circle' : 'Arc')),
+    piston: toolConfigs.piston.mode === 'free' ? 'Displacer' : (toolConfigs.piston.mode === 'spring' ? 'Accumulator' : (toolConfigs.piston.mode === 'motorized' ? 'Compressor' : 'Expander')),
+    solid_res: 'Sink',
+    heat_exchanger: 'Heat Exchanger',
+    regenerator: 'Regenerator',
+    storage_block: 'Ressavoir',
+    valve: toolConfigs.valve.type === 'manual_valve' ? 'Manual' : (toolConfigs.valve.type === 'check_valve' ? 'Check' : 'PRV'),
+    throttle_valve: 'Throttle',
+    gas: 'Spawner',
+    regulator: 'Regulator',
+    emitter: 'Emitter',
+    sink: 'Absorber',
+    sensor: 'Chamber'
+  };
+
+  const badgeNames = {
+    select: 'TOOLS',
+    text: 'TOOLS',
+    wall: 'WALLS',
+    gas: 'PARTICLES',
+    emitter: 'PARTICLES',
+    sink: 'PARTICLES',
+    regulator: 'PARTICLES',
+    solid_res: 'THERMAL',
+    heat_exchanger: 'THERMAL',
+    regenerator: 'THERMAL',
+    storage_block: 'THERMAL',
+    piston: 'PISTONS',
+    valve: 'VALVES',
+    throttle_valve: 'VALVES',
+    sensor: 'SENSORS'
+  };
+
+  const titleText = toolNames[tool] || 'Tool';
+  const badgeText = badgeNames[tool] || 'TOOL';
+  if (toolDialogTitle) toolDialogTitle.textContent = titleText;
+  if (toolDialogBadge) toolDialogBadge.textContent = badgeText;
+  if (toolDialogHelpPanel) toolDialogHelpPanel.textContent = toolHelpDescriptions[tool] || '';
+
+  if (tool === 'select') {
+    if (toolDialogPanel) toolDialogPanel.style.display = 'none';
+    toolPropertiesContainer.innerHTML = '';
+    return;
+  }
+
+  if (toolDialogPanel) {
+    toolDialogPanel.style.display = 'flex';
+  }
+
+  if (tool === 'text') {
+    toolPropertiesContainer.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Default Text</span></div>
+        <input type="text" id="propTextVal" value="${toolConfigs.text.text}" class="styled-select" style="width:100%;">
+      </div>
+      ${makeDualInput('Font Size', 'propTextSize', 10, 36, 1, toolConfigs.text.fontSize, 'px')}
+    `;
+    document.getElementById('propTextVal')?.addEventListener('input', (e) => {
+      toolConfigs.text.text = e.target.value;
+      syncActiveToolWithSelection('text', item => { item.text = e.target.value; });
+    });
+    attachDualInput('propTextSize', val => {
+      toolConfigs.text.fontSize = Math.round(val);
+      syncActiveToolWithSelection('text', item => { item.fontSize = Math.round(val); item.height = item.fontSize + 12; });
+    });
+
+  } else if (tool === 'wall') {
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Conductivity κ (0 = Insulated)', 'propWCond', 0, 1, 0.05, toolConfigs.wall.conductivity)}
+      ${makeDualInput('Wall Thickness', 'propWThick', 2, 12, 1, toolConfigs.wall.thickness, 'px')}
+    `;
+    attachDualInput('propWCond', val => {
+      toolConfigs.wall.conductivity = val;
+      syncActiveToolWithSelection('wall', item => { item.conductivity = val; });
+    });
+    attachDualInput('propWThick', val => {
+      toolConfigs.wall.thickness = val;
+      syncActiveToolWithSelection('wall', item => { item.thickness = val; });
+    });
+
+  } else if (tool === 'piston') {
+    const pMode = toolConfigs.piston.mode;
+    let modeInputs = '';
+    if (pMode === 'spring') {
+      modeInputs = makeDualInput('Spring Constant k', 'propPSpring', 10, 500, 10, toolConfigs.piston.springK, 'N/m');
+    } else if (pMode === 'motorized') {
+      modeInputs = `
+        ${makeDualInput('Motor Frequency f', 'propPFreq', 0.1, 5.0, 0.1, toolConfigs.piston.frequency, 'Hz')}
+        ${makeDualInput('Phase Offset φ', 'propPPhase', -180, 180, 15, toolConfigs.piston.phase || 0, '°')}
+        <div class="stat-card" style="margin-top:4px;">
+          <span class="stat-label">Stroke & Amplitude</span>
+          <span class="stat-value" style="font-size:11px; color:#38bdf8;">Adjust directly via rail handles</span>
+        </div>
+      `;
+    } else if (pMode === 'damper') {
+      modeInputs = makeDualInput('Damping Load γ', 'propPDamp', 5, 150, 5, toolConfigs.piston.dampingCoeff || 25, 'Ns/m');
+    }
+
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Piston Mass m', 'propPMass', 0, 150, 5, toolConfigs.piston.mass)}
+      ${makeDualInput('Conductivity κ', 'propPKappa', 0, 1, 0.05, toolConfigs.piston.conductivity)}
+      ${modeInputs}
+    `;
+    attachDualInput('propPMass', val => {
+      toolConfigs.piston.mass = val;
+      syncActiveToolWithSelection('piston', item => { item.mass = val; });
+    });
+    attachDualInput('propPKappa', val => {
+      toolConfigs.piston.conductivity = val;
+      syncActiveToolWithSelection('piston', item => { item.conductivity = val; });
+    });
+    if (pMode === 'spring') attachDualInput('propPSpring', val => {
+      toolConfigs.piston.springK = val;
+      syncActiveToolWithSelection('piston', item => { item.springK = val; });
+    });
+    if (pMode === 'motorized') {
+      attachDualInput('propPFreq', val => {
+        toolConfigs.piston.frequency = val;
+        syncActiveToolWithSelection('piston', item => { item.frequency = val; });
+      });
+      attachDualInput('propPPhase', val => {
+        toolConfigs.piston.phase = val;
+        syncActiveToolWithSelection('piston', item => { item.phase = val; });
+      });
+    }
+    if (pMode === 'damper') attachDualInput('propPDamp', val => {
+      toolConfigs.piston.dampingCoeff = val;
+      syncActiveToolWithSelection('piston', item => { item.dampingCoeff = val; });
+    });
+
+  } else if (tool === 'solid_res') {
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Constant Temperature T', 'propResT', 50, 1000, 25, toolConfigs.solid_res.temperature, 'K')}
+      ${makeDualInput('Coupling Conductance κ', 'propResK', 0.1, 1.0, 0.05, toolConfigs.solid_res.conductance)}
+    `;
+    attachDualInput('propResT', val => {
+      toolConfigs.solid_res.temperature = val;
+      syncActiveToolWithSelection('solid_res', item => {
+        item.temperature = val;
+        item.label = `Isotherm (${Math.round(val)}K)`;
+      });
+    });
+    attachDualInput('propResK', val => {
+      toolConfigs.solid_res.conductance = val;
+      syncActiveToolWithSelection('solid_res', item => { item.conductance = val; });
+    });
+
+  } else if (tool === 'heat_exchanger') {
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Body Temperature T', 'propHxT', 50, 800, 25, toolConfigs.heat_exchanger.temperature, 'K')}
+      ${makeDualInput('Gas Thermalization Rate κ', 'propHxK', 0.1, 1.0, 0.05, toolConfigs.heat_exchanger.conductivity)}
+    `;
+    attachDualInput('propHxT', val => {
+      toolConfigs.heat_exchanger.temperature = val;
+      syncActiveToolWithSelection('heat_exchanger', item => {
+        item.temperature = val;
+        item.label = `Heat Exchanger (${Math.round(val)}K)`;
+      });
+    });
+    attachDualInput('propHxK', val => {
+      toolConfigs.heat_exchanger.conductivity = val;
+      syncActiveToolWithSelection('heat_exchanger', item => { item.conductivity = val; });
+    });
+
+  } else if (tool === 'regenerator') {
+    toolPropertiesContainer.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Flow / Conduction Axis</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${toolConfigs.regenerator.orientation === 'horizontal' ? 'active' : ''}" id="btnRegenHoriz">Horizontal</button>
+          <button class="sub-toggle-btn ${toolConfigs.regenerator.orientation === 'vertical' ? 'active' : ''}" id="btnRegenVert">Vertical</button>
+        </div>
+      </div>
+      ${makeDualInput('Base Temperature T', 'propRegenT', 50, 800, 25, toolConfigs.regenerator.temperature, 'K')}
+      ${makeDualInput('Total Heat Capacity C', 'propRegenC', 50, 1500, 50, toolConfigs.regenerator.heatCapacity, 'J/K')}
+      ${makeDualInput('Gas Coupling Rate κ', 'propRegenK', 0.1, 1.0, 0.05, toolConfigs.regenerator.conductivity)}
+    `;
+    document.getElementById('btnRegenHoriz')?.addEventListener('click', () => {
+      toolConfigs.regenerator.orientation = 'horizontal';
+      renderToolProperties('regenerator');
+      syncActiveToolWithSelection('regenerator', item => { item.orientation = 'horizontal'; });
+    });
+    document.getElementById('btnRegenVert')?.addEventListener('click', () => {
+      toolConfigs.regenerator.orientation = 'vertical';
+      renderToolProperties('regenerator');
+      syncActiveToolWithSelection('regenerator', item => { item.orientation = 'vertical'; });
+    });
+    attachDualInput('propRegenT', val => {
+      toolConfigs.regenerator.temperature = val;
+      syncActiveToolWithSelection('regenerator', item => { item.temperature = val; });
+    });
+    attachDualInput('propRegenC', val => {
+      toolConfigs.regenerator.heatCapacity = val;
+      syncActiveToolWithSelection('regenerator', item => { item.heatCapacity = val; });
+    });
+    attachDualInput('propRegenK', val => {
+      toolConfigs.regenerator.conductivity = val;
+      syncActiveToolWithSelection('regenerator', item => { item.conductivity = val; });
+    });
+
+  } else if (tool === 'storage_block') {
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Initial Temperature T', 'propStoreT', 50, 800, 25, toolConfigs.storage_block.temperature, 'K')}
+      ${makeDualInput('Heat Capacity C', 'propStoreC', 50, 1500, 50, toolConfigs.storage_block.heatCapacity, 'J/K')}
+      ${makeDualInput('Surface Conductivity κ', 'propStoreK', 0.1, 1.0, 0.05, toolConfigs.storage_block.conductivity)}
+    `;
+    attachDualInput('propStoreT', val => {
+      toolConfigs.storage_block.temperature = val;
+      syncActiveToolWithSelection('storage_block', item => {
+        item.temperature = val;
+        item.label = `Ressavoir (${Math.round(val)}K)`;
+      });
+    });
+    attachDualInput('propStoreC', val => {
+      toolConfigs.storage_block.heatCapacity = val;
+      syncActiveToolWithSelection('storage_block', item => { item.heatCapacity = val; });
+    });
+    attachDualInput('propStoreK', val => {
+      toolConfigs.storage_block.conductivity = val;
+      syncActiveToolWithSelection('storage_block', item => { item.conductivity = val; });
+    });
+
+  } else if (tool === 'valve') {
+    const vType = toolConfigs.valve.type;
+    let extraFields = '';
+    if (vType === 'relief_valve') {
+      extraFields = `
+        ${makeDualInput('Trigger Pressure P_max', 'propVReliefP', 50, 1000, 25, toolConfigs.valve.triggerPressure, 'Pa')}
+        <div class="field-row">
+          <div class="field-label"><span>Relief Mode</span></div>
+          <div class="btn-toggle-group">
+            <button class="sub-toggle-btn ${toolConfigs.valve.reliefMode === 'oneway' ? 'active' : ''}" id="btnRelief1Way">1-Way</button>
+            <button class="sub-toggle-btn ${toolConfigs.valve.reliefMode === 'bidirectional' ? 'active' : ''}" id="btnRelief2Way">2-Way</button>
+          </div>
+        </div>
+      `;
+    }
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Conductivity κ', 'propVKappa', 0, 1, 0.05, toolConfigs.valve.conductivity)}
+      ${extraFields}
+    `;
+    attachDualInput('propVKappa', val => {
+      toolConfigs.valve.conductivity = val;
+      syncActiveToolWithSelection('valve', item => { item.conductivity = val; });
+    });
+    if (vType === 'relief_valve') {
+      attachDualInput('propVReliefP', val => {
+        toolConfigs.valve.triggerPressure = val;
+        syncActiveToolWithSelection('valve', item => { item.triggerPressure = val; });
+      });
+      document.getElementById('btnRelief1Way')?.addEventListener('click', () => {
+        toolConfigs.valve.reliefMode = 'oneway';
+        renderToolProperties('valve');
+        syncActiveToolWithSelection('valve', item => { item.reliefMode = 'oneway'; });
+      });
+      document.getElementById('btnRelief2Way')?.addEventListener('click', () => {
+        toolConfigs.valve.reliefMode = 'bidirectional';
+        renderToolProperties('valve');
+        syncActiveToolWithSelection('valve', item => { item.reliefMode = 'bidirectional'; });
+      });
+    }
+
+  } else if (tool === 'throttle_valve') {
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Opening Ratio', 'propTVOpen', 0, 100, 5, Math.round(toolConfigs.throttle_valve.openRatio * 100), '%')}
+      ${makeDualInput('Thickness', 'propTVThick', 2, 16, 1, toolConfigs.throttle_valve.thickness, 'px')}
+    `;
+    attachDualInput('propTVOpen', val => {
+      toolConfigs.throttle_valve.openRatio = val / 100;
+      syncActiveToolWithSelection('throttle_valve', item => { item.setOpenRatio(val / 100); });
+    });
+    attachDualInput('propTVThick', val => {
+      toolConfigs.throttle_valve.thickness = val;
+      syncActiveToolWithSelection('throttle_valve', item => {
+        item.thickness = Math.round(val);
+        item._updateGeometry();
+      });
+    });
+
+  } else if (tool === 'gas') {
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Spawner Particle Count', 'propGasCount', 5, 200, 5, toolConfigs.gas.count)}
+      ${makeDualInput('Gas Temperature T', 'propGasT', 50, 800, 25, toolConfigs.gas.temperature, 'K')}
+      ${makeDualInput('Particle Mass m', 'propGasM', 0.2, 5.0, 0.2, toolConfigs.gas.mass)}
+    `;
+    attachDualInput('propGasCount', val => { toolConfigs.gas.count = Math.round(val); });
+    attachDualInput('propGasT', val => {
+      toolConfigs.gas.temperature = val;
+      syncActiveToolWithSelection('gas', item => { engine.setGroupTemperature(item, val); });
+    });
+    attachDualInput('propGasM', val => {
+      toolConfigs.gas.mass = val;
+      syncActiveToolWithSelection('gas', item => { engine.setGroupMass(item, val); });
+    });
+
+  } else if (tool === 'regulator') {
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Target Particle Count N', 'propRegTarget', 5, 300, 5, toolConfigs.regulator.targetCount)}
+      ${makeDualInput('Hysteresis Band ΔN', 'propRegHyst', 0, 20, 1, toolConfigs.regulator.hysteresis)}
+      ${makeDualInput('Gas Temperature T', 'propRegTemp', 50, 1000, 25, toolConfigs.regulator.temperature, 'K')}
+      ${makeDualInput('Particle Mass m', 'propRegMass', 0.2, 5.0, 0.2, toolConfigs.regulator.mass)}
+      ${makeDualInput('Max Adjustment Rate', 'propRegRate', 1, 60, 1, toolConfigs.regulator.rate, '/s')}
+    `;
+    attachDualInput('propRegTarget', val => {
+      toolConfigs.regulator.targetCount = Math.round(val);
+      syncActiveToolWithSelection('regulator', item => { item.targetCount = Math.round(val); });
+    });
+    attachDualInput('propRegHyst', val => {
+      toolConfigs.regulator.hysteresis = Math.round(val);
+      syncActiveToolWithSelection('regulator', item => { item.hysteresis = Math.round(val); });
+    });
+    attachDualInput('propRegTemp', val => {
+      toolConfigs.regulator.temperature = val;
+      syncActiveToolWithSelection('regulator', item => { item.temperature = val; });
+    });
+    attachDualInput('propRegMass', val => {
+      toolConfigs.regulator.mass = val;
+      syncActiveToolWithSelection('regulator', item => { item.mass = val; });
+    });
+    attachDualInput('propRegRate', val => {
+      toolConfigs.regulator.rate = val;
+      syncActiveToolWithSelection('regulator', item => { item.rate = val; });
+    });
+
+  } else if (tool === 'emitter') {
+    toolPropertiesContainer.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Direction</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${toolConfigs.emitter.direction === 'right' ? 'active' : ''}" data-dir="right" title="Right (0°)">→</button>
+          <button class="sub-toggle-btn ${toolConfigs.emitter.direction === 'left' ? 'active' : ''}" data-dir="left" title="Left (180°)">←</button>
+          <button class="sub-toggle-btn ${toolConfigs.emitter.direction === 'down' ? 'active' : ''}" data-dir="down" title="Down (90°)">↓</button>
+          <button class="sub-toggle-btn ${toolConfigs.emitter.direction === 'up' ? 'active' : ''}" data-dir="up" title="Up (270°)">↑</button>
+          <button class="sub-toggle-btn ${toolConfigs.emitter.direction === '360' || toolConfigs.emitter.direction === 'radial' ? 'active' : ''}" data-dir="360" title="Radial (360°)">360°</button>
+        </div>
+      </div>
+      ${makeDualInput('Rate', 'propEmitRate', 1, 60, 1, toolConfigs.emitter.rate, '/s')}
+      ${makeDualInput('Temperature T', 'propEmitT', 50, 800, 25, toolConfigs.emitter.temperature, 'K')}
+      ${makeDualInput('Emission Speed', 'propEmitSpd', 20, 350, 10, toolConfigs.emitter.speed, 'px/s')}
+      ${makeDualInput('Max Count Limit (0 = ∞)', 'propEmitMax', 0, 500, 10, toolConfigs.emitter.maxParticles, '')}
+    `;
+    toolPropertiesContainer.querySelectorAll('[data-dir]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        toolPropertiesContainer.querySelectorAll('[data-dir]').forEach(x => x.classList.remove('active'));
+        btn.classList.add('active');
+        toolConfigs.emitter.direction = btn.dataset.dir;
+        syncActiveToolWithSelection('emitter', item => { item.direction = btn.dataset.dir; });
+      });
+    });
+    attachDualInput('propEmitRate', val => {
+      toolConfigs.emitter.rate = Math.round(val);
+      syncActiveToolWithSelection('emitter', item => { item.rate = Math.round(val); });
+    });
+    attachDualInput('propEmitT', val => {
+      toolConfigs.emitter.temperature = val;
+      syncActiveToolWithSelection('emitter', item => { item.temperature = val; });
+    });
+    attachDualInput('propEmitSpd', val => {
+      toolConfigs.emitter.speed = val;
+      syncActiveToolWithSelection('emitter', item => { item.speed = val; });
+    });
+    attachDualInput('propEmitMax', val => {
+      toolConfigs.emitter.maxParticles = Math.round(val);
+      syncActiveToolWithSelection('emitter', item => { item.maxParticles = Math.round(val); });
+    });
+
+  } else if (tool === 'sink') {
+    toolPropertiesContainer.innerHTML = `
+      ${makeDualInput('Absorption Rate', 'propSinkEff', 0.1, 1.0, 0.05, toolConfigs.sink.absorptionEfficiency)}
+    `;
+    attachDualInput('propSinkEff', val => {
+      toolConfigs.sink.absorptionEfficiency = val;
+      syncActiveToolWithSelection('sink', item => { item.absorptionEfficiency = val; });
+    });
+
+  } else if (tool === 'sensor') {
+    toolPropertiesContainer.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Chamber Prefix</span></div>
+        <input type="text" id="propSensName" value="${toolConfigs.sensor.label}" class="styled-select" style="width:100%;">
+      </div>
+    `;
+    document.getElementById('propSensName')?.addEventListener('input', (e) => {
+      toolConfigs.sensor.label = e.target.value.trim() || 'Chamber';
+      syncActiveToolWithSelection('sensor', item => { item.label = toolConfigs.sensor.label; });
+    });
+  }
+}
+
+// ============================================================================
+// Floating Tool Dialog (Onshape CAD Style) Controls & Dragging
+// ============================================================================
+let isToolHelpOpen = false;
+function toggleToolHelp(forceState) {
+  if (!toolDialogHelpPanel || !helpArrowIcon) return;
+  isToolHelpOpen = (typeof forceState === 'boolean') ? forceState : !isToolHelpOpen;
+  toolDialogHelpPanel.style.display = isToolHelpOpen ? 'block' : 'none';
+  helpArrowIcon.textContent = isToolHelpOpen ? '▴' : '▾';
+}
+
+btnToolDialogClose?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('toolSelect')?.click();
+});
+
+if (toolDialogHeader && toolDialogPanel) {
+  let isDraggingDialog = false;
+  let didMoveDialog = false;
+  let dialogDragStart = { x: 0, y: 0 };
+  let dialogPanelStart = { x: 350, y: 176 };
+
+  toolDialogHeader.addEventListener('mousedown', (e) => {
+    if (e.target.closest?.('.tool-dialog-actions')) return;
+    isDraggingDialog = true;
+    didMoveDialog = false;
+    dialogDragStart = { x: e.clientX, y: e.clientY };
+    const rect = toolDialogPanel.getBoundingClientRect();
+    dialogPanelStart = { x: rect.left, y: rect.top };
+    toolDialogHeader.style.cursor = 'grabbing';
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isDraggingDialog) return;
+    const dx = e.clientX - dialogDragStart.x;
+    const dy = e.clientY - dialogDragStart.y;
+    if (Math.hypot(dx, dy) > 4) {
+      didMoveDialog = true;
+    }
+    const newLeft = Math.max(10, Math.min(window.innerWidth - toolDialogPanel.offsetWidth - 10, dialogPanelStart.x + dx));
+    const newTop = Math.max(70, Math.min(window.innerHeight - toolDialogPanel.offsetHeight - 10, dialogPanelStart.y + dy));
+    toolDialogPanel.style.left = `${newLeft}px`;
+    toolDialogPanel.style.top = `${newTop}px`;
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (isDraggingDialog) {
+      isDraggingDialog = false;
+      if (toolDialogHeader) toolDialogHeader.style.cursor = 'pointer';
+      setTimeout(() => { didMoveDialog = false; }, 50);
+    }
+  });
+
+  toolDialogHeader.addEventListener('click', (e) => {
+    if (e.target.closest?.('.tool-dialog-actions')) return;
+    if (didMoveDialog) return;
+    toggleToolHelp();
+  });
+
+  toolDialogHeader.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.tool-dialog-actions')) return;
+    toolDialogPanel.style.left = '350px';
+    toolDialogPanel.style.top = '176px';
+  });
+}
+
+// Backward Compatibility for selection inspector calls
+function renderSelectedItemProperties(item) {
+  updateElementsList();
+}
+function renderMultiSelectionProperties() {
+  updateElementsList();
+}
+
+// ============================================================================
+// Accordion Body Generator for Selected Items in Elements List
+// ============================================================================
+function renderItemAccordionBody(item, bodyContainer, itemIndex) {
+  if (!bodyContainer || !item) return;
+
+  const idPrefix = `acc_${itemIndex}_`;
+
+  if (item instanceof Wall) {
+    let extraControls = '';
+    if (item.type === 'manual_valve') {
+      extraControls = `
+        <button id="${idPrefix}toggleValveBtn" class="btn-emitter-toggle ${item.isOpen ? 'is-on' : 'is-off'}" style="margin-bottom:8px;">
+          <span>${item.isOpen ? 'VALVE IS OPEN' : 'VALVE IS CLOSED'}</span>
+        </button>
+      `;
+    } else if (item.type === 'check_valve') {
+      extraControls = `
+        <button id="${idPrefix}flipDirBtn" class="btn-flip-dir" title="Flip flow direction">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>
+          <span>Flip Flow Direction (${item.allowedDirection > 0 ? 'Forward →' : 'Reverse ←'})</span>
+        </button>
+      `;
+    } else if (item.type === 'relief_valve') {
+      extraControls = `
+        ${makeDualInput('Trigger Pressure P_max', `${idPrefix}reliefP`, 50, 1000, 25, item.triggerPressure, 'Pa')}
+        <div class="field-row">
+          <div class="field-label"><span>Relief Mode</span></div>
+          <div class="btn-toggle-group">
+            <button class="sub-toggle-btn ${item.reliefMode === 'oneway' ? 'active' : ''}" id="${idPrefix}relief1Way">1-Way</button>
+            <button class="sub-toggle-btn ${item.reliefMode === 'bidirectional' ? 'active' : ''}" id="${idPrefix}relief2Way">2-Way</button>
+          </div>
+        </div>
+        ${item.reliefMode === 'oneway' ? `
+          <button id="${idPrefix}flipReliefDirBtn" class="btn-flip-dir" title="Flip relief opening direction">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>
+            <span>Flip Relief Direction (${(item.allowedDirection || 1) > 0 ? 'Forward →' : 'Reverse ←'})</span>
+          </button>
+        ` : ''}
+      `;
+    }
+
+    bodyContainer.innerHTML = `
+      ${extraControls}
+      ${makeDualInput('Conductivity κ', `${idPrefix}wKappa`, 0, 1, 0.05, item.conductivity)}
+      ${makeDualInput('Thickness', `${idPrefix}wThick`, 2, 16, 1, item.thickness, 'px')}
+    `;
+
+    attachDualInput(`${idPrefix}wKappa`, val => { item.conductivity = val; });
+    attachDualInput(`${idPrefix}wThick`, val => { item.thickness = val; });
+
+    document.getElementById(`${idPrefix}toggleValveBtn`)?.addEventListener('click', () => {
+      item.isOpen = !item.isOpen;
+      updateElementsList();
+    });
+    document.getElementById(`${idPrefix}flipDirBtn`)?.addEventListener('click', () => {
+      item.flipDirection();
+      updateElementsList();
+    });
+    if (item.type === 'relief_valve') {
+      attachDualInput(`${idPrefix}reliefP`, val => { item.triggerPressure = val; });
+      document.getElementById(`${idPrefix}relief1Way`)?.addEventListener('click', () => {
+        item.reliefMode = 'oneway';
+        updateElementsList();
+      });
+      document.getElementById(`${idPrefix}relief2Way`)?.addEventListener('click', () => {
+        item.reliefMode = 'bidirectional';
+        updateElementsList();
+      });
+      document.getElementById(`${idPrefix}flipReliefDirBtn`)?.addEventListener('click', () => {
+        item.flipDirection();
+        updateElementsList();
+      });
+    }
+
+  } else if (item instanceof ThrottleValve) {
+    const isTVActive = item.isActive !== false;
+    const gapPx = Math.round(item.gapWidth || (item.length * item.openRatio));
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}toggleTVBtn" class="btn-emitter-toggle ${isTVActive ? 'is-on' : 'is-off'}">
+          <span>${isTVActive ? 'THROTTLE IS ACTIVE' : 'THROTTLE IS DISABLED'}</span>
+        </button>
+      </div>
+      <div class="stat-card" style="margin-bottom:8px;">
+        <span class="stat-label">Opening Aperture & Pressure Drop</span>
+        <span class="stat-value" style="font-size:12px; color:#f59e0b;">${Math.round(item.openRatio * 100)}% (${gapPx} px) | ΔP: ${(item.deltaP || 0).toFixed(1)} Pa</span>
+      </div>
+      ${makeDualInput('Opening Ratio', `${idPrefix}tvOpen`, 0, 100, 5, Math.round(item.openRatio * 100), '%')}
+      ${makeDualInput('Thickness', `${idPrefix}tvThick`, 2, 16, 1, item.thickness, 'px')}
+      <button class="btn-danger" id="${idPrefix}delTVBtn" style="width:100%; margin-top:8px; padding:6px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">
+        Delete Throttle Valve
+      </button>
+    `;
+
+    document.getElementById(`${idPrefix}toggleTVBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}tvOpen`, val => {
+      item.setOpenRatio(val / 100);
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}tvThick`, val => {
+      item.thickness = Math.round(val);
+      item._updateGeometry();
+    });
+    document.getElementById(`${idPrefix}delTVBtn`)?.addEventListener('click', () => {
+      deleteSelectedItems();
+    });
+
+  } else if (item instanceof Piston) {
+    const isPActive = item.isActive !== false;
+    let modeDetails = '';
+    if (item.mode === 'damper') {
+      modeDetails = `
+        ${makeDualInput('Damping Load γ', `${idPrefix}pDamp`, 5, 150, 5, item.dampingCoeff, 'Ns/m')}
+        <div class="stat-card" style="margin-top:4px;">
+          <span class="stat-label">Work Extracted W_ext</span>
+          <span class="stat-value" style="font-size:12px; color:#f59e0b;">${(item.workExtracted || 0).toFixed(1)} J (${(item.instantPower || 0).toFixed(1)} W)</span>
+        </div>
+      `;
+    } else if (item.mode === 'motorized') {
+      const stroke = Math.round(Math.abs(item.maxPos - item.minPos));
+      const amp = (item.amplitude || stroke * 0.5).toFixed(0);
+      modeDetails = `
+        ${makeDualInput('Frequency f', `${idPrefix}pFreq`, 0.1, 5.0, 0.1, item.frequency, 'Hz')}
+        ${makeDualInput('Phase Offset φ', `${idPrefix}pPhase`, -180, 180, 15, item.phase || 0, '°')}
+        <div class="stat-card" style="margin-top:4px;">
+          <span class="stat-label">Stroke & Amplitude</span>
+          <span class="stat-value" style="font-size:11.5px; color:#38bdf8;">±${amp} px (Stroke ${stroke} px, adjust via handles)</span>
+        </div>
+      `;
+    } else if (item.mode === 'spring') {
+      modeDetails = makeDualInput('Spring Constant k', `${idPrefix}pSpring`, 10, 500, 10, item.springK, 'N/m');
+    }
+
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}togglePistonBtn" class="btn-emitter-toggle ${isPActive ? 'is-on' : 'is-off'}">
+          <span>${isPActive ? 'PISTON IS ACTIVE' : 'PISTON IS DISABLED'}</span>
+        </button>
+      </div>
+      <div class="field-row">
+        <div class="field-label"><span>Mode</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${item.mode === 'free' ? 'active' : ''}" data-pmode="free">Displacer</button>
+          <button class="sub-toggle-btn ${item.mode === 'spring' ? 'active' : ''}" data-pmode="spring">Accumulator</button>
+          <button class="sub-toggle-btn ${item.mode === 'motorized' ? 'active' : ''}" data-pmode="motorized">Compressor</button>
+          <button class="sub-toggle-btn ${item.mode === 'damper' ? 'active' : ''}" data-pmode="damper">Expander</button>
+        </div>
+      </div>
+      ${makeDualInput('Mass m', `${idPrefix}pMass`, 0, 150, 5, item.mass)}
+      ${makeDualInput('Conductivity κ', `${idPrefix}pKappa`, 0, 1, 0.05, item.conductivity)}
+      ${modeDetails}
+    `;
+    document.getElementById(`${idPrefix}togglePistonBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    bodyContainer.querySelectorAll('[data-pmode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        item.mode = btn.dataset.pmode;
+        updateElementsList();
+      });
+    });
+    attachDualInput(`${idPrefix}pMass`, val => { item.mass = val; });
+    attachDualInput(`${idPrefix}pKappa`, val => { item.conductivity = val; });
+    if (item.mode === 'damper') attachDualInput(`${idPrefix}pDamp`, val => { item.dampingCoeff = val; });
+    if (item.mode === 'motorized') {
+      attachDualInput(`${idPrefix}pFreq`, val => { item.frequency = val; });
+      attachDualInput(`${idPrefix}pPhase`, val => { item.phase = val; });
+    }
+    if (item.mode === 'spring') attachDualInput(`${idPrefix}pSpring`, val => { item.springK = val; });
+
+  } else if (item instanceof Reservoir) {
+    const isResActive = item.isActive !== false;
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}toggleResBtn" class="btn-emitter-toggle ${isResActive ? 'is-on' : 'is-off'}">
+          <span>${isResActive ? 'SINK IS ACTIVE' : 'SINK IS DISABLED'}</span>
+        </button>
+      </div>
+      ${makeDualInput('Constant Temperature T', `${idPrefix}resT`, 50, 1000, 25, item.temperature, 'K')}
+      ${makeDualInput('Coupling Conductance κ', `${idPrefix}resK`, 0.1, 1.0, 0.05, item.conductance)}
+    `;
+    document.getElementById(`${idPrefix}toggleResBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}resT`, val => { item.temperature = val; item.label = `Sink (${Math.round(val)}K)`; updateElementCardLabel(itemIndex, item.label); });
+    attachDualInput(`${idPrefix}resK`, val => { item.conductance = val; });
+
+  } else if (item instanceof HeatExchanger) {
+    const isHxActive = item.isActive !== false;
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}toggleHxBtn" class="btn-emitter-toggle ${isHxActive ? 'is-on' : 'is-off'}">
+          <span>${isHxActive ? 'HEAT EXCHANGER IS ACTIVE' : 'HEAT EXCHANGER IS DISABLED'}</span>
+        </button>
+      </div>
+      ${makeDualInput('Body Temperature T', `${idPrefix}hxT`, 50, 800, 25, item.temperature, 'K')}
+      ${makeDualInput('Gas Coupling Rate κ', `${idPrefix}hxK`, 0.1, 1.0, 0.05, item.conductivity)}
+    `;
+    document.getElementById(`${idPrefix}toggleHxBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}hxT`, val => { item.temperature = val; item.label = `Heat Exchanger (${Math.round(val)}K)`; updateElementCardLabel(itemIndex, item.label); });
+    attachDualInput(`${idPrefix}hxK`, val => { item.conductivity = val; });
+
+  } else if (item instanceof RegeneratorMatrix) {
+    const isRegActive = item.isActive !== false;
+    const avgT = Math.round(item.getAverageTemperature());
+    const minT = Math.round(Math.min(...item.temperatures));
+    const maxT = Math.round(Math.max(...item.temperatures));
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}toggleRegBtn" class="btn-emitter-toggle ${isRegActive ? 'is-on' : 'is-off'}">
+          <span>${isRegActive ? 'REGENERATOR IS ACTIVE' : 'REGENERATOR IS DISABLED'}</span>
+        </button>
+      </div>
+      <div class="field-row">
+        <div class="field-label"><span>Flow Axis</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${item.orientation === 'horizontal' ? 'active' : ''}" id="${idPrefix}btnRegHoriz">Horizontal</button>
+          <button class="sub-toggle-btn ${item.orientation === 'vertical' ? 'active' : ''}" id="${idPrefix}btnRegVert">Vertical</button>
+        </div>
+      </div>
+      <div class="stat-card" style="margin:4px 0;">
+        <span class="stat-label">Thermal Gradient Span</span>
+        <span class="stat-value" style="font-size:12px; color:#38bdf8;">${minT} K to ${maxT} K (Avg: ${avgT} K)</span>
+      </div>
+      ${makeDualInput('Total Heat Capacity C', `${idPrefix}regC`, 50, 1500, 50, item.heatCapacity, 'J/K')}
+      ${makeDualInput('Gas Coupling Rate κ', `${idPrefix}regK`, 0.1, 1.0, 0.05, item.conductivity)}
+      ${makeDualInput('Axial Heat Leakage', `${idPrefix}regAx`, 0, 0.5, 0.02, item.axialConductivity || 0.05)}
+    `;
+    document.getElementById(`${idPrefix}toggleRegBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    document.getElementById(`${idPrefix}btnRegHoriz`)?.addEventListener('click', () => {
+      item.orientation = 'horizontal';
+      updateElementsList();
+    });
+    document.getElementById(`${idPrefix}btnRegVert`)?.addEventListener('click', () => {
+      item.orientation = 'vertical';
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}regC`, val => { item.heatCapacity = val; });
+    attachDualInput(`${idPrefix}regK`, val => { item.conductivity = val; });
+    attachDualInput(`${idPrefix}regAx`, val => { item.axialConductivity = val; });
+
+  } else if (item instanceof ThermalBlock) {
+    const isBlockActive = item.isActive !== false;
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}toggleBlockBtn" class="btn-emitter-toggle ${isBlockActive ? 'is-on' : 'is-off'}">
+          <span>${isBlockActive ? 'RESSAVOIR IS ACTIVE' : 'RESSAVOIR IS DISABLED'}</span>
+        </button>
+      </div>
+      ${makeDualInput('Temperature T', `${idPrefix}blockT`, 50, 800, 25, item.temperature, 'K')}
+      ${makeDualInput('Heat Capacity C', `${idPrefix}blockC`, 50, 1500, 50, item.heatCapacity, 'J/K')}
+      ${makeDualInput('Surface Conductivity κ', `${idPrefix}blockK`, 0.1, 1.0, 0.05, item.conductivity)}
+    `;
+    document.getElementById(`${idPrefix}toggleBlockBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}blockT`, val => { item.temperature = val; item.label = `Ressavoir (${Math.round(val)}K)`; updateElementCardLabel(itemIndex, item.label); });
+    attachDualInput(`${idPrefix}blockC`, val => { item.heatCapacity = val; });
+    attachDualInput(`${idPrefix}blockK`, val => { item.conductivity = val; });
+
+  } else if (item instanceof Emitter) {
+    const isEnabled = item.enabled !== false;
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}emitToggleBtn" class="btn-emitter-toggle ${isEnabled ? 'is-on' : 'is-off'}">
+          <span>${isEnabled ? 'EMITTER IS ACTIVE' : 'EMITTER IS DISABLED'}</span>
+        </button>
+      </div>
+      <div class="field-row">
+        <div class="field-label"><span>Direction</span></div>
+        <div class="btn-toggle-group">
+          <button class="sub-toggle-btn ${item.direction === 'right' ? 'active' : ''}" data-seldir="right" title="Right (0°)">→</button>
+          <button class="sub-toggle-btn ${item.direction === 'left' ? 'active' : ''}" data-seldir="left" title="Left (180°)">←</button>
+          <button class="sub-toggle-btn ${item.direction === 'down' ? 'active' : ''}" data-seldir="down" title="Down (90°)">↓</button>
+          <button class="sub-toggle-btn ${item.direction === 'up' ? 'active' : ''}" data-seldir="up" title="Up (270°)">↑</button>
+          <button class="sub-toggle-btn ${item.direction === '360' || item.direction === 'radial' ? 'active' : ''}" data-seldir="360" title="Radial (360°)">360°</button>
+        </div>
+      </div>
+      ${makeDualInput('Rate', `${idPrefix}emitRate`, 1, 60, 1, item.rate, '/s')}
+      ${makeDualInput('Temperature T', `${idPrefix}emitT`, 50, 800, 25, item.temperature, 'K')}
+      ${makeDualInput('Emission Speed', `${idPrefix}emitSpd`, 20, 350, 10, item.speed, 'px/s')}
+      ${makeDualInput('Max Count Limit (0 = ∞)', `${idPrefix}emitMax`, 0, 500, 10, item.maxParticles || 0)}
+    `;
+    document.getElementById(`${idPrefix}emitToggleBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    bodyContainer.querySelectorAll('[data-seldir]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bodyContainer.querySelectorAll('[data-seldir]').forEach(x => x.classList.remove('active'));
+        btn.classList.add('active');
+        item.direction = btn.dataset.seldir;
+      });
+    });
+    attachDualInput(`${idPrefix}emitRate`, val => { item.rate = Math.round(val); updateElementCardLabel(itemIndex, `${item.label || 'Emitter'} [${item.rate}/s, ${Math.round(item.temperature)}K]`); });
+    attachDualInput(`${idPrefix}emitT`, val => { item.temperature = val; });
+    attachDualInput(`${idPrefix}emitSpd`, val => { item.speed = val; });
+    attachDualInput(`${idPrefix}emitMax`, val => { item.maxParticles = Math.round(val); });
+
+  } else if (item instanceof SensorZone) {
+    const driftText = (item.displayDriftSpeed && item.displayDriftSpeed > 0)
+      ? `${item.displayDriftSpeed.toFixed(1)} px/s (${Math.round((item.driftAngle * 180) / Math.PI)}°)`
+      : '0.0 px/s (Equilibrium)';
+    bodyContainer.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Chamber Name</span></div>
+        <input type="text" id="${idPrefix}sensName" value="${item.label}" class="styled-select" style="width:100%;">
+      </div>
+      <div class="field-row">
+        <div class="field-label"><span>Chamber Border & Chart Color</span></div>
+        <input type="color" id="${idPrefix}sensColor" value="${item.color || '#38bdf8'}" class="styled-select" style="width:54px; height:26px; padding:1px; cursor:pointer;">
+      </div>
+      <div class="stat-card" style="margin-top:6px;">
+        <span class="stat-label">Net Drift Trend ⟨v_drift⟩</span>
+        <span class="stat-value" style="font-size:12px; color:#22c55e;">${driftText}</span>
+      </div>
+    `;
+    document.getElementById(`${idPrefix}sensName`)?.addEventListener('input', (e) => {
+      item.label = e.target.value.trim() || 'Chamber';
+      updateElementsList();
+    });
+    document.getElementById(`${idPrefix}sensColor`)?.addEventListener('input', (e) => {
+      item.color = e.target.value;
+      updateElementsList();
+    });
+
+  } else if (item instanceof TextLabel) {
+    bodyContainer.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Text Content</span></div>
+        <input type="text" id="${idPrefix}textContent" value="${item.text}" class="styled-select" style="width:100%;">
+      </div>
+      ${makeDualInput('Font Size', `${idPrefix}fontSize`, 10, 48, 1, item.fontSize, 'px')}
+    `;
+    document.getElementById(`${idPrefix}textContent`)?.addEventListener('input', (e) => {
+      item.text = e.target.value;
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}fontSize`, val => {
+      item.fontSize = Math.round(val);
+      item.height = item.fontSize + 12;
+    });
+
+  } else if (item instanceof Sink) {
+    bodyContainer.innerHTML = `
+      ${makeDualInput('Absorption Rate', `${idPrefix}sinkEff`, 0.1, 1.0, 0.05, item.absorptionEfficiency)}
+    `;
+    attachDualInput(`${idPrefix}sinkEff`, val => { item.absorptionEfficiency = val; });
+
+  } else if (item instanceof ParticleGroup) {
+    const activeCount = item.getActiveCount(engine);
+    const avgT = Math.round(item.getAverageTemperature(engine));
+    bodyContainer.innerHTML = `
+      <div class="stat-card" style="margin-bottom:8px;">
+        <span class="stat-label">Active Particles in Group</span>
+        <span class="stat-value" style="font-size:12px; color:#38bdf8;">${activeCount} particles (avg ${avgT} K)</span>
+      </div>
+      ${makeDualInput('Group Temperature T', `${idPrefix}pgTemp`, 50, 1000, 25, item.temperature, 'K')}
+      ${makeDualInput('Particle Mass m', `${idPrefix}pgMass`, 0.2, 5.0, 0.2, item.mass)}
+      <button id="${idPrefix}selectPtsBtn" class="btn-secondary-action" style="width:100%; margin-top:6px; font-size:11px; padding:6px; background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.3); border-radius:4px; color:#38bdf8; cursor:pointer;">Select Particles on Canvas</button>
+      <button id="${idPrefix}delGroupBtn" class="btn-danger-action" style="width:100%; margin-top:6px; font-size:11px; padding:6px; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); border-radius:4px; color:#ef4444; cursor:pointer;">Delete Spawner Group</button>
+    `;
+    attachDualInput(`${idPrefix}pgTemp`, val => {
+      engine.setGroupTemperature(item, val);
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}pgMass`, val => {
+      engine.setGroupMass(item, val);
+    });
+    document.getElementById(`${idPrefix}selectPtsBtn`)?.addEventListener('click', () => {
+      const pts = item.getActiveParticles(engine);
+      pts.forEach(p => { p.selected = true; });
+      selectedItems = [...pts];
+      updateElementsList();
+    });
+    document.getElementById(`${idPrefix}delGroupBtn`)?.addEventListener('click', () => {
+      recordUndoState();
+      engine.deleteParticleGroup(item);
+      selectedItems = [];
+      updateElementsList();
+    });
+
+  } else if (item instanceof Regulator) {
+    const isRegActive = item.isActive !== false;
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:8px;">
+        <button id="${idPrefix}toggleRegBtn" class="btn-emitter-toggle ${isRegActive ? 'is-on' : 'is-off'}">
+          <span>${isRegActive ? 'REGULATOR IS ACTIVE' : 'REGULATOR IS DISABLED'}</span>
+        </button>
+      </div>
+      <div class="stat-card" style="margin-bottom:8px;">
+        <span class="stat-label">Particles in Zone</span>
+        <span class="stat-value" style="font-size:12px; color:#10b981;">${item.currentCount || 0} / ${item.targetCount} pts (band ±${item.hysteresis})</span>
+      </div>
+      ${makeDualInput('Target Count N', `${idPrefix}regTarget`, 5, 300, 5, item.targetCount)}
+      ${makeDualInput('Hysteresis Band ΔN', `${idPrefix}regHyst`, 0, 20, 1, item.hysteresis)}
+      ${makeDualInput('Gas Temperature T', `${idPrefix}regTemp`, 50, 1000, 25, item.temperature, 'K')}
+      ${makeDualInput('Particle Mass m', `${idPrefix}regMass`, 0.2, 5.0, 0.2, item.mass)}
+      ${makeDualInput('Max Adjustment Rate', `${idPrefix}regRate`, 1, 60, 1, item.rate, '/s')}
+      <button id="${idPrefix}delRegBtn" class="btn-danger-action" style="width:100%; margin-top:6px; font-size:11px; padding:6px; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); border-radius:4px; color:#ef4444; cursor:pointer;">Delete Regulator</button>
+    `;
+    document.getElementById(`${idPrefix}toggleRegBtn`)?.addEventListener('click', () => {
+      item.toggle();
+      updateElementsList();
+    });
+    attachDualInput(`${idPrefix}regTarget`, val => { item.targetCount = Math.round(val); updateElementCardLabel(itemIndex, `Regulator [Tgt: ${item.targetCount}, ±${item.hysteresis}]`); });
+    attachDualInput(`${idPrefix}regHyst`, val => { item.hysteresis = Math.round(val); updateElementCardLabel(itemIndex, `Regulator [Tgt: ${item.targetCount}, ±${item.hysteresis}]`); });
+    attachDualInput(`${idPrefix}regTemp`, val => { item.temperature = val; });
+    attachDualInput(`${idPrefix}regMass`, val => { item.mass = val; });
+    attachDualInput(`${idPrefix}regRate`, val => { item.rate = val; });
+    document.getElementById(`${idPrefix}delRegBtn`)?.addEventListener('click', () => {
+      recordUndoState();
+      engine.regulators = engine.regulators.filter(r => r !== item);
+      engine.elements = engine.elements.filter(el => el !== item);
+      selectedItems = [];
+      updateElementsList();
+    });
+  }
+}
+
+// ============================================================================
+// Interactive Canvas Elements Outline List
+// ============================================================================
+function getElementInfo(item, index) {
+  if (item instanceof Wall) {
+    const vLabel = item.type === 'manual_valve' ? `Valve ${index + 1}` : (item.type === 'check_valve' ? `Check Valve ${index + 1}` : (item.type === 'relief_valve' ? `PRV Valve ${index + 1}` : `Wall ${index + 1} (${item.conductivity > 0 ? 'Conductive' : 'Insulated'})`));
+    return { tag: 'WALL', label: vLabel };
+  } else if (item instanceof ThrottleValve) {
+    return { tag: 'THROTTLE', label: `Throttle Valve ${index + 1} [${Math.round(item.openRatio * 100)}%]` };
+  } else if (item instanceof Piston) {
+    const modeLabels = { free: 'displacer', spring: 'accumulator', motorized: 'compressor', damper: 'expander' };
+    const mLabel = modeLabels[item.mode] || item.mode;
+    return { tag: 'PISTON', label: `Piston ${index + 1} (${mLabel})` };
+  } else if (item instanceof Reservoir) {
+    return { tag: 'SINK', label: `Sink [${Math.round(item.temperature)}K]` };
+  } else if (item instanceof HeatExchanger) {
+    return { tag: 'HX', label: `Heat Exchanger [${Math.round(item.temperature)}K]` };
+  } else if (item instanceof RegeneratorMatrix) {
+    const minT = Math.round(Math.min(...item.temperatures));
+    const maxT = Math.round(Math.max(...item.temperatures));
+    return { tag: 'REGEN', label: `Regenerator [${minT}-${maxT}K]` };
+  } else if (item instanceof ThermalBlock) {
+    return { tag: 'RESSAVOIR', label: `Ressavoir [${Math.round(item.temperature)}K]` };
+  } else if (item instanceof SensorZone) {
+    return { tag: 'SENSOR', label: item.label };
+  } else if (item instanceof Emitter) {
+    return { tag: 'SOURCE', label: `Emitter (${item.rate}/s)` };
+  } else if (item instanceof Sink) {
+    return { tag: 'ABSORBER', label: 'Absorber' };
+  } else if (item instanceof Regulator) {
+    return { tag: 'REGULATOR', label: `Regulator [${item.currentCount || 0}/${item.targetCount} pts]` };
+  } else if (item instanceof TextLabel) {
+    return { tag: 'NOTE', label: `"${item.text}"` };
+  } else if (item instanceof ParticleGroup) {
+    const activeCount = item.getActiveCount(engine);
+    const avgT = Math.round(item.getAverageTemperature(engine));
+    return { tag: 'SPAWNER', label: `${item.label} [${activeCount} pts, ${avgT}K]` };
+  }
+  return { tag: 'ITEM', label: `Element ${index + 1}` };
+}
+
+// ============================================================================
+// CAD Feature Tree & Accordion Group Management
+// ============================================================================
+const treeExpandedGroups = new Set();
+
+function updateElementCardLabel(itemIndex, newLabel) {
+  const card = document.querySelector(`[data-elindex="${itemIndex}"]`);
+  if (!card) return;
+  const labelSpan = card.querySelector('.element-label-text');
+  if (labelSpan) labelSpan.textContent = newLabel;
+}
+
+function renderGroupAccordionBody(group, bodyContainer) {
+  if (!bodyContainer || !group) return;
+  const isAllWalls = group.items.every(i => i instanceof Wall);
+  const idPrefix = `grp_${group.id}_`;
+
+  if (isAllWalls) {
+    const firstWall = group.items[0];
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:6px;">
+        <span style="font-size:10px; color:#38bdf8; font-weight:600;">Batch Group Settings (${group.items.length} Segments)</span>
+      </div>
+      ${makeDualInput('Conductivity κ', `${idPrefix}wKappa`, 0, 1, 0.05, firstWall.conductivity)}
+      ${makeDualInput('Thickness', `${idPrefix}wThick`, 2, 16, 1, firstWall.thickness, 'px')}
+      <div class="field-row" style="margin-top:6px;">
+        <button id="${idPrefix}ungroupBtn" class="sub-toggle-btn" style="width:100%; justify-content:center; padding:5px 0;">Ungroup Segments</button>
+      </div>
+    `;
+    attachDualInput(`${idPrefix}wKappa`, val => {
+      group.items.forEach(w => { w.conductivity = val; });
+    });
+    attachDualInput(`${idPrefix}wThick`, val => {
+      group.items.forEach(w => { w.thickness = val; });
+    });
+    document.getElementById(`${idPrefix}ungroupBtn`)?.addEventListener('click', () => {
+      recordUndoState();
+      group.items.forEach(w => { delete w.groupId; });
+      updateElementsList();
+    });
+  } else {
+    bodyContainer.innerHTML = `
+      <div class="field-row" style="margin-bottom:6px;">
+        <span style="font-size:10px; color:#38bdf8; font-weight:600;">Group Settings (${group.items.length} Elements)</span>
+      </div>
+      <div class="field-row" style="margin-top:6px;">
+        <button id="${idPrefix}ungroupBtn" class="sub-toggle-btn" style="width:100%; justify-content:center; padding:5px 0;">Ungroup Elements</button>
+      </div>
+    `;
+    document.getElementById(`${idPrefix}ungroupBtn`)?.addEventListener('click', () => {
+      recordUndoState();
+      group.items.forEach(i => { delete i.groupId; });
+      updateElementsList();
+    });
+  }
+}
+
+function updateElementsList() {
+  if (!elementsListContainer) return;
+  const elements = engine.elements || [];
+
+  elementCountBadge.textContent = elements.length;
+
+  if (elements.length === 0) {
+    elementsListContainer.innerHTML = '<p class="empty-cell" style="padding:8px 0;">No elements on canvas</p>';
+    return;
+  }
+
+  // Group elements for Feature Tree: standalone items vs group clusters
+  const treeEntries = [];
+  const groupMap = new Map();
+
+  elements.forEach((item, index) => {
+    if (item.groupId) {
+      if (!groupMap.has(item.groupId)) {
+        const grp = {
+          type: 'group',
+          groupId: item.groupId,
+          items: []
+        };
+        groupMap.set(item.groupId, grp);
+        treeEntries.push(grp);
+      }
+      groupMap.get(item.groupId).items.push({ item, index });
+    } else {
+      treeEntries.push({ type: 'single', item, index });
+    }
+  });
+
+  let html = '';
+  treeEntries.forEach(entry => {
+    if (entry.type === 'single') {
+      const { item, index } = entry;
+      const info = getElementInfo(item, index);
+      const isSel = selectedItems.includes(item);
+      html += `
+        <div class="element-item-card ${isSel ? 'selected' : ''}" data-elindex="${index}">
+          <div class="element-item-header" draggable="true">
+            <div class="element-item-info">
+              <span class="element-drag-handle" title="Drag to reorder layer">::</span>
+              <span style="font-size:8px; color:var(--text-dim);">${isSel ? '▾' : '▸'}</span>
+              <span class="element-item-tag" style="font-size:9px; font-weight:700; color:var(--accent); background:rgba(56,189,248,0.1); padding:1px 4px; border-radius:3px;">${info.tag}</span>
+              <span class="element-label-text">${info.label}</span>
+            </div>
+            <div class="element-item-actions">
+              <button class="element-item-btn element-item-del" data-delindex="${index}" title="Delete Element">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+          ${isSel ? `<div class="element-accordion-body" id="accBody_${index}" draggable="false"></div>` : ''}
+        </div>
+      `;
+    } else {
+      const { groupId, items } = entry;
+      const groupItemsList = items.map(x => x.item);
+      const isGroupSelected = groupItemsList.length > 0 && groupItemsList.every(i => selectedItems.includes(i));
+      const isExpanded = treeExpandedGroups.has(groupId);
+
+      let groupTag = 'GROUP';
+      let groupLabel = `Group (${items.length} items)`;
+      if (groupId.startsWith('g_circle_')) {
+        groupTag = 'CIRCLE';
+        groupLabel = `Circle Wall (${items.length} segments)`;
+      } else if (groupId.startsWith('g_arc_')) {
+        groupTag = 'ARC';
+        groupLabel = `Arc Wall (${items.length} segments)`;
+      } else if (groupId.startsWith('g_rect_')) {
+        groupTag = 'RECT';
+        groupLabel = `Rectangle Wall (${items.length} segments)`;
+      } else if (groupId.startsWith('g_poly_')) {
+        groupTag = 'POLYGON';
+        groupLabel = `Polygon Wall (${items.length} segments)`;
+      }
+
+      let childrenHtml = '';
+      if (isExpanded) {
+        childrenHtml = `
+          <div class="tree-children-container">
+            ${items.map(({ item: child, index: childIdx }, sIdx) => {
+              const isChildSel = selectedItems.includes(child);
+              return `
+                <div class="tree-child-item ${isChildSel ? 'selected' : ''}" data-childindex="${childIdx}" title="Click to inspect segment">
+                  <span>↳ Segment #${sIdx + 1}</span>
+                  <span style="font-size:8.5px; opacity:0.6;">#${childIdx + 1}</span>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+      }
+
+      html += `
+        <div class="element-item-card tree-group-card ${isGroupSelected ? 'selected' : ''}" data-groupid="${groupId}">
+          <div class="element-item-header tree-group-header">
+            <div class="element-item-info">
+              <span class="tree-toggle-arrow" data-togglegroup="${groupId}" title="Toggle Feature Tree">${isExpanded ? '▼' : '▶'}</span>
+              <span class="element-item-tag" style="font-size:9px; font-weight:700; color:#38bdf8; background:rgba(56,189,248,0.15); padding:1px 4px; border-radius:3px;">${groupTag}</span>
+              <span class="element-label-text" style="font-weight:600;">${groupLabel}</span>
+            </div>
+            <div class="element-item-actions">
+              <button class="element-item-btn element-group-del" data-delgroup="${groupId}" title="Delete Entire Group">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+          ${isGroupSelected ? `<div class="element-accordion-body" id="groupAccBody_${groupId}" draggable="false"></div>` : ''}
+          ${childrenHtml}
+        </div>
+      `;
+    }
+  });
+
+  elementsListContainer.innerHTML = html;
+
+  // Render accordion bodies
+  treeEntries.forEach(entry => {
+    if (entry.type === 'single') {
+      const { item, index } = entry;
+      if (selectedItems.includes(item)) {
+        const body = document.getElementById(`accBody_${index}`);
+        if (body) {
+          renderItemAccordionBody(item, body, index);
+        }
+      }
+    } else {
+      const { groupId, items } = entry;
+      const groupItemsList = items.map(x => x.item);
+      const isGroupSelected = groupItemsList.length > 0 && groupItemsList.every(i => selectedItems.includes(i));
+      if (isGroupSelected) {
+        const body = document.getElementById(`groupAccBody_${groupId}`);
+        if (body) {
+          renderGroupAccordionBody({ id: groupId, items: groupItemsList }, body);
+        }
+      }
+    }
+  });
+
+  // Feature Tree toggle arrow click
+  elementsListContainer.querySelectorAll('.tree-toggle-arrow').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const gid = btn.dataset.togglegroup;
+      if (treeExpandedGroups.has(gid)) treeExpandedGroups.delete(gid);
+      else treeExpandedGroups.add(gid);
+      updateElementsList();
+    });
+  });
+
+  // Group Header click: select/deselect all in group
+  elementsListContainer.querySelectorAll('.tree-group-header').forEach(hdr => {
+    hdr.addEventListener('click', (e) => {
+      if (e.target.closest('.element-item-actions') || e.target.closest('.tree-toggle-arrow')) return;
+      const card = hdr.closest('.tree-group-card');
+      const gid = card.dataset.groupid;
+      const grp = groupMap.get(gid);
+      if (grp) {
+        const groupItemsList = grp.items.map(x => x.item);
+        const isAllSelected = groupItemsList.length > 0 && groupItemsList.every(i => selectedItems.includes(i));
+        if (isAllSelected && selectedItems.length === groupItemsList.length) {
+          selectedItems = [];
+        } else {
+          selectedItems = [...groupItemsList];
+        }
+        updateElementsList();
+      }
+    });
+  });
+
+  // Group Delete button
+  elementsListContainer.querySelectorAll('.element-group-del').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const gid = btn.dataset.delgroup;
+      const grp = groupMap.get(gid);
+      if (grp) {
+        selectedItems = grp.items.map(x => x.item);
+        deleteSelectedItems();
+      }
+    });
+  });
+
+  // Child item click in Feature Tree
+  elementsListContainer.querySelectorAll('.tree-child-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const childIdx = parseInt(el.dataset.childindex, 10);
+      const childItem = elements[childIdx];
+      if (childItem) {
+        selectedItems = [childItem];
+        updateElementsList();
+      }
+    });
+  });
+
+  // Drag and Drop Layer Reordering (Single item cards)
+  let draggedCardIdx = null;
+  let hasDragged = false;
+  const cards = elementsListContainer.querySelectorAll('.element-item-card[data-elindex]');
+
+  cards.forEach(card => {
+    const header = card.querySelector('.element-item-header');
+    if (header) {
+      header.addEventListener('dragstart', (e) => {
+        if (e.target.closest('.element-item-del') || e.target.closest('button')) {
+          e.preventDefault();
+          return;
+        }
+        hasDragged = true;
+        draggedCardIdx = parseInt(card.dataset.elindex, 10);
+        card.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(draggedCardIdx));
+      });
+
+      header.addEventListener('dragend', () => {
+        cards.forEach(c => {
+          c.classList.remove('dragging');
+          c.classList.remove('drag-over');
+        });
+        draggedCardIdx = null;
+        setTimeout(() => { hasDragged = false; }, 50);
+      });
+    }
+
+    card.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      card.classList.add('drag-over');
+    });
+
+    card.addEventListener('dragleave', () => {
+      card.classList.remove('drag-over');
+    });
+
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      card.classList.remove('drag-over');
+      const targetIdx = parseInt(card.dataset.elindex, 10);
+      if (draggedCardIdx !== null && draggedCardIdx !== targetIdx && !isNaN(targetIdx)) {
+        recordUndoState();
+        engine.reorderElements(draggedCardIdx, targetIdx);
+        updateElementsList();
+      }
+    });
+  });
+
+  // Single card header click: select / accordion toggle
+  elementsListContainer.querySelectorAll('.element-item-card[data-elindex] > .element-item-header').forEach(hdr => {
+    hdr.addEventListener('click', (e) => {
+      if (hasDragged || e.target.closest('.element-item-actions')) return;
+      const card = hdr.closest('.element-item-card');
+      const idx = parseInt(card.dataset.elindex, 10);
+      const item = elements[idx];
+      if (item) {
+        if (selectedItems.includes(item) && selectedItems.length === 1) {
+          selectedItems = [];
+        } else {
+          selectedItems = item.groupId ? getAllGroupItems(item) : [item];
+        }
+        updateElementsList();
+      }
+    });
+  });
+
+  // Single card delete button
+  elementsListContainer.querySelectorAll('.element-item-card[data-elindex] .element-item-del').forEach(delBtn => {
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(delBtn.dataset.delindex, 10);
+      const item = elements[idx];
+      if (item) {
+        selectedItems = [item];
+        deleteSelectedItems();
+      }
+    });
+  });
+}
+
+// ============================================================================
+// Desktop Menu Bar Logic (File, Edit, View, Help)
+// ============================================================================
+const menuItems = document.querySelectorAll('.menu-item');
+let isAnyMenuOpen = false;
+
+function closeAllMenus() {
+  menuItems.forEach(item => item.classList.remove('open'));
+  isAnyMenuOpen = false;
+}
+
+menuItems.forEach(item => {
+  const btn = item.querySelector('.menu-btn');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = item.classList.contains('open');
+    closeAllMenus();
+    if (!isOpen) {
+      item.classList.add('open');
+      isAnyMenuOpen = true;
+    }
+  });
+
+  item.addEventListener('mouseenter', () => {
+    if (isAnyMenuOpen) {
+      closeAllMenus();
+      item.classList.add('open');
+      isAnyMenuOpen = true;
+    }
+  });
+});
+
+window.addEventListener('click', (e) => {
+  if (!e.target.closest('.menu-item')) {
+    closeAllMenus();
+  }
+});
+
+// File Menu Actions
+document.getElementById('menuEntryImport').addEventListener('click', () => {
+  closeAllMenus();
+  fileImportInput.click();
+});
+
+document.getElementById('menuEntrySaveAs').addEventListener('click', () => {
+  closeAllMenus();
+  openSaveModal();
+});
+
+function resetToLoadedProfile() {
+  isSimulating = false;
+  engine.isPaused = true;
+  document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
+  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
+  
+  engine.resetToLoadedProfile();
+  
+  if (engine.currentProfileName) {
+    currentProjectName = engine.currentProfileName;
+    headerProjectTitle.textContent = `${currentProjectName}.json`;
+  }
+  
+  selectedItems = [];
+  resetPolygonDraft();
+  arcSteps = [];
+  historyBuffer.length = 0;
+  undoStack.length = 0;
+  redoStack.length = 0;
+  
+  playIcon.classList.add('is-play');
+  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
+  
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+  renderToolProperties(activeTool);
+  timeVal.textContent = '0.00 s';
+}
+
+document.getElementById('menuEntryReset').addEventListener('click', () => {
+  closeAllMenus();
+  resetToLoadedProfile();
+});
+
+document.getElementById('menuEntryClear').addEventListener('click', () => {
+  closeAllMenus();
+  recordUndoState();
+  engine.clear();
+  resetPolygonDraft();
+  arcSteps = [];
+  selectedItems = [];
+  historyBuffer.length = 0;
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+  renderToolProperties(activeTool);
+});
+
+btnToolbarReset.addEventListener('click', resetToLoadedProfile);
+
+btnToolbarClear.addEventListener('click', () => {
+  document.getElementById('menuEntryClear').click();
+});
+
+// Edit Menu Actions
+document.getElementById('menuEntryUndo').addEventListener('click', () => {
+  closeAllMenus();
+  performUndo();
+});
+
+document.getElementById('menuEntryRedo').addEventListener('click', () => {
+  closeAllMenus();
+  performRedo();
+});
+
+document.getElementById('menuEntryDuplicate').addEventListener('click', () => {
+  closeAllMenus();
+  ctxDuplicate.click();
+});
+
+document.getElementById('menuEntryGroup').addEventListener('click', () => {
+  closeAllMenus();
+  ctxGroup.click();
+});
+
+document.getElementById('menuEntryDelete').addEventListener('click', () => {
+  closeAllMenus();
+  deleteSelectedItems();
+});
+
+// View Menu Actions
+function updateViewMenuLabels() {
+  document.getElementById('labelMenuGrid').textContent = renderer.showGrid ? '✓ Show Grid' : 'Show Grid';
+  document.getElementById('labelGrid10').textContent = renderer.gridSize === 10 ? '✓ Grid Size: 10 px' : 'Grid Size: 10 px';
+  document.getElementById('labelGrid20').textContent = renderer.gridSize === 20 ? '✓ Grid Size: 20 px' : 'Grid Size: 20 px';
+  document.getElementById('labelGrid40').textContent = renderer.gridSize === 40 ? '✓ Grid Size: 40 px' : 'Grid Size: 40 px';
+  document.getElementById('labelMenuSnap').textContent = renderer.snapToGrid ? '✓ Snap to Grid' : 'Snap to Grid';
+  document.getElementById('labelMenuVectors').textContent = renderer.showVectors ? '✓ Velocity Vectors (v⃗)' : 'Velocity Vectors (v⃗)';
+  const labelColor = document.getElementById('labelMenuColor');
+  if (labelColor) labelColor.textContent = renderer.colorByVelocity ? '✓ Color by Speed (|v|)' : 'Color by Speed (|v|)';
+
+  btnToggleGrid.classList.toggle('active', renderer.showGrid);
+  btnToggleSnap.classList.toggle('active', renderer.snapToGrid);
+  btnToggleVectors.classList.toggle('active', renderer.showVectors);
+  if (btnToggleColor) btnToggleColor.classList.toggle('active', renderer.colorByVelocity);
+
+  const floatingVelLegend = document.getElementById('floatingVelLegend');
+  if (floatingVelLegend) {
+    floatingVelLegend.style.display = renderer.colorByVelocity ? 'flex' : 'none';
+  }
+}
+
+document.getElementById('menuEntryToggleGrid').addEventListener('click', () => {
+  renderer.showGrid = !renderer.showGrid;
+  updateViewMenuLabels();
+  closeAllMenus();
+});
+
+btnToggleGrid.addEventListener('click', () => {
+  renderer.showGrid = !renderer.showGrid;
+  updateViewMenuLabels();
+});
+
+selectGridSize.addEventListener('change', (e) => {
+  renderer.gridSize = parseInt(e.target.value, 10);
+  updateViewMenuLabels();
+});
+
+document.getElementById('menuEntryGrid10').addEventListener('click', () => {
+  renderer.gridSize = 10;
+  selectGridSize.value = "10";
+  updateViewMenuLabels();
+  closeAllMenus();
+});
+
+document.getElementById('menuEntryGrid20').addEventListener('click', () => {
+  renderer.gridSize = 20;
+  selectGridSize.value = "20";
+  updateViewMenuLabels();
+  closeAllMenus();
+});
+
+document.getElementById('menuEntryGrid40').addEventListener('click', () => {
+  renderer.gridSize = 40;
+  selectGridSize.value = "40";
+  updateViewMenuLabels();
+  closeAllMenus();
+});
+
+document.getElementById('menuEntryToggleSnap').addEventListener('click', () => {
+  renderer.snapToGrid = !renderer.snapToGrid;
+  updateViewMenuLabels();
+  closeAllMenus();
+});
+
+btnToggleSnap.addEventListener('click', () => {
+  renderer.snapToGrid = !renderer.snapToGrid;
+  updateViewMenuLabels();
+});
+
+document.getElementById('menuEntryToggleVectors').addEventListener('click', () => {
+  renderer.showVectors = !renderer.showVectors;
+  updateViewMenuLabels();
+  closeAllMenus();
+});
+
+btnToggleVectors.addEventListener('click', () => {
+  renderer.showVectors = !renderer.showVectors;
+  updateViewMenuLabels();
+});
+
+document.getElementById('menuEntryToggleColor')?.addEventListener('click', () => {
+  renderer.colorByVelocity = !renderer.colorByVelocity;
+  updateViewMenuLabels();
+  closeAllMenus();
+});
+
+btnToggleColor?.addEventListener('click', () => {
+  renderer.colorByVelocity = !renderer.colorByVelocity;
+  updateViewMenuLabels();
+});
+
+document.getElementById('menuEntryResetView').addEventListener('click', () => {
+  renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
+  updateZoomText();
+  closeAllMenus();
+});
+
+// Help Menu
+document.getElementById('menuEntryGuide').addEventListener('click', () => {
+  infoModal.style.display = 'flex';
+  closeAllMenus();
+});
+
+// ============================================================================
+// Save Project As Dialog Workflow
+// ============================================================================
+function updateSaveFilePreview() {
+  const name = saveProjectNameInput.value.trim() || 'Project';
+  const cleanName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  saveFilenamePreview.textContent = `${cleanName}.json`;
+}
+
+function openSaveModal() {
+  saveProjectNameInput.value = currentProjectName;
+  updateSaveFilePreview();
+  saveModal.style.display = 'flex';
+  setTimeout(() => saveProjectNameInput.select(), 50);
+}
+
+function closeSaveModal() {
+  saveModal.style.display = 'none';
+}
+
+saveProjectNameInput.addEventListener('input', updateSaveFilePreview);
+btnSaveClose.addEventListener('click', closeSaveModal);
+btnSaveCancel.addEventListener('click', closeSaveModal);
+window.addEventListener('click', (e) => { if (e.target === saveModal) closeSaveModal(); });
+
+btnSaveDownload.addEventListener('click', () => {
+  const chosenName = saveProjectNameInput.value.trim() || 'Project';
+  currentProjectName = chosenName;
+  headerProjectTitle.textContent = `${chosenName}.json`;
+
+  const state = engine.exportState(chosenName);
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${chosenName.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  closeSaveModal();
+});
+
+fileImportInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (evt) => {
+    try {
+      recordUndoState();
+      const data = JSON.parse(evt.target.result);
+      if (data.profileName) {
+        currentProjectName = data.profileName;
+      } else {
+        currentProjectName = file.name.replace(/\.json$/i, '');
+        data.profileName = currentProjectName;
+      }
+      headerProjectTitle.textContent = `${currentProjectName}.json`;
+      engine.setLoadedProfile(data);
+      selectedItems = [];
+      updateElementsList();
+      renderToolProperties(activeTool);
+    } catch (err) {
+      alert('Invalid JSON configuration file.');
+    }
+  };
+  reader.readAsText(file);
+  fileImportInput.value = '';
+});
+
+// ============================================================================
+// Playback Controls & Physics Model Toggle
+// ============================================================================
+modelToggleBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    modelToggleBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    engine.simModel = btn.dataset.model;
+  });
+});
+
+btnPlayPause.addEventListener('click', () => {
+  if (!isSimulating) {
+    engine.saveSimStartSnapshot();
+    isSimulating = true;
+    document.querySelector('.ribbon-row-construction')?.classList.add('simulating-locked');
+    document.getElementById('btnToolbarClear')?.setAttribute('disabled', 'true');
+    document.getElementById('toolSelect')?.click();
+    selectedItems = [];
+    resetPolygonDraft();
+    arcSteps = [];
+    closePopup();
+    closeContextMenu();
+  }
+
+  engine.isPaused = !engine.isPaused;
+  if (engine.isPaused) {
+    playIcon.classList.add('is-play');
+    playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
+  } else {
+    playIcon.classList.remove('is-play');
+    playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="4" height="16" rx="1"/><rect x="15" y="4" width="4" height="16" rx="1"/></svg>';
+  }
+});
+
+btnStep.addEventListener('click', () => {
+  if (!isSimulating) {
+    engine.saveSimStartSnapshot();
+    isSimulating = true;
+    document.querySelector('.ribbon-row-construction')?.classList.add('simulating-locked');
+    document.getElementById('btnToolbarClear')?.setAttribute('disabled', 'true');
+    document.getElementById('toolSelect')?.click();
+    closePopup();
+    closeContextMenu();
+  }
+  pushHistoryFrame();
+  engine.isPaused = false;
+  engine.step(0.016);
+  engine.isPaused = true;
+  playIcon.classList.add('is-play');
+  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
+});
+
+btnStepBack.addEventListener('click', () => {
+  popHistoryFrame();
+});
+
+btnStopReset.addEventListener('click', () => {
+  isSimulating = false;
+  engine.isPaused = true;
+  document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
+  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
+  
+  engine.restoreSimStartSnapshot();
+  
+  selectedItems = [];
+  historyBuffer.length = 0;
+  
+  playIcon.classList.add('is-play');
+  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
+  
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+  renderToolProperties(activeTool);
+  timeVal.textContent = '0.00 s';
+});
+
+document.getElementById('btnUnlockSim')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  btnStopReset.click();
+});
+
+speedSlider.addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  engine.timeScale = v;
+  speedVal.textContent = `${v.toFixed(2)}×`;
+});
+
+// Zoom Controls
+function updateZoomText() {
+  zoomDisplay.textContent = `${Math.round(renderer.zoom * 100)}%`;
+}
+btnZoomIn.addEventListener('click', () => {
+  renderer.zoomAt(canvas.width * 0.5, canvas.height * 0.5, 1.2);
+  updateZoomText();
+  updatePopupPosition();
+});
+btnZoomOut.addEventListener('click', () => {
+  renderer.zoomAt(canvas.width * 0.5, canvas.height * 0.5, 0.83);
+  updateZoomText();
+  updatePopupPosition();
+});
+btnResetView.addEventListener('click', () => {
+  renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
+  updateZoomText();
+  updatePopupPosition();
+});
+
+// Snapping to Existing Wall Endpoints (Magnetic Snap)
+function findSnapVertex(posWorld, maxDist = 14) {
+  let closest = null;
+  let minDistSq = maxDist * maxDist;
+
+  for (const wall of engine.walls) {
+    const d1Sq = (posWorld.x - wall.p1.x) ** 2 + (posWorld.y - wall.p1.y) ** 2;
+    if (d1Sq < minDistSq) {
+      minDistSq = d1Sq;
+      closest = { x: wall.p1.x, y: wall.p1.y, isVertex: true };
+    }
+    const d2Sq = (posWorld.x - wall.p2.x) ** 2 + (posWorld.y - wall.p2.y) ** 2;
+    if (d2Sq < minDistSq) {
+      minDistSq = d2Sq;
+      closest = { x: wall.p2.x, y: wall.p2.y, isVertex: true };
+    }
+  }
+  return closest;
+}
+
+// Coordinate Converter
+function getCoords(evt) {
+  const rect = canvas.getBoundingClientRect();
+  const screenX = evt.clientX - rect.left;
+  const screenY = evt.clientY - rect.top;
+  const world = renderer.screenToWorld(screenX, screenY);
+  
+  // Magnetic Snapping for drawing tools
+  const isDrawingTool = activeTool === 'wall' || activeTool === 'valve' || activeTool === 'throttle_valve';
+  const snapVertex = isDrawingTool ? findSnapVertex(world, 14 / renderer.zoom) : null;
+  if (snapVertex) {
+    return {
+      screenX, screenY,
+      worldX: snapVertex.x,
+      worldY: snapVertex.y,
+      snapX: snapVertex.x,
+      snapY: snapVertex.y,
+      isVertex: true
+    };
+  }
+
+  return {
+    screenX, screenY,
+    worldX: world.x,
+    worldY: world.y,
+    snapX: snapToGrid(world.x),
+    snapY: snapToGrid(world.y),
+    isVertex: false
+  };
+}
+
+// Mouse Handlers
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.1 : 0.9;
+  const coords = getCoords(e);
+  renderer.zoomAt(coords.screenX, coords.screenY, factor);
+  updateZoomText();
+  updatePopupPosition();
+}, { passive: false });
+
+// Right-Click Context Menu
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const coords = getCoords(e);
+  resetPolygonDraft();
+  arcSteps = [];
+
+  if (isSimulating) return;
+
+  const item = findItemAt(coords.worldX, coords.worldY);
+  if (item) {
+    if (!selectedItems.includes(item)) selectedItems = [item];
+    updateElementsList();
+    openContextMenu(e.clientX, e.clientY);
+  } else {
+    closeContextMenu();
+  }
+});
+
+function openContextMenu(screenX, screenY) {
+  contextMenu.style.left = `${Math.min(window.innerWidth - 180, screenX)}px`;
+  contextMenu.style.top = `${Math.min(window.innerHeight - 150, screenY)}px`;
+  contextMenu.style.display = 'flex';
+}
+
+function closeContextMenu() {
+  contextMenu.style.display = 'none';
+}
+
+window.addEventListener('click', (e) => {
+  if (!contextMenu.contains(e.target)) closeContextMenu();
+});
+
+ctxDelete?.addEventListener('click', () => {
+  recordUndoState();
+  deleteSelectedItems();
+  closeContextMenu();
+});
+
+ctxDuplicate?.addEventListener('click', () => {
+  if (selectedItems.length === 0) return;
+  recordUndoState();
+  const newItems = [];
+  selectedItems.forEach(item => {
+    if (item instanceof Wall) {
+      const w = engine.addWall(item.p1.x + 20, item.p1.y + 20, item.p2.x + 20, item.p2.y + 20, {
+        type: item.type, conductivity: item.conductivity, thickness: item.thickness,
+        allowedDirection: item.allowedDirection, triggerPressure: item.triggerPressure, reliefMode: item.reliefMode
+      });
+      newItems.push(w);
+    } else if (item instanceof Reservoir) {
+      const r = engine.addReservoir(item.x + 20, item.y + 20, item.width, item.height, {
+        label: item.label, temperature: item.temperature, conductance: item.conductance
+      });
+      newItems.push(r);
+    } else if (item instanceof HeatExchanger) {
+      const hx = engine.addHeatExchanger(item.x + 20, item.y + 20, item.width, item.height, {
+        temperature: item.temperature, conductivity: item.conductivity, isActive: item.isActive
+      });
+      newItems.push(hx);
+    } else if (item instanceof RegeneratorMatrix) {
+      const reg = engine.addRegeneratorMatrix(item.x + 20, item.y + 20, item.width, item.height, {
+        orientation: item.orientation, sliceCount: item.sliceCount, heatCapacity: item.heatCapacity,
+        conductivity: item.conductivity, axialConductivity: item.axialConductivity,
+        temperatures: [...item.temperatures], isActive: item.isActive
+      });
+      newItems.push(reg);
+    } else if (item instanceof ThermalBlock) {
+      const b = engine.addThermalBlock(item.x + 20, item.y + 20, item.width, item.height, {
+        temperature: item.temperature, heatCapacity: item.heatCapacity, conductivity: item.conductivity, isActive: item.isActive
+      });
+      newItems.push(b);
+    } else if (item instanceof Emitter) {
+      const em = engine.addEmitter(item.x + 20, item.y + 20, item.width, item.height, {
+        rate: item.rate, temperature: item.temperature, mass: item.mass, direction: item.direction, speed: item.speed, maxParticles: item.maxParticles
+      });
+      newItems.push(em);
+    } else if (item instanceof Sink) {
+      const sk = engine.addSink(item.x + 20, item.y + 20, item.width, item.height, {
+        absorptionEfficiency: item.absorptionEfficiency
+      });
+      newItems.push(sk);
+    } else if (item instanceof Regulator) {
+      const reg = engine.addRegulator(item.x + 20, item.y + 20, item.width, item.height, {
+        targetCount: item.targetCount, hysteresis: item.hysteresis,
+        temperature: item.temperature, mass: item.mass, rate: item.rate, isActive: item.isActive
+      });
+      newItems.push(reg);
+    } else if (item instanceof ThrottleValve) {
+      const tv = engine.addThrottleValve(item.p1.x + 20, item.p1.y + 20, item.p2.x + 20, item.p2.y + 20, {
+        openRatio: item.openRatio, thickness: item.thickness, conductivity: item.conductivity, temperature: item.temperature, isActive: item.isActive
+      });
+      newItems.push(tv);
+    } else if (item instanceof SensorZone) {
+      const s = engine.addSensor({
+        label: `${item.label} (Copy)`, x: item.x + 20, y: item.y + 20, width: item.width, height: item.height
+      });
+      newItems.push(s);
+    }
+  });
+  selectedItems = newItems;
+  updateElementsList();
+  closeContextMenu();
+});
+
+ctxGroup?.addEventListener('click', () => {
+  toggleGroupSelection();
+  closeContextMenu();
+});
+
+ctxBringFront?.addEventListener('click', () => {
+  if (selectedItems.length === 0) return;
+  recordUndoState();
+  selectedItems.forEach(item => engine.bringToFront(item));
+  updateElementsList();
+  closeContextMenu();
+});
+
+ctxBringForward?.addEventListener('click', () => {
+  if (selectedItems.length === 0) return;
+  recordUndoState();
+  selectedItems.forEach(item => engine.bringForward(item));
+  updateElementsList();
+  closeContextMenu();
+});
+
+ctxSendBackward?.addEventListener('click', () => {
+  if (selectedItems.length === 0) return;
+  recordUndoState();
+  selectedItems.forEach(item => engine.sendBackward(item));
+  updateElementsList();
+  closeContextMenu();
+});
+
+ctxSendBack?.addEventListener('click', () => {
+  if (selectedItems.length === 0) return;
+  recordUndoState();
+  selectedItems.forEach(item => engine.sendToBack(item));
+  updateElementsList();
+  closeContextMenu();
+});
+
+// ============================================================================
+// Canvas Selection & Multi-Item Transforms
+// ============================================================================
+function getSelectionBounds() {
+  if (selectedItems.length === 0) return null;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const item of selectedItems) {
+    if (item.p1 && item.p2) {
+      minX = Math.min(minX, item.p1.x, item.p2.x);
+      maxX = Math.max(maxX, item.p1.x, item.p2.x);
+      minY = Math.min(minY, item.p1.y, item.p2.y);
+      maxY = Math.max(maxY, item.p1.y, item.p2.y);
+    } else if (item.x !== undefined && item.y !== undefined) {
+      const w = item.width || 30;
+      const h = item.height || 30;
+      minX = Math.min(minX, item.x);
+      maxX = Math.max(maxX, item.x + w);
+      minY = Math.min(minY, item.y);
+      maxY = Math.max(maxY, item.y + h);
+    }
+  }
+  return { minX, maxX, minY, maxY, cx: (minX + maxX) * 0.5, cy: (minY + maxY) * 0.5 };
+}
+
+function rotateSelection90() {
+  if (selectedItems.length === 0 || isSimulating) return;
+  recordUndoState();
+  const bounds = getSelectionBounds();
+  if (!bounds) return;
+  const { cx, cy } = bounds;
+
+  for (const item of selectedItems) {
+    if (item.p1 && item.p2) {
+      const x1 = cx - (item.p1.y - cy);
+      const y1 = cy + (item.p1.x - cx);
+      const x2 = cx - (item.p2.y - cy);
+      const y2 = cy + (item.p2.x - cx);
+      item.setPoints(x1, y1, x2, y2);
+    } else if (item.x !== undefined && item.y !== undefined) {
+      const w = item.width || 40;
+      const h = item.height || 40;
+      const itemCenterX = item.x + w * 0.5;
+      const itemCenterY = item.y + h * 0.5;
+      const newCenterX = cx - (itemCenterY - cy);
+      const newCenterY = cy + (itemCenterX - cx);
+      
+      item.width = h;
+      item.height = w;
+      item.x = newCenterX - item.width * 0.5;
+      item.y = newCenterY - item.height * 0.5;
+
+      if (item.direction) {
+        const dirs = ['right', 'down', 'left', 'up'];
+        const idx = dirs.indexOf(item.direction);
+        if (idx !== -1) item.direction = dirs[(idx + 1) % 4];
+      }
+      if (item.orientation) {
+        item.orientation = item.orientation === 'horizontal' ? 'vertical' : 'horizontal';
+      }
+    }
+  }
+  updateElementsList();
+}
+
+function flipSelectionH() {
+  if (selectedItems.length === 0 || isSimulating) return;
+  recordUndoState();
+  const bounds = getSelectionBounds();
+  if (!bounds) return;
+  const { cx } = bounds;
+
+  for (const item of selectedItems) {
+    if (item.p1 && item.p2) {
+      const x1 = 2 * cx - item.p1.x;
+      const x2 = 2 * cx - item.p2.x;
+      item.setPoints(x1, item.p1.y, x2, item.p2.y);
+      if (item.flipDirection) item.flipDirection();
+      else if (item.allowedDirection) item.allowedDirection = -item.allowedDirection;
+    } else if (item.x !== undefined) {
+      const w = item.width || 40;
+      const itemCenterX = item.x + w * 0.5;
+      const newCenterX = 2 * cx - itemCenterX;
+      item.x = newCenterX - w * 0.5;
+      if (item.direction === 'right') item.direction = 'left';
+      else if (item.direction === 'left') item.direction = 'right';
+    }
+  }
+  updateElementsList();
+}
+
+function flipSelectionV() {
+  if (selectedItems.length === 0 || isSimulating) return;
+  recordUndoState();
+  const bounds = getSelectionBounds();
+  if (!bounds) return;
+  const { cy } = bounds;
+
+  for (const item of selectedItems) {
+    if (item.p1 && item.p2) {
+      const y1 = 2 * cy - item.p1.y;
+      const y2 = 2 * cy - item.p2.y;
+      item.setPoints(item.p1.x, y1, item.p2.x, y2);
+      if (item.flipDirection) item.flipDirection();
+      else if (item.allowedDirection) item.allowedDirection = -item.allowedDirection;
+    } else if (item.y !== undefined) {
+      const h = item.height || 40;
+      const itemCenterY = item.y + h * 0.5;
+      const newCenterY = 2 * cy - itemCenterY;
+      item.y = newCenterY - h * 0.5;
+      if (item.direction === 'up') item.direction = 'down';
+      else if (item.direction === 'down') item.direction = 'up';
+    }
+  }
+  updateElementsList();
+}
+
+function getAllGroupItems(item) {
+  if (!item || !item.groupId) return [item];
+  const all = [
+    ...engine.walls,
+    ...(engine.throttleValves || []),
+    ...engine.pistons,
+    ...engine.reservoirs,
+    ...engine.thermalBlocks,
+    ...engine.heatExchangers,
+    ...engine.regenerators,
+    ...engine.emitters,
+    ...engine.sinks,
+    ...engine.regulators,
+    ...engine.sensors,
+    ...engine.textLabels
+  ];
+  const group = all.filter(i => i.groupId && i.groupId === item.groupId);
+  return group.length > 0 ? group : [item];
+}
+
+function toggleGroupSelection() {
+  if (selectedItems.length === 0 || isSimulating) return;
+  recordUndoState();
+  const allSameGroup = selectedItems.length > 1 && selectedItems.every(i => i.groupId && i.groupId === selectedItems[0].groupId);
+  if (allSameGroup) {
+    selectedItems.forEach(i => { delete i.groupId; });
+  } else {
+    const gid = 'g_' + Math.random().toString(36).substring(2, 8);
+    selectedItems.forEach(i => { i.groupId = gid; });
+  }
+  updateElementsList();
+}
+
+btnRotate90?.addEventListener('click', rotateSelection90);
+btnFlipH?.addEventListener('click', flipSelectionH);
+btnFlipV?.addEventListener('click', flipSelectionV);
+btnGroupSelected?.addEventListener('click', toggleGroupSelection);
+
+// ============================================================================
+// Canvas Mouse Interactions
+// ============================================================================
+canvas.addEventListener('mousedown', (e) => {
+  closeContextMenu();
+  closeAllMenus();
+  const coords = getCoords(e);
+  currentCursorWorld = { x: coords.snapX, y: coords.snapY };
+
+  // Direct Click during Simulation: Toggle manual valves & emitters
+  if (isSimulating) {
+    for (let i = 0; i < engine.walls.length; i++) {
+      const w = engine.walls[i];
+      if (w.type === 'manual_valve') {
+        const closest = w.getClosestPoint(new Vector2(coords.worldX, coords.worldY));
+        if (Math.hypot(closest.x - coords.worldX, closest.y - coords.worldY) < 18 / renderer.zoom) {
+          w.isOpen = !w.isOpen;
+          return;
+        }
+      }
+    }
+    for (let i = 0; i < (engine.throttleValves || []).length; i++) {
+      const tv = engine.throttleValves[i];
+      const closest = tv._closestPointOnSegment(new Vector2(coords.worldX, coords.worldY), tv.p1, tv.p2);
+      if (Math.hypot(closest.x - coords.worldX, closest.y - coords.worldY) < 18 / renderer.zoom) {
+        tv.toggle();
+        return;
+      }
+    }
+    const clickedEm = engine.emitters.find(em => em.contains(coords.worldX, coords.worldY));
+    if (clickedEm) {
+      clickedEm.toggle();
+      return;
+    }
+  }
+
+  // Panning with Middle Mouse or Alt-Click
+  if (e.button === 1 || e.altKey) {
+    isPanning = true;
+    panStartScreen = { x: coords.screenX, y: coords.screenY };
+    panStartCamera = { x: renderer.panX, y: renderer.panY };
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  if (e.button !== 0) return;
+
+  isMouseDown = true;
+  dragStartWorld = { x: coords.snapX, y: coords.snapY };
+
+  const clickedItem = findItemAt(coords.worldX, coords.worldY);
+
+  // In Simulation Mode or Direct Click: Toggle interactive thermal/mechanical elements
+  if (clickedItem && (isSimulating || (activeTool === 'select' && !e.shiftKey))) {
+    if (
+      clickedItem instanceof HeatExchanger ||
+      clickedItem instanceof RegeneratorMatrix ||
+      clickedItem instanceof ThermalBlock ||
+      clickedItem instanceof Reservoir ||
+      clickedItem instanceof Emitter ||
+      clickedItem instanceof Regulator ||
+      (clickedItem instanceof Piston && (clickedItem.mode === 'motorized' || clickedItem.mode === 'damper'))
+    ) {
+      if (isSimulating) {
+        clickedItem.toggle();
+        updateElementsList();
+        return;
+      }
+    }
+  }
+
+  // Polyline Wall Placement & Closing (must precede handle dragging & selection to allow closing loop on start vertex)
+  if (!isSimulating && activeTool === 'wall' && toolConfigs.wall.shape === 'polygon') {
+    const pt = { x: coords.snapX, y: coords.snapY };
+    if (polygonPoints.length === 0) {
+      polygonGroupId = 'g_poly_' + Math.random().toString(36).substring(2, 9);
+      polygonWalls = [];
+      polygonPoints.push(pt);
+    } else {
+      const p0 = polygonPoints[0];
+      const closeDist = 18 / renderer.zoom;
+      const isCloseToStart = polygonPoints.length >= 2 && (
+        Math.hypot(coords.worldX - p0.x, coords.worldY - p0.y) < closeDist ||
+        (coords.snapX === p0.x && coords.snapY === p0.y)
+      );
+
+      const targetPt = isCloseToStart ? { x: p0.x, y: p0.y } : pt;
+      const prev = polygonPoints[polygonPoints.length - 1];
+
+      if (prev.x !== targetPt.x || prev.y !== targetPt.y) {
+        recordUndoState();
+        const cfg = toolConfigs.wall;
+        const w = engine.addWall(prev.x, prev.y, targetPt.x, targetPt.y, {
+          conductivity: cfg.conductivity,
+          thickness: cfg.thickness,
+          groupId: polygonGroupId
+        });
+        polygonWalls.push(w);
+
+        if (isCloseToStart) {
+          selectedItems = [...polygonWalls];
+          resetPolygonDraft();
+          updateElementsList();
+        } else {
+          polygonPoints.push(targetPt);
+          updateElementsList();
+        }
+      }
+    }
+    return;
+  }
+
+  // Handle Resize / Stroke Limit Handle Dragging (handles take precedence over tool creation)
+  if (!isSimulating) {
+    const handleHitRadius = 16 / renderer.zoom;
+
+    // Check handles of currently selected items first
+    for (const item of selectedItems) {
+      const handles = renderer.getResizeHandles(item);
+      for (let i = 0; i < handles.length; i++) {
+        const h = handles[i];
+        if (Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius) {
+          recordUndoState();
+          draggingHandle = { item, handleId: h.id };
+          return;
+        }
+      }
+    }
+
+    // Check if clicking directly on handles of unselected item
+    if (clickedItem && !selectedItems.includes(clickedItem)) {
+      const handles = renderer.getResizeHandles(clickedItem);
+      for (let i = 0; i < handles.length; i++) {
+        const h = handles[i];
+        if (Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius) {
+          selectedItems = [clickedItem];
+          updateElementsList();
+          recordUndoState();
+          draggingHandle = { item: clickedItem, handleId: h.id };
+          return;
+        }
+      }
+    }
+  }
+
+  // Select & Move (supports Shift + Click multi-selection, Group auto-selection & Particle selection)
+  if (!isSimulating && (activeTool === 'select' || e.shiftKey)) {
+    if (clickedItem) {
+      const itemsToToggle = clickedItem.groupId ? getAllGroupItems(clickedItem) : [clickedItem];
+      if (e.shiftKey) {
+        const isAnySelected = itemsToToggle.some(i => selectedItems.includes(i));
+        if (isAnySelected) {
+          selectedItems = selectedItems.filter(i => !itemsToToggle.includes(i));
+        } else {
+          selectedItems = [...selectedItems, ...itemsToToggle];
+        }
+      } else {
+        selectedItems = itemsToToggle;
+      }
+      recordUndoState();
+      isMovingSelection = true;
+      moveStartWorld = { x: coords.snapX, y: coords.snapY };
+      updateElementsList();
+      return;
+    } else {
+      // Check if clicking a single particle
+      const clickedP = engine.findParticleAt(coords.worldX, coords.worldY, 14 / renderer.zoom);
+      if (clickedP) {
+        if (!e.shiftKey) {
+          engine.particles.forEach(p => { p.selected = false; });
+          selectedItems = [];
+        }
+        clickedP.selected = !clickedP.selected;
+        if (clickedP.selected) selectedItems.push(clickedP);
+        else selectedItems = selectedItems.filter(i => i !== clickedP);
+        updateElementsList();
+        return;
+      } else if (!e.shiftKey) {
+        engine.particles.forEach(p => { p.selected = false; });
+        selectedItems = [];
+        updateElementsList();
+      }
+    }
+  }
+
+  // Text Tool
+  if (!isSimulating && activeTool === 'text') {
+    const txt = prompt('Enter text note:', toolConfigs.text.text || 'Annotation');
+    if (txt) {
+      recordUndoState();
+      const l = engine.addTextLabel(coords.snapX, coords.snapY, txt, { fontSize: toolConfigs.text.fontSize });
+      selectedItems = [l];
+      updateElementsList();
+    }
+    return;
+  }
+
+  // Arc Wall: 3 Clicks
+  if (!isSimulating && activeTool === 'wall' && toolConfigs.wall.shape === 'arc') {
+    arcSteps.push({ x: coords.snapX, y: coords.snapY });
+    if (arcSteps.length === 3) {
+      recordUndoState();
+      createArcWall(arcSteps[0], arcSteps[1], arcSteps[2]);
+      arcSteps = [];
+      updateElementsList();
+    }
+    return;
+  }
+});
+
+window.addEventListener('mousemove', (e) => {
+  const coords = getCoords(e);
+  currentCursorWorld = { x: coords.snapX, y: coords.snapY };
+  renderer.snapCursor = { x: coords.snapX, y: coords.snapY, isVertex: coords.isVertex };
+
+  if (isPanning) {
+    renderer.panX = panStartCamera.x + (coords.screenX - panStartScreen.x);
+    renderer.panY = panStartCamera.y + (coords.screenY - panStartScreen.y);
+    updatePopupPosition();
+    return;
+  }
+
+  // Update live draft preview info in renderer
+  if (isMouseDown && dragStartWorld && !isSimulating && !draggingHandle && !isMovingSelection) {
+    renderer.draftInfo = {
+      isDrafting: true,
+      tool: activeTool,
+      shape: (activeTool === 'wall' && toolConfigs.wall) ? toolConfigs.wall.shape : 'line',
+      vtype: (activeTool === 'valve' && toolConfigs.valve) ? toolConfigs.valve.type : '',
+      start: dragStartWorld,
+      current: currentCursorWorld
+    };
+  } else {
+    renderer.draftInfo = null;
+  }
+
+  // Dragging Handles
+  if (!isSimulating && draggingHandle) {
+    const { item, handleId } = draggingHandle;
+    if (item instanceof Wall) {
+      if (handleId === 'p1') { item.p1.x = coords.snapX; item.p1.y = coords.snapY; }
+      else if (handleId === 'p2') { item.p2.x = coords.snapX; item.p2.y = coords.snapY; }
+      item._updateGeometry();
+    } else if (item instanceof ThrottleValve) {
+      if (handleId === 'p1') { item.p1.x = coords.snapX; item.p1.y = coords.snapY; item._updateGeometry(); }
+      else if (handleId === 'p2') { item.p2.x = coords.snapX; item.p2.y = coords.snapY; item._updateGeometry(); }
+      else if (handleId === 'gap1' || handleId === 'gap2') {
+        const mid = item.midPoint;
+        const dx = coords.snapX - mid.x;
+        const dy = coords.snapY - mid.y;
+        const proj = Math.abs(dx * item.unitDir.x + dy * item.unitDir.y);
+        const halfLen = item.length * 0.5;
+        if (halfLen > 0) {
+          const ratio = Math.max(0.02, Math.min(0.98, (proj * 2.0) / item.length));
+          item.setOpenRatio(ratio);
+        }
+      }
+    } else if (item instanceof Piston) {
+      const halfThick = (item.orientation === 'horizontal' ? item.width : item.height) * 0.5;
+      if (item.orientation === 'horizontal') {
+        if (handleId === 'minPos') {
+          item.minPos = Math.min(item.maxPos - halfThick * 2 - 10, coords.snapX);
+        } else {
+          item.maxPos = Math.max(item.minPos + halfThick * 2 + 10, coords.snapX);
+        }
+        item.setPos(item.x);
+      } else {
+        if (handleId === 'minPos') {
+          item.minPos = Math.min(item.maxPos - halfThick * 2 - 10, coords.snapY);
+        } else {
+          item.maxPos = Math.max(item.minPos + halfThick * 2 + 10, coords.snapY);
+        }
+        item.setPos(item.y);
+      }
+      item.amplitude = Math.max(0, (item.maxPos - item.minPos - halfThick * 2) * 0.5);
+      item.centerPos = (item.minPos + item.maxPos) * 0.5;
+    } else if (item instanceof TextLabel) {
+      if (handleId === 'br') {
+        item.width = Math.max(40, coords.snapX - item.x);
+        item.height = Math.max(16, coords.snapY - item.y);
+        item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8)));
+      } else if (handleId === 'tr') {
+        const newH = item.y + item.height - coords.snapY;
+        if (newH >= 16) { item.y = coords.snapY; item.height = newH; item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8))); }
+        item.width = Math.max(40, coords.snapX - item.x);
+      } else if (handleId === 'tl') {
+        const newW = item.x + item.width - coords.snapX;
+        const newH = item.y + item.height - coords.snapY;
+        if (newW >= 40) { item.x = coords.snapX; item.width = newW; }
+        if (newH >= 16) { item.y = coords.snapY; item.height = newH; item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8))); }
+      } else if (handleId === 'bl') {
+        const newW = item.x + item.width - coords.snapX;
+        if (newW >= 40) { item.x = coords.snapX; item.width = newW; }
+        item.height = Math.max(16, coords.snapY - item.y);
+        item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8)));
+      }
+    } else if (item.x !== undefined && item.y !== undefined && item.width !== undefined && item.height !== undefined) {
+      if (handleId === 'br') {
+        item.width = Math.max(20, coords.snapX - item.x);
+        item.height = Math.max(20, coords.snapY - item.y);
+      } else if (handleId === 'tr') {
+        const newH = item.y + item.height - coords.snapY;
+        if (newH >= 20) { item.y = coords.snapY; item.height = newH; }
+        item.width = Math.max(20, coords.snapX - item.x);
+      } else if (handleId === 'tl') {
+        const newW = item.x + item.width - coords.snapX;
+        const newH = item.y + item.height - coords.snapY;
+        if (newW >= 20) { item.x = coords.snapX; item.width = newW; }
+        if (newH >= 20) { item.y = coords.snapY; item.height = newH; }
+      } else if (handleId === 'bl') {
+        const newW = item.x + item.width - coords.snapX;
+        if (newW >= 20) { item.x = coords.snapX; item.width = newW; }
+        item.height = Math.max(20, coords.snapY - item.y);
+      }
+    }
+    updatePopupPosition();
+    return;
+  }
+
+  // Move selected items
+  if (!isSimulating && isMovingSelection && moveStartWorld) {
+    const dx = coords.snapX - moveStartWorld.x;
+    const dy = coords.snapY - moveStartWorld.y;
+    if (dx !== 0 || dy !== 0) {
+      moveSelectedItems(dx, dy);
+      moveStartWorld = { x: coords.snapX, y: coords.snapY };
+      updatePopupPosition();
+    }
+    return;
+  }
+
+  // Cursor in Select Mode
+  if (!isSimulating && activeTool === 'select' && !isMouseDown) {
+    if (selectedItems.length === 1) {
+      const handles = renderer.getResizeHandles(selectedItems[0]);
+      const hitRadius = 14 / renderer.zoom;
+      const isOverHandle = handles.some(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < hitRadius);
+      if (isOverHandle) {
+        canvas.style.cursor = 'crosshair';
+        return;
+      }
+    }
+    const itemUnderCursor = findItemAt(coords.worldX, coords.worldY);
+    if (itemUnderCursor && selectedItems.includes(itemUnderCursor)) {
+      canvas.style.cursor = 'move';
+    } else if (itemUnderCursor) {
+      canvas.style.cursor = 'pointer';
+    } else {
+      canvas.style.cursor = 'crosshair';
+    }
+  }
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (isPanning) {
+    isPanning = false;
+    canvas.style.cursor = 'crosshair';
+  }
+
+  const wasDraggingHandle = !!draggingHandle;
+  const wasMovingSelection = isMovingSelection;
+
+  if (draggingHandle) draggingHandle = null;
+  if (isMovingSelection) isMovingSelection = false;
+
+  if (!isMouseDown) return;
+  isMouseDown = false;
+  renderer.draftInfo = null;
+
+  if (wasDraggingHandle || wasMovingSelection) {
+    return;
+  }
+
+  const coords = getCoords(e);
+
+  if (!isSimulating && dragStartWorld) {
+    const s = dragStartWorld;
+    const c = { x: coords.snapX, y: coords.snapY };
+    const minX = Math.min(s.x, c.x), minY = Math.min(s.y, c.y);
+    const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
+
+    // Marquee Selection (Objects + Particles)
+    if (activeTool === 'select' && (w >= 10 || h >= 10)) {
+      const boxItems = findItemsInBox(minX, minY, minX + w, minY + h);
+      const boxParticles = engine.findParticlesInRect(minX, minY, minX + w, minY + h);
+      boxParticles.forEach(p => { p.selected = true; });
+      selectedItems = [...boxItems, ...boxParticles];
+      updateElementsList();
+
+    // Wall Rectangle
+    } else if (activeTool === 'wall' && toolConfigs.wall.shape === 'rect' && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.wall;
+      const gid = 'g_rect_' + Math.random().toString(36).substring(2, 9);
+      const w1 = engine.addWall(minX, minY, minX + w, minY, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
+      const w2 = engine.addWall(minX + w, minY, minX + w, minY + h, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
+      const w3 = engine.addWall(minX + w, minY + h, minX, minY + h, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
+      const w4 = engine.addWall(minX, minY + h, minX, minY, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
+      selectedItems = [w1, w2, w3, w4];
+      updateElementsList();
+
+    // Wall Circle
+    } else if (activeTool === 'wall' && toolConfigs.wall.shape === 'circle') {
+      const radius = Math.hypot(c.x - s.x, c.y - s.y);
+      if (radius >= 12) {
+        recordUndoState();
+        createCircleWall(s, radius);
+        updateElementsList();
+      }
+
+    // Piston
+    } else if (activeTool === 'piston' && (w >= 20 || h >= 20)) {
+      recordUndoState();
+      const cfg = toolConfigs.piston;
+      const isVertical = h >= w;
+      const p = engine.addPiston({
+        label: 'P', orientation: isVertical ? 'horizontal' : 'vertical',
+        x: (s.x + c.x) * 0.5, y: (s.y + c.y) * 0.5,
+        width: Math.max(16, w), height: Math.max(16, h),
+        minPos: isVertical ? (s.x + c.x) * 0.5 - 140 : (s.y + c.y) * 0.5 - 140,
+        maxPos: isVertical ? (s.x + c.x) * 0.5 + 140 : (s.y + c.y) * 0.5 + 140,
+        mode: cfg.mode, mass: cfg.mass, springK: cfg.springK,
+        frequency: cfg.frequency, amplitude: cfg.amplitude, phase: cfg.phase,
+        dampingCoeff: cfg.dampingCoeff, conductivity: cfg.conductivity
+      });
+      selectedItems = [p];
+      updateElementsList();
+
+    // Isotherm-Block (Solid Constant-T Reservoir)
+    } else if ((activeTool === 'solid_res' || activeTool === 'reservoir') && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.solid_res || toolConfigs.reservoir;
+      const r = engine.addReservoir(minX, minY, w, h, {
+        label: `Isotherm (${Math.round(cfg.temperature)}K)`, temperature: cfg.temperature, conductance: cfg.conductance
+      });
+      selectedItems = [r];
+      updateElementsList();
+
+    // Permeable Heat Exchanger (Cross-hatch constant-T)
+    } else if (activeTool === 'heat_exchanger' && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.heat_exchanger;
+      const hx = engine.addHeatExchanger(minX, minY, w, h, {
+        temperature: cfg.temperature, conductivity: cfg.conductivity
+      });
+      selectedItems = [hx];
+      updateElementsList();
+
+    // Permeable Regenerator Matrix (Multi-slice gradient with directional parallel lines)
+    } else if ((activeTool === 'regenerator' || activeTool === 'matrix') && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.regenerator || toolConfigs.matrix;
+      const isHoriz = cfg.orientation ? cfg.orientation === 'horizontal' : (w >= h);
+      const reg = engine.addRegeneratorMatrix(minX, minY, w, h, {
+        orientation: isHoriz ? 'horizontal' : 'vertical',
+        temperature: cfg.temperature, heatCapacity: cfg.heatCapacity,
+        conductivity: cfg.conductivity, sliceCount: 10
+      });
+      selectedItems = [reg];
+      updateElementsList();
+
+    // Solid Thermal Storage Block (Finite heat capacity C)
+    } else if ((activeTool === 'storage_block' || activeTool === 'solidblock') && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.storage_block || toolConfigs.solidblock;
+      const sb = engine.addThermalBlock(minX, minY, w, h, {
+        temperature: cfg.temperature, heatCapacity: cfg.heatCapacity, conductivity: cfg.conductivity
+      });
+      selectedItems = [sb];
+      updateElementsList();
+
+    // Valve (Manual, Check, or Relief)
+    } else if (activeTool === 'valve' && (s.x !== c.x || s.y !== c.y)) {
+      recordUndoState();
+      const cfg = toolConfigs.valve;
+      const v = engine.addWall(s.x, s.y, c.x, c.y, {
+        type: cfg.type, conductivity: cfg.conductivity, allowedDirection: cfg.allowedDirection,
+        triggerPressure: cfg.triggerPressure, reliefMode: cfg.reliefMode
+      });
+      selectedItems = [v];
+      updateElementsList();
+
+    // Throttle Valve (Variable Opening Orifice)
+    } else if (activeTool === 'throttle_valve' && (s.x !== c.x || s.y !== c.y)) {
+      recordUndoState();
+      const cfg = toolConfigs.throttle_valve;
+      const tv = engine.addThrottleValve(s.x, s.y, c.x, c.y, {
+        openRatio: cfg.openRatio,
+        thickness: cfg.thickness
+      });
+      selectedItems = [tv];
+      updateElementsList();
+
+    // Particle Spawner
+    } else if (activeTool === 'gas' && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.gas;
+      const group = engine.spawnGasRaster(minX, minY, w, h, cfg.count, cfg.mass, cfg.temperature, cfg.velocityMode);
+      selectedItems = [group];
+      updateElementsList();
+
+    // Particle Regulator Zone
+    } else if (activeTool === 'regulator' && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.regulator;
+      const reg = engine.addRegulator(minX, minY, w, h, {
+        targetCount: cfg.targetCount,
+        hysteresis: cfg.hysteresis,
+        temperature: cfg.temperature,
+        mass: cfg.mass,
+        rate: cfg.rate
+      });
+      selectedItems = [reg];
+      updateElementsList();
+
+    // Emitter (Source)
+    } else if (activeTool === 'emitter' && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.emitter;
+      const em = engine.addEmitter(minX, minY, w, h, {
+        rate: cfg.rate, temperature: cfg.temperature, mass: cfg.mass, direction: cfg.direction, speed: cfg.speed, maxParticles: cfg.maxParticles
+      });
+      selectedItems = [em];
+      updateElementsList();
+
+    // Sink (Vacuum)
+    } else if (activeTool === 'sink' && w >= 20 && h >= 20) {
+      recordUndoState();
+      const cfg = toolConfigs.sink;
+      const sk = engine.addSink(minX, minY, w, h, { absorptionEfficiency: cfg.absorptionEfficiency });
+      selectedItems = [sk];
+      updateElementsList();
+
+    // Sensor Zone
+    } else if (activeTool === 'sensor' && w >= 20 && h >= 20) {
+      recordUndoState();
+      const letter = String.fromCharCode(65 + engine.sensors.length);
+      const sZone = engine.addSensor({
+        label: `${toolConfigs.sensor.label} ${letter}`,
+        x: minX, y: minY, width: w, height: h
+      });
+      selectedItems = [sZone];
+      updateElementsList();
+    }
+  }
+
+  dragStartWorld = null;
+});
+
+// Circle Wall Generator
+function createCircleWall(center, radius) {
+  if (radius < 10) return [];
+  const cfg = toolConfigs.wall;
+  const numSegments = Math.max(20, Math.min(64, Math.round(radius * 0.45)));
+  const angleStep = (Math.PI * 2) / numSegments;
+  const createdWalls = [];
+  const gid = 'g_circle_' + Math.random().toString(36).substring(2, 9);
+
+  for (let i = 0; i < numSegments; i++) {
+    const a1 = i * angleStep;
+    const a2 = (i + 1) * angleStep;
+    const x1 = center.x + radius * Math.cos(a1);
+    const y1 = center.y + radius * Math.sin(a1);
+    const x2 = center.x + radius * Math.cos(a2);
+    const y2 = center.y + radius * Math.sin(a2);
+    const w = engine.addWall(x1, y1, x2, y2, {
+      conductivity: cfg.conductivity,
+      thickness: cfg.thickness,
+      groupId: gid
+    });
+    createdWalls.push(w);
+  }
+  selectedItems = createdWalls;
+  return createdWalls;
+}
+
+// Arc Generator
+function createArcWall(center, pStart, pEnd) {
+  const radius = Math.hypot(pStart.x - center.x, pStart.y - center.y);
+  if (radius < 10) return [];
+
+  const startAngle = Math.atan2(pStart.y - center.y, pStart.x - center.x);
+  let endAngle = Math.atan2(pEnd.y - center.y, pEnd.x - center.x);
+  if (endAngle <= startAngle) endAngle += Math.PI * 2;
+
+  const numSegments = 16;
+  const angleStep = (endAngle - startAngle) / numSegments;
+  const cfg = toolConfigs.wall;
+  const gid = 'g_arc_' + Math.random().toString(36).substring(2, 9);
+  const createdWalls = [];
+
+  for (let i = 0; i < numSegments; i++) {
+    const a1 = startAngle + i * angleStep;
+    const a2 = startAngle + (i + 1) * angleStep;
+    const x1 = center.x + radius * Math.cos(a1);
+    const y1 = center.y + radius * Math.sin(a1);
+    const x2 = center.x + radius * Math.cos(a2);
+    const y2 = center.y + radius * Math.sin(a2);
+    const w = engine.addWall(x1, y1, x2, y2, {
+      conductivity: cfg.conductivity,
+      thickness: cfg.thickness,
+      groupId: gid
+    });
+    createdWalls.push(w);
+  }
+  selectedItems = createdWalls;
+  return createdWalls;
+}
+
+// Item Search & Box Selection
+function findItemAt(wx, wy) {
+  for (let i = 0; i < engine.pistons.length; i++) {
+    const p = engine.pistons[i], b = p.getBounds();
+    if (wx >= b.left - 8 && wx <= b.right + 8 && wy >= b.top - 8 && wy <= b.bottom + 8) return p;
+  }
+  for (let i = 0; i < engine.reservoirs.length; i++) {
+    if (engine.reservoirs[i].contains(wx, wy)) return engine.reservoirs[i];
+  }
+  for (let i = 0; i < engine.heatExchangers.length; i++) {
+    if (engine.heatExchangers[i].contains(wx, wy)) return engine.heatExchangers[i];
+  }
+  for (let i = 0; i < engine.regenerators.length; i++) {
+    if (engine.regenerators[i].contains(wx, wy)) return engine.regenerators[i];
+  }
+  for (let i = 0; i < engine.thermalBlocks.length; i++) {
+    if (engine.thermalBlocks[i].contains(wx, wy)) return engine.thermalBlocks[i];
+  }
+  for (let i = 0; i < engine.emitters.length; i++) {
+    if (engine.emitters[i].contains(wx, wy)) return engine.emitters[i];
+  }
+  for (let i = 0; i < engine.sinks.length; i++) {
+    if (engine.sinks[i].contains(wx, wy)) return engine.sinks[i];
+  }
+  for (let i = 0; i < engine.regulators.length; i++) {
+    if (engine.regulators[i].contains(wx, wy)) return engine.regulators[i];
+  }
+  for (let i = 0; i < engine.textLabels.length; i++) {
+    if (engine.textLabels[i].contains(wx, wy)) return engine.textLabels[i];
+  }
+  for (let i = 0; i < engine.walls.length; i++) {
+    const w = engine.walls[i], c = w.getClosestPoint(new Vector2(wx, wy));
+    if (Math.hypot(c.x - wx, c.y - wy) < 14 / renderer.zoom) return w;
+  }
+  for (let i = 0; i < (engine.throttleValves || []).length; i++) {
+    const tv = engine.throttleValves[i];
+    const c = tv._closestPointOnSegment(new Vector2(wx, wy), tv.p1, tv.p2);
+    if (Math.hypot(c.x - wx, c.y - wy) < 14 / renderer.zoom) return tv;
+  }
+  for (let i = 0; i < engine.sensors.length; i++) {
+    if (engine.sensors[i].contains(new Vector2(wx, wy))) return engine.sensors[i];
+  }
+  return null;
+}
+
+function findItemsInBox(x1, y1, x2, y2) {
+  const items = [];
+  engine.walls.forEach(w => {
+    if (w.p1.x >= x1 && w.p1.x <= x2 && w.p1.y >= y1 && w.p1.y <= y2) items.push(w);
+  });
+  (engine.throttleValves || []).forEach(tv => {
+    if (tv.p1.x >= x1 && tv.p1.x <= x2 && tv.p1.y >= y1 && tv.p1.y <= y2) items.push(tv);
+  });
+  engine.pistons.forEach(p => {
+    if (p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2) items.push(p);
+  });
+  engine.reservoirs.forEach(r => {
+    if (r.x >= x1 && r.x <= x2 && r.y >= y1 && r.y <= y2) items.push(r);
+  });
+  engine.heatExchangers.forEach(h => {
+    if (h.x >= x1 && h.x <= x2 && h.y >= y1 && h.y <= y2) items.push(h);
+  });
+  engine.regenerators.forEach(reg => {
+    if (reg.x >= x1 && reg.x <= x2 && reg.y >= y1 && reg.y <= y2) items.push(reg);
+  });
+  engine.thermalBlocks.forEach(b => {
+    if (b.x >= x1 && b.x <= x2 && b.y >= y1 && b.y <= y2) items.push(b);
+  });
+  engine.emitters.forEach(e => {
+    if (e.x >= x1 && e.x <= x2 && e.y >= y1 && e.y <= y2) items.push(e);
+  });
+  engine.sinks.forEach(s => {
+    if (s.x >= x1 && s.x <= x2 && s.y >= y1 && s.y <= y2) items.push(s);
+  });
+  engine.regulators.forEach(r => {
+    if (r.x >= x1 && r.x <= x2 && r.y >= y1 && r.y <= y2) items.push(r);
+  });
+  engine.textLabels.forEach(l => {
+    if (l.x >= x1 && l.x <= x2 && l.y >= y1 && l.y <= y2) items.push(l);
+  });
+  engine.sensors.forEach(s => {
+    if (s.x >= x1 && s.x <= x2 && s.y >= y1 && s.y <= y2) items.push(s);
+  });
+  return items;
+}
+
+function moveSelectedItems(dx, dy) {
+  selectedItems.forEach(item => {
+    if (item instanceof Wall) {
+      item.p1.x += dx; item.p1.y += dy; item.p2.x += dx; item.p2.y += dy;
+      item._updateGeometry();
+    } else if (item instanceof ThrottleValve) {
+      item.p1.x += dx; item.p1.y += dy; item.p2.x += dx; item.p2.y += dy;
+      item._updateGeometry();
+    } else if (item instanceof Piston) {
+      item.x += dx; item.y += dy;
+      item.minPos += (item.orientation === 'horizontal' ? dx : dy);
+      item.maxPos += (item.orientation === 'horizontal' ? dx : dy);
+      item.centerPos = (item.minPos + item.maxPos) * 0.5;
+    } else if (item instanceof Reservoir || item instanceof HeatExchanger || item instanceof RegeneratorMatrix || item instanceof ThermalBlock || item instanceof Emitter || item instanceof Sink || item instanceof Regulator || item instanceof SensorZone || item instanceof TextLabel) {
+      item.x += dx; item.y += dy;
+    }
+  });
+}
+
+function deleteSelectedItems() {
+  if (selectedItems.length === 0) return;
+  recordUndoState();
+  const deleteSet = new Set(selectedItems);
+  engine.walls = engine.walls.filter(w => !deleteSet.has(w));
+  engine.throttleValves = (engine.throttleValves || []).filter(tv => !deleteSet.has(tv));
+  engine.pistons = engine.pistons.filter(p => !deleteSet.has(p));
+  engine.reservoirs = engine.reservoirs.filter(r => !deleteSet.has(r));
+  engine.heatExchangers = engine.heatExchangers.filter(h => !deleteSet.has(h));
+  engine.regenerators = engine.regenerators.filter(reg => !deleteSet.has(reg));
+  engine.sensors = engine.sensors.filter(s => !deleteSet.has(s));
+  engine.emitters = engine.emitters.filter(e => !deleteSet.has(e));
+  engine.sinks = engine.sinks.filter(s => !deleteSet.has(s));
+  engine.regulators = (engine.regulators || []).filter(r => !deleteSet.has(r));
+  engine.thermalBlocks = engine.thermalBlocks.filter(b => !deleteSet.has(b));
+  engine.textLabels = engine.textLabels.filter(l => !deleteSet.has(l));
+  engine.particleGroups = (engine.particleGroups || []).filter(g => !deleteSet.has(g));
+  engine.elements = (engine.elements || []).filter(el => !deleteSet.has(el));
+
+  // Delete particles belonging to deleted groups
+  const groupsToDelete = Array.from(deleteSet).filter(item => item instanceof ParticleGroup);
+  for (const g of groupsToDelete) {
+    const pts = engine.particles.filter(p => p.groupId === g.id);
+    engine.deleteParticles(pts);
+  }
+
+  // Delete selected particles
+  const particlesToDelete = engine.particles.filter(p => p.selected || deleteSet.has(p));
+  if (particlesToDelete.length > 0) {
+    engine.deleteParticles(particlesToDelete);
+  }
+
+  selectedItems = [];
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+}
+
+// Element Popup Logic
+function openPopup(item) {
+  popupTargetItem = item;
+  renderPopupContent(item);
+  updatePopupPosition();
+  elementPopup.style.display = 'flex';
+}
+
+function closePopup() {
+  popupTargetItem = null;
+  elementPopup.style.display = 'none';
+}
+
+btnPopupClose.addEventListener('click', closePopup);
+
+function updatePopupPosition() {
+  if (!popupTargetItem || elementPopup.style.display === 'none') return;
+  let wx = 0, wy = 0;
+  if (popupTargetItem instanceof Wall) {
+    wx = (popupTargetItem.p1.x + popupTargetItem.p2.x) * 0.5;
+    wy = (popupTargetItem.p1.y + popupTargetItem.p2.y) * 0.5;
+  } else if (popupTargetItem instanceof Piston) {
+    wx = popupTargetItem.x;
+    wy = popupTargetItem.y - popupTargetItem.height * 0.5;
+  } else if (popupTargetItem.x !== undefined && popupTargetItem.y !== undefined) {
+    wx = popupTargetItem.x + (popupTargetItem.width || 0) * 0.5;
+    wy = popupTargetItem.y;
+  }
+  const screen = renderer.worldToScreen(wx, wy);
+  elementPopup.style.left = `${Math.max(300, Math.min(window.innerWidth - 400, screen.x))}px`;
+  elementPopup.style.top = `${Math.max(100, Math.min(window.innerHeight - 100, screen.y))}px`;
+}
+
+function renderPopupContent(item) {
+  if (item instanceof Piston) {
+    popupTitle.textContent = `Piston [${item.label}]`;
+    popupBody.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Mass m</span> <span id="popPMassVal" class="field-num">${item.mass}</span></div>
+        <input type="range" id="popPMass" min="0" max="150" step="5" value="${item.mass}" class="styled-slider">
+      </div>
+      <div class="field-row">
+        <div class="field-label"><span>Conductivity κ</span> <span id="popPKappaVal" class="field-num">${item.conductivity.toFixed(2)}</span></div>
+        <input type="range" id="popPKappa" min="0" max="1" step="0.05" value="${item.conductivity}" class="styled-slider">
+      </div>
+      <button id="popDeleteBtn" class="btn-pill btn-danger" style="margin-top:4px; width:100%; justify-content:center;">Delete Piston</button>
+    `;
+    document.getElementById('popPMass').addEventListener('input', (e) => {
+      item.mass = parseInt(e.target.value, 10);
+      document.getElementById('popPMassVal').textContent = item.mass;
+    });
+    document.getElementById('popPKappa').addEventListener('input', (e) => {
+      item.conductivity = parseFloat(e.target.value);
+      document.getElementById('popPKappaVal').textContent = item.conductivity.toFixed(2);
+    });
+    document.getElementById('popDeleteBtn').addEventListener('click', () => {
+      recordUndoState();
+      engine.pistons = engine.pistons.filter(p => p !== item);
+      selectedItems = [];
+      closePopup();
+      updateElementsList();
+    });
+
+  } else if (item instanceof Wall) {
+    popupTitle.textContent = item.type === 'manual_valve' ? 'Valve' : 'Wall';
+    popupBody.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Conductivity κ</span> <span id="popWKappaVal" class="field-num">${item.conductivity.toFixed(2)}</span></div>
+        <input type="range" id="popWKappa" min="0" max="1" step="0.05" value="${item.conductivity}" class="styled-slider">
+      </div>
+      <button id="popDeleteBtn" class="btn-pill btn-danger" style="margin-top:4px; width:100%; justify-content:center;">Delete Wall</button>
+    `;
+    document.getElementById('popWKappa').addEventListener('input', (e) => {
+      item.conductivity = parseFloat(e.target.value);
+      document.getElementById('popWKappaVal').textContent = item.conductivity.toFixed(2);
+    });
+    document.getElementById('popDeleteBtn').addEventListener('click', () => {
+      recordUndoState();
+      engine.walls = engine.walls.filter(w => w !== item);
+      selectedItems = [];
+      closePopup();
+      updateElementsList();
+    });
+
+  } else if (item instanceof Reservoir) {
+    popupTitle.textContent = 'Thermal Reservoir';
+    popupBody.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Temperature T</span> <span id="popResTVal" class="field-num">${Math.round(item.temperature)} K</span></div>
+        <input type="range" id="popResT" min="50" max="800" step="25" value="${item.temperature}" class="styled-slider">
+      </div>
+      <button id="popDeleteBtn" class="btn-pill btn-danger" style="margin-top:4px; width:100%; justify-content:center;">Delete Reservoir</button>
+    `;
+    document.getElementById('popResT').addEventListener('input', (e) => {
+      item.temperature = parseInt(e.target.value, 10);
+      item.label = `${item.temperature}K`;
+      document.getElementById('popResTVal').textContent = `${item.temperature} K`;
+    });
+    document.getElementById('popDeleteBtn').addEventListener('click', () => {
+      recordUndoState();
+      engine.reservoirs = engine.reservoirs.filter(r => r !== item);
+      selectedItems = [];
+      closePopup();
+      updateElementsList();
+    });
+
+  } else if (item instanceof SensorZone) {
+    popupTitle.textContent = 'Chamber Sensor';
+    popupBody.innerHTML = `
+      <div class="field-row">
+        <div class="field-label"><span>Chamber Name</span></div>
+        <input type="text" id="popSensName" value="${item.label}" class="styled-select" style="width:100%;">
+      </div>
+      <button id="popDeleteBtn" class="btn-pill btn-danger" style="margin-top:4px; width:100%; justify-content:center;">Delete Sensor</button>
+    `;
+    document.getElementById('popSensName').addEventListener('input', (e) => {
+      item.label = e.target.value.trim() || 'Chamber';
+      updateElementsList();
+    });
+    document.getElementById('popDeleteBtn').addEventListener('click', () => {
+      recordUndoState();
+      engine.sensors = engine.sensors.filter(s => s !== item);
+      selectedItems = [];
+      closePopup();
+      updateElementsList();
+    });
+
+  } else {
+    popupTitle.textContent = 'Component';
+    popupBody.innerHTML = `
+      <button id="popDeleteBtn" class="btn-pill btn-danger" style="width:100%; justify-content:center;">Delete Element</button>
+    `;
+    document.getElementById('popDeleteBtn').addEventListener('click', () => {
+      deleteSelectedItems();
+      closePopup();
+      updateElementsList();
+    });
+  }
+}
+
+// Finish Wall Polygon / Arc
+canvas.addEventListener('dblclick', () => { resetPolygonDraft(); arcSteps = []; });
+
+// Keyboard Shortcuts
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+  if (e.ctrlKey && e.code === 'KeyZ') {
+    e.preventDefault();
+    if (e.shiftKey) performRedo();
+    else performUndo();
+    return;
+  }
+  if (e.ctrlKey && e.code === 'KeyY') {
+    e.preventDefault();
+    performRedo();
+    return;
+  }
+  if (e.ctrlKey && e.code === 'KeyD') {
+    e.preventDefault();
+    ctxDuplicate.click();
+    return;
+  }
+  if (e.ctrlKey && e.code === 'KeyO') {
+    e.preventDefault();
+    fileImportInput.click();
+    return;
+  }
+  if (e.ctrlKey && e.code === 'KeyS') {
+    e.preventDefault();
+    openSaveModal();
+    return;
+  }
+
+  if (e.code === 'Delete' || e.code === 'Backspace') {
+    deleteSelectedItems();
+  } else if (e.code === 'Space') {
+    e.preventDefault();
+    btnPlayPause.click();
+  } else if (e.code === 'KeyS') {
+    btnStep.click();
+  } else if (e.code === 'Enter') {
+    if (activeTool === 'wall' && toolConfigs.wall.shape === 'polygon' && polygonPoints.length >= 2) {
+      const p0 = polygonPoints[0];
+      const prev = polygonPoints[polygonPoints.length - 1];
+      if (prev.x !== p0.x || prev.y !== p0.y) {
+        recordUndoState();
+        const cfg = toolConfigs.wall;
+        const w = engine.addWall(prev.x, prev.y, p0.x, p0.y, {
+          conductivity: cfg.conductivity,
+          thickness: cfg.thickness,
+          groupId: polygonGroupId
+        });
+        polygonWalls.push(w);
+        selectedItems = [...polygonWalls];
+        resetPolygonDraft();
+        updateElementsList();
+      }
+    }
+    if (activeTool !== 'select') {
+      document.getElementById('toolSelect')?.click();
+    }
+  } else if (e.code === 'Escape') {
+    if (activeTool !== 'select') {
+      document.getElementById('toolSelect')?.click();
+    }
+    resetPolygonDraft();
+    arcSteps = [];
+    closePopup();
+    closeContextMenu();
+    closeAllMenus();
+    closeSaveModal();
+  }
+});
+
+// Info Modal
+btnInfoClose.addEventListener('click', () => { infoModal.style.display = 'none'; });
+window.addEventListener('click', (e) => { if (e.target === infoModal) infoModal.style.display = 'none'; });
+
+// Chart Tabs
+tabTemp.addEventListener('click', () => {
+  tabTemp.classList.add('active');
+  tabPV.classList.remove('active');
+  tempChart.setMode('temp');
+});
+tabPV.addEventListener('click', () => {
+  tabPV.classList.add('active');
+  tabTemp.classList.remove('active');
+  tempChart.setMode('pv');
+});
+
+// System Stats
+function updateSystemStats() {
+  const stats = engine.stats;
+  if (statN) statN.textContent = stats.particleCount;
+  if (statT) statT.textContent = `${Math.round(stats.systemTemperature)} K`;
+  if (statE) statE.textContent = `${(stats.totalKineticEnergy / 1000).toFixed(1)} kJ`;
+  if (statV) statV.textContent = `${Math.round(stats.meanSpeed)} px/s`;
+}
+
+// Chamber Cards (DOM Reuse / Zero-Thrashing)
+let lastSensorSignature = '';
+
+function updateChamberCards() {
+  if (!chamberCardsContainer) return;
+  const sensors = engine.sensors;
+  if (sensors.length === 0) {
+    if (lastSensorSignature !== 'empty') {
+      chamberCardsContainer.innerHTML = '<p class="empty-cell" style="padding:10px 0;">No measurement zones placed</p>';
+      lastSensorSignature = 'empty';
+    }
+    return;
+  }
+
+  const currentSignature = sensors.map(s => `${s.id}_${s.label}`).join('|');
+  const dotClasses = ['blue', 'red', 'green', 'amber'];
+
+  if (lastSensorSignature !== currentSignature) {
+    let html = '';
+    for (let i = 0; i < sensors.length; i++) {
+      const s = sensors[i];
+      const dot = dotClasses[i % dotClasses.length];
+      const isOpen = openChamberCardIds.has(s.id);
+      html += `
+        <div class="chamber-card-item ${isOpen ? 'open' : ''}" data-sensorid="${s.id}" id="card_${s.id}">
+          <div class="chamber-card-header" data-toggle="${s.id}">
+            <div class="chamber-card-title">
+              <span class="dot-indicator ${dot}"></span>
+              <span>${s.label}</span>
+            </div>
+            <span class="chamber-badge" id="badge_${s.id}">-</span>
+          </div>
+          <div class="chamber-card-body">
+            <div class="chamber-inline-metrics" id="metrics_${s.id}">
+              <span>T: <b class="val-t">-</b></span>
+              <span>p: <b class="val-p">-</b></span>
+              <span>N: <b class="val-n">-</b></span>
+              <span>Drift: <b class="val-drift">-</b></span>
+            </div>
+            <canvas class="chamber-chart-canvas" id="chart_${s.id}" width="320" height="60"></canvas>
+          </div>
+        </div>
+      `;
+    }
+    chamberCardsContainer.innerHTML = html;
+
+    chamberCardsContainer.querySelectorAll('[data-toggle]').forEach(header => {
+      header.addEventListener('click', () => {
+        const id = header.dataset.toggle;
+        if (openChamberCardIds.has(id)) openChamberCardIds.delete(id);
+        else openChamberCardIds.add(id);
+        const card = document.getElementById(`card_${id}`);
+        if (card) card.classList.toggle('open', openChamberCardIds.has(id));
+      });
+    });
+
+    lastSensorSignature = currentSignature;
+  }
+
+  // Update in-place metrics
+  for (let i = 0; i < sensors.length; i++) {
+    const s = sensors[i];
+    const pFormatted = s.pressure >= 1000 ? `${(s.pressure / 1000).toFixed(1)} kPa` : `${s.pressure.toFixed(0)} Pa`;
+    const hasDrift = s.displayDriftSpeed && s.displayDriftSpeed > 0;
+    const driftAngleDeg = hasDrift ? Math.round((s.driftAngle * 180) / Math.PI) : 0;
+    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${driftAngleDeg}°)` : '0.0 (Equilibrium)';
+
+    const badge = document.getElementById(`badge_${s.id}`);
+    if (badge) badge.textContent = `${Math.round(s.temperature)} K | ${s.particleCount} N`;
+
+    const metrics = document.getElementById(`metrics_${s.id}`);
+    if (metrics) {
+      const elT = metrics.querySelector('.val-t');
+      if (elT) elT.textContent = `${Math.round(s.temperature)} K`;
+      const elP = metrics.querySelector('.val-p');
+      if (elP) elP.textContent = pFormatted;
+      const elN = metrics.querySelector('.val-n');
+      if (elN) elN.textContent = s.particleCount;
+      const elDrift = metrics.querySelector('.val-drift');
+      if (elDrift) {
+        elDrift.textContent = driftText;
+        elDrift.style.color = hasDrift ? '#22c55e' : 'var(--text-dim)';
+      }
+    }
+
+    if (openChamberCardIds.has(s.id)) {
+      const cCanvas = document.getElementById(`chart_${s.id}`);
+      if (cCanvas) ChamberChart.render(cCanvas, s, 'temp');
+    }
+  }
+}
+
+// Live Previews
+function renderLiveToolPreviews() {
+  const ctx = renderer.ctx;
+  ctx.save();
+  ctx.translate(renderer.panX, renderer.panY);
+  ctx.scale(renderer.zoom, renderer.zoom);
+
+  // Polygon Line Preview
+  if (!isSimulating && activeTool === 'wall' && toolConfigs.wall.shape === 'polygon' && polygonPoints.length > 0 && currentCursorWorld) {
+    const last = polygonPoints[polygonPoints.length - 1];
+    const p0 = polygonPoints[0];
+    const closeDist = 18 / renderer.zoom;
+    const isNearStart = polygonPoints.length >= 2 && (
+      Math.hypot(currentCursorWorld.x - p0.x, currentCursorWorld.y - p0.y) < closeDist ||
+      (renderer.snapCursor && renderer.snapCursor.x === p0.x && renderer.snapCursor.y === p0.y)
+    );
+
+    const targetX = isNearStart ? p0.x : currentCursorWorld.x;
+    const targetY = isNearStart ? p0.y : currentCursorWorld.y;
+
+    // Draw dashed connecting line
+    ctx.save();
+    ctx.strokeStyle = isNearStart ? '#38bdf8' : '#22c55e';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(targetX, targetY);
+    ctx.stroke();
+
+    // Draw vertex markers for placed points
+    for (let i = 0; i < polygonPoints.length; i++) {
+      const pt = polygonPoints[i];
+      const isStart = (i === 0);
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, isStart ? 6 / renderer.zoom : 4 / renderer.zoom, 0, Math.PI * 2);
+      ctx.fillStyle = isStart ? (isNearStart ? '#38bdf8' : '#eab308') : '#22c55e';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5 / renderer.zoom;
+      ctx.setLineDash([]);
+      ctx.stroke();
+    }
+
+    // Highlight start node when hovering to close
+    if (isNearStart) {
+      ctx.beginPath();
+      ctx.arc(p0.x, p0.y, 11 / renderer.zoom, 0, Math.PI * 2);
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2.5 / renderer.zoom;
+      ctx.setLineDash([]);
+      ctx.stroke();
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = `bold ${Math.max(11, 13 / renderer.zoom)}px Inter, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('Click to close', p0.x, p0.y - (14 / renderer.zoom));
+    }
+
+    ctx.restore();
+  }
+
+  // Arc Preview
+  if (!isSimulating && activeTool === 'wall' && toolConfigs.wall.shape === 'arc' && arcSteps.length > 0 && currentCursorWorld) {
+    const c = arcSteps[0];
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    if (arcSteps.length === 1) {
+      const r = Math.hypot(currentCursorWorld.x - c.x, currentCursorWorld.y - c.y);
+      ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.stroke();
+    } else if (arcSteps.length === 2) {
+      const p1 = arcSteps[1];
+      const r = Math.hypot(p1.x - c.x, p1.y - c.y);
+      const a1 = Math.atan2(p1.y - c.y, p1.x - c.x);
+      const a2 = Math.atan2(currentCursorWorld.y - c.y, currentCursorWorld.x - c.x);
+      ctx.beginPath(); ctx.arc(c.x, c.y, r, a1, a2); ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
+// ============================================================================
+// Custom Multi-Chart Dashboard Management
+// ============================================================================
+let customChartCounter = 1;
+
+function openCustomChartModal() {
+  if (!selectChartTarget) return;
+  selectChartTarget.innerHTML = `
+    <option value="global">Global System</option>
+    ${engine.sensors.map(s => `<option value="${s.id}">${s.label || 'Chamber'}</option>`).join('')}
+  `;
+  chartModal.style.display = 'flex';
+}
+
+function closeCustomChartModal() {
+  if (chartModal) chartModal.style.display = 'none';
+}
+
+function addCustomChart(targetVal, metricVal) {
+  if (!customChartsContainer) return;
+  const chartId = `custom_chart_${customChartCounter++}`;
+  const targetObj = targetVal === 'global' ? 'global' : (engine.sensors.find(s => s.id === targetVal) || 'global');
+
+  const card = document.createElement('div');
+  card.className = 'custom-chart-card';
+  card.id = `card_${chartId}`;
+
+  const chartObj = new DashboardChart(chartId, targetObj, metricVal, null);
+
+  card.innerHTML = `
+    <div class="custom-chart-header">
+      <div class="custom-chart-title">
+        <span class="custom-chart-icon">📈</span>
+        <span>${chartObj.getTitle()}</span>
+      </div>
+      <button class="custom-chart-close-btn" data-remove="${chartId}" title="Remove Chart">✕</button>
+    </div>
+    <canvas class="custom-chart-canvas" id="canvas_${chartId}" width="310" height="95"></canvas>
+  `;
+
+  customChartsContainer.appendChild(card);
+  const chartCanvas = document.getElementById(`canvas_${chartId}`);
+  chartObj.canvas = chartCanvas;
+  chartObj.ctx = chartCanvas.getContext('2d');
+
+  customCharts.push(chartObj);
+
+  card.querySelector(`[data-remove="${chartId}"]`)?.addEventListener('click', () => {
+    const idx = customCharts.findIndex(c => c.id === chartId);
+    if (idx !== -1) customCharts.splice(idx, 1);
+    card.remove();
+  });
+
+  chartObj.render(engine);
+}
+
+btnAddCustomChart?.addEventListener('click', openCustomChartModal);
+btnChartModalClose?.addEventListener('click', closeCustomChartModal);
+btnChartCancel?.addEventListener('click', closeCustomChartModal);
+btnChartConfirm?.addEventListener('click', () => {
+  const targetVal = selectChartTarget ? selectChartTarget.value : 'global';
+  const metricVal = selectChartMetric ? selectChartMetric.value : 'temp';
+  addCustomChart(targetVal, metricVal);
+  closeCustomChartModal();
+});
+window.addEventListener('click', (e) => {
+  if (e.target === chartModal) closeCustomChartModal();
+});
+
+// Default Scenario Setup
+function setupInitialScene() {
+  engine.clear();
+  engine.addWall(280, 120, 720, 120, { conductivity: 0, thickness: 4 });
+  engine.addWall(280, 580, 720, 580, { conductivity: 0, thickness: 4 });
+  engine.addWall(280, 120, 280, 580, { conductivity: 0, thickness: 4 });
+  engine.addWall(720, 120, 720, 580, { conductivity: 0, thickness: 4 });
+  engine.addWall(500, 120, 500, 580, { conductivity: 0.8, thickness: 4 });
+  engine.addSensor({ label: 'Chamber A', x: 300, y: 140, width: 180, height: 420, color: '#38bdf8' });
+  engine.addSensor({ label: 'Chamber B', x: 520, y: 140, width: 180, height: 420, color: '#ef4444' });
+  engine.spawnGasRaster(310, 160, 160, 380, 26, 1.0, 340, 'uniform_speed', 'Spawner Chamber A (340K)');
+  engine.spawnGasRaster(530, 160, 160, 380, 26, 1.0, 260, 'uniform_speed', 'Spawner Chamber B (260K)');
+  
+  const defaultState = engine.exportState('Default Profile');
+  engine.setLoadedProfile(defaultState);
+}
+
+setupInitialScene();
+updateViewMenuLabels();
+const defaultToolBtn = document.getElementById('toolSelect');
+if (defaultToolBtn) selectToolButton(defaultToolBtn);
+else renderToolProperties(activeTool);
+updateElementsList();
+
+// Master Animation Loop
+let lastTime = performance.now();
+let historyTimer = 0;
+let telemetryTimer = 0;
+let chartTimer = 0;
+
+function animate(now) {
+  const dt = Math.min(0.05, (now - lastTime) / 1000);
+  lastTime = now;
+
+  if (!engine.isPaused && isSimulating) {
+    historyTimer += dt;
+    if (historyTimer >= 0.05) {
+      pushHistoryFrame();
+      historyTimer = 0;
+    }
+    engine.step(dt);
+  }
+
+  renderer.render(engine, selectedItems);
+  renderLiveToolPreviews();
+
+  // Throttled Chart Updates (~15 Hz) to keep UI and Render loop at max FPS
+  chartTimer += dt;
+  if (chartTimer >= 0.066) {
+    tempChart.render(engine);
+    velChart.render(engine);
+
+    for (let i = 0; i < customCharts.length; i++) {
+      customCharts[i].render(engine);
+    }
+    chartTimer = 0;
+  }
+
+  timeVal.textContent = `${engine.totalTime.toFixed(2)} s`;
+  updateSystemStats();
+
+  telemetryTimer += dt;
+  if (telemetryTimer >= 0.15) {
+    updateChamberCards();
+    telemetryTimer = 0;
+  }
+
+  requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+
