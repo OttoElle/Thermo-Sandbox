@@ -5808,7 +5808,7 @@ const velChart = new VelHistChart(velChartCanvas);
 renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
 
 // App Workflow State
-let currentProjectName = 'Default Profile';
+let currentProjectName = 'Untitled Simulation';
 let isSimulating = false;
 let isSplashActive = true;
 let isAmbientSim = true;
@@ -9770,12 +9770,6 @@ function hideSplashScreen() {
 btnSplashNew?.addEventListener('click', () => {
   stopAndResetSimulationForNewScene();
   engine.clear();
-  
-  // Standard chamber outer boundaries
-  engine.addWall(160, 100, 960, 100, { conductivity: 0, thickness: 4 });
-  engine.addWall(160, 620, 960, 620, { conductivity: 0, thickness: 4 });
-  engine.addWall(160, 100, 160, 620, { conductivity: 0, thickness: 4 });
-  engine.addWall(960, 100, 960, 620, { conductivity: 0, thickness: 4 });
   
   currentProjectName = 'Untitled Simulation';
   headerProjectTitle.textContent = 'Untitled Simulation.json';
