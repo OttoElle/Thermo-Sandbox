@@ -4108,22 +4108,22 @@ function setupAmbientScene() {
   const spanX = Math.max(800, br.x - tl.x);
   const spanY = Math.max(500, br.y - tl.y);
   
-  // Gentle ambient particle cloud drifting freely across the whole screen - NO walls/box borders!
-  engine.spawnGasRaster(tl.x + 40, tl.y + 40, spanX - 80, spanY - 80, 85, 1.0, 310, 'maxwell_boltzmann');
+  // Vibrant ambient particle cloud drifting freely across the whole screen - NO walls/box borders!
+  engine.spawnGasRaster(tl.x + 20, tl.y + 20, spanX - 40, spanY - 40, 220, 1.2, 440, 'maxwell_boltzmann');
   
   // Clear element & group tracking so ambient background has 0 elements
   engine.particleGroups = [];
   engine.elements = [];
   
   // Soft Brownian colloidal particles drifting around
-  const cx = (tl.x + br.x) * 0.5;
-  const cy = (tl.y + br.y) * 0.5;
-  const col1 = engine.addParticle(cx - 180, cy - 60, 24, -16, 12.0);
-  col1.tag = 'colloid';
-  const col2 = engine.addParticle(cx + 200, cy + 90, -18, 22, 14.0);
-  col2.tag = 'colloid';
-  const col3 = engine.addParticle(cx - 30, cy + 140, 16, -18, 10.0);
-  col3.tag = 'colloid';
+  for (let i = 0; i < 6; i++) {
+    const px = tl.x + spanX * (0.12 + 0.15 * i);
+    const py = tl.y + spanY * (0.18 + 0.14 * (i % 5));
+    const vx = (Math.random() - 0.5) * 55;
+    const vy = (Math.random() - 0.5) * 55;
+    const col = engine.addParticle(px, py, vx, vy, 8.0 + (i % 3) * 3.5);
+    col.tag = 'colloid';
+  }
 }
 
 function showSplashScreen(options = {}) {

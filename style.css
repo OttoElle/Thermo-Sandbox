@@ -2258,7 +2258,7 @@ body.splash-mode .modal-overlay:not(#splashOverlay) {
 
 body.splash-mode #glCanvas,
 body.splash-mode #simCanvas {
-  filter: brightness(0.62) saturate(0.85);
+  filter: brightness(1.05) saturate(1.15);
   transition: filter 0.4s ease;
 }
 
@@ -2273,9 +2273,9 @@ body.splash-mode #simCanvas {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(circle at 50% 30%, rgba(18, 21, 28, 0.65) 0%, rgba(10, 12, 16, 0.9) 100%);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: radial-gradient(circle at 50% 50%, rgba(10, 13, 18, 0.35) 0%, rgba(8, 10, 15, 0.60) 100%);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   padding: 24px;
   opacity: 1;
   transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.25s ease;
@@ -2292,7 +2292,7 @@ body.splash-mode #simCanvas {
   width: 100%;
   max-width: 920px;
   max-height: 90vh;
-  background: rgba(22, 26, 35, 0.88);
+  background: rgba(18, 22, 30, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 18px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.1);
