@@ -1,348 +1,381 @@
 export const Presets = {
-  // 1. Split-Stirling Cryocooler / Heat Engine (From user reference diagram)
+  // 1. Split-Stirling Cryocooler / Heat Engine
   splitStirling: {
-    name: 'Split-Stirling Kältemaschine',
-    description: 'Dual-Piston Kompressor, Split-Pipe mit Wärmetauscher, Regenerator und federgelagerter Verdränger/Bouncing-Volume.',
+    id: 'splitStirling',
+    name: 'Split-Stirling Cryocooler',
+    category: 'Thermodynamic Cycles',
+    icon: 'stirling',
+    description: 'Dual-piston compressor, split pipe, regenerator matrix, cold finger, and displacer piston.',
     load: (engine) => {
       engine.clear();
       engine.timeScale = 1.0;
 
       // Outer boundaries / Compressor housing (Left side)
-      // Compressor Chamber: X in [40, 260], Y in [150, 500]
-      engine.addWall(40, 150, 260, 150, { label: 'Kompressor Gehäuse' });
-      engine.addWall(40, 500, 260, 500);
-      engine.addWall(40, 150, 40, 500);
+      engine.addWall(60, 160, 280, 160, { thickness: 6 });
+      engine.addWall(60, 480, 280, 480, { thickness: 6 });
+      engine.addWall(60, 160, 60, 480, { thickness: 6 });
 
       // Split Pipe connecting compressor to regenerator
-      // Upper pipe wall
-      engine.addWall(260, 150, 260, 305);
-      engine.addWall(260, 305, 540, 305, { label: 'Split Pipe' });
-      // Lower pipe wall
-      engine.addWall(260, 345, 540, 345);
-      engine.addWall(260, 345, 260, 500);
+      engine.addWall(280, 160, 280, 290, { thickness: 6 });
+      engine.addWall(280, 290, 560, 290, { thickness: 6 });
+      engine.addWall(280, 350, 560, 350, { thickness: 6 });
+      engine.addWall(280, 350, 280, 480, { thickness: 6 });
 
-      // Heat exchangers along the split pipe (Ambient heat rejection at 300K)
-      engine.addWall(290, 300, 380, 300, { type: 'isothermal', temperature: 300, label: 'Wärmetauscher (300K)', thickness: 6 });
-      engine.addWall(290, 350, 380, 350, { type: 'isothermal', temperature: 300, thickness: 6 });
-      
-      engine.addWall(440, 300, 520, 300, { type: 'isothermal', temperature: 300, label: 'Wärmetauscher (300K)', thickness: 6 });
-      engine.addWall(440, 350, 520, 350, { type: 'isothermal', temperature: 300, thickness: 6 });
-
-      // Cold Finger / Expander Cylinder (Right side: X in [540, 680], Y in [60, 580])
-      // Top Cold Finger
-      engine.addWall(540, 60, 680, 60, { type: 'isothermal', temperature: 100, label: 'Cold Finger (100K)', thickness: 8 });
-      engine.addWall(540, 60, 540, 305);
-      engine.addWall(680, 60, 680, 420);
-
-      // Bottom Bouncing Volume / Spring Housing
-      engine.addWall(540, 345, 540, 420);
-      engine.addWall(500, 420, 540, 420);
-      engine.addWall(500, 420, 500, 580);
-      engine.addWall(500, 580, 720, 580, { label: 'Bouncing Volume' });
-      engine.addWall(720, 580, 720, 420);
-      engine.addWall(680, 420, 720, 420);
-
-      // Regenerator Matrix inside Cold Finger (Porous thermal gradient)
-      engine.addWall(542, 170, 678, 170, { type: 'regenerator', temperature: 160, porosity: 0.85, label: 'Regenerator (Kalt)' });
-      engine.addWall(542, 230, 678, 230, { type: 'regenerator', temperature: 230, porosity: 0.85, label: 'Regenerator (Mittel)' });
-      engine.addWall(542, 290, 678, 290, { type: 'regenerator', temperature: 295, porosity: 0.85, label: 'Regenerator (Warm)' });
-
-      // Pistons:
-      // 1. Dual Compressor Piston (Left) - Motorized oscillation
-      engine.addPiston({
-        label: 'Kompressor Kolben',
-        orientation: 'horizontal',
-        x: 140,
-        y: 325,
-        width: 24,
-        height: 330,
-        minPos: 60,
-        maxPos: 240,
-        mode: 'motorized',
-        frequency: 0.8,
-        amplitude: 55,
-        phase: 0,
-        centerPos: 140
+      // Ambient Heat Exchanger along split pipe (rejection at 300K)
+      engine.addHeatExchanger(330, 275, 120, 90, {
+        temperature: 300,
+        conductivity: 0.8,
+        label: 'Ambient Cooler (300K)'
       });
 
-      // 2. Displacer / Expander Piston with Spring in Bouncing Volume (Right)
-      // Moving with ~90 degree phase shift for Stirling cycle cooling!
-      engine.addPiston({
-        label: 'Verdränger / Displacer',
+      // Cold Finger / Expander Cylinder (Right side)
+      engine.addWall(560, 80, 700, 80, { thickness: 6 });
+      engine.addWall(560, 80, 560, 290, { thickness: 6 });
+      engine.addWall(700, 80, 700, 540, { thickness: 6 });
+      engine.addWall(560, 350, 560, 540, { thickness: 6 });
+      engine.addWall(560, 540, 700, 540, { thickness: 6 });
+
+      // Regenerator Matrix in Cold Finger
+      engine.addRegeneratorMatrix(570, 160, 120, 110, {
         orientation: 'vertical',
-        x: 610,
-        y: 370,
-        width: 20,
-        height: 120,
-        minPos: 320,
-        maxPos: 460,
-        mode: 'motorized',
-        frequency: 0.8,
-        amplitude: 40,
-        phase: Math.PI * 0.45, // ~81 deg phase advance for maximum cooling COP
-        centerPos: 380,
-        mass: 30,
-        springK: 120,
-        friction: 0.02
+        temperature: 200,
+        heatCapacity: 450,
+        conductivity: 0.75,
+        label: 'Regenerator Matrix'
       });
 
-      // Sensor Zones:
-      // Compression Zone
+      // Compressor Piston (Motorized harmonic drive)
+      engine.addPiston({
+        label: 'Compressor Piston',
+        orientation: 'horizontal',
+        x: 160,
+        y: 320,
+        width: 24,
+        height: 310,
+        minPos: 80,
+        maxPos: 250,
+        mode: 'motorized',
+        frequency: 0.8,
+        amplitude: 50,
+        phase: 0
+      });
+
+      // Displacer Piston in Bouncing Volume (Phase-shifted)
+      engine.addPiston({
+        label: 'Displacer Piston',
+        orientation: 'vertical',
+        x: 630,
+        y: 420,
+        width: 20,
+        height: 130,
+        minPos: 310,
+        maxPos: 490,
+        mode: 'motorized',
+        frequency: 0.8,
+        amplitude: 45,
+        phase: 80 // ~80 degrees phase lead for Stirling expansion
+      });
+
+      // Sensor Chambers
       engine.addSensor({
-        label: 'Kompressions-Zone',
-        x: 175,
-        y: 200,
-        width: 80,
-        height: 250,
+        label: 'Compression Space',
+        x: 180,
+        y: 180,
+        width: 90,
+        height: 280,
         color: '#f97316'
       });
-
-      // Cold Expansion Zone (Top of Cold Finger)
       engine.addSensor({
-        label: 'Kälte-Zone (Cold Finger)',
-        x: 545,
-        y: 65,
-        width: 130,
-        height: 95,
-        color: '#06b6d4'
+        label: 'Expansion Cold Head',
+        x: 570,
+        y: 90,
+        width: 120,
+        height: 65,
+        color: '#38bdf8'
       });
 
-      // Spawn Gas Particles in the working volume
-      engine.spawnGasRegion(170, 200, 80, 250, 180, 300);
-      engine.spawnGasRegion(270, 310, 260, 30, 80, 290);
-      engine.spawnGasRegion(550, 80, 120, 200, 140, 200);
+      // Working Gas
+      engine.spawnGasRaster(180, 200, 90, 240, 90, 1.0, 300, 'maxwell_boltzmann', 'Compressor Gas');
+      engine.spawnGasRaster(570, 95, 120, 60, 45, 1.0, 220, 'maxwell_boltzmann', 'Cold Space Gas');
     }
   },
 
-  // 2. Venturi-Düse & Bernoulli-Effekt
-  venturiNozzle: {
-    name: 'Venturi-Düse & Bernoulli-Effekt',
-    description: 'Strömungskanal mit Verengung. Zeigt Druckabfall und Geschwindigkeitszunahme im Engpass.',
+  // 2. Venturi Nozzle & Bernoulli Effect
+  venturiTube: {
+    id: 'venturiTube',
+    name: 'Venturi Nozzle & Bernoulli Flow',
+    category: 'Fluid & Aerodynamics',
+    icon: 'venturi',
+    description: 'Converging-diverging contraction channel demonstrating velocity increase and pressure drop.',
     load: (engine) => {
       engine.clear();
       engine.timeScale = 1.0;
 
-      // Channel contours: Wide inlet (W=240), throat (W=70), diffuser (W=240)
-      // Top Wall
-      engine.addWall(20, 160, 250, 160, { label: 'Einlass (Breit)' });
-      engine.addWall(250, 160, 420, 255, { label: 'Düse' });
-      engine.addWall(420, 255, 520, 255, { label: 'Engpass / Throat' });
-      engine.addWall(520, 255, 700, 160, { label: 'Diffusor' });
-      engine.addWall(700, 160, 880, 160, { label: 'Auslass' });
+      // Top contoured wall
+      engine.addWall(40, 160, 260, 160, { thickness: 5 });
+      engine.addWall(260, 160, 440, 260, { thickness: 5 });
+      engine.addWall(440, 260, 560, 260, { thickness: 5 }); // Throat
+      engine.addWall(560, 260, 740, 160, { thickness: 5 });
+      engine.addWall(740, 160, 960, 160, { thickness: 5 });
 
-      // Bottom Wall
-      engine.addWall(20, 480, 250, 480);
-      engine.addWall(250, 480, 420, 385);
-      engine.addWall(420, 385, 520, 385);
-      engine.addWall(520, 385, 700, 480);
-      engine.addWall(700, 480, 880, 480);
+      // Bottom contoured wall
+      engine.addWall(40, 480, 260, 480, { thickness: 5 });
+      engine.addWall(260, 480, 440, 380, { thickness: 5 });
+      engine.addWall(440, 380, 560, 380, { thickness: 5 }); // Throat
+      engine.addWall(560, 380, 740, 480, { thickness: 5 });
+      engine.addWall(740, 480, 960, 480, { thickness: 5 });
 
-      // Inlet / Outlet open bounds / particle recycling
-      engine.addWall(20, 160, 20, 480, { type: 'valve_right', label: 'Inflow' });
-      engine.addWall(880, 160, 880, 480, { type: 'valve_right', label: 'Outflow' });
-
-      // Sensors:
-      // 1. Inlet Zone
-      engine.addSensor({
-        label: 'Zone 1: Einlass',
-        x: 80,
-        y: 200,
-        width: 140,
-        height: 240,
-        color: '#3b82f6'
+      // Inlet continuous emitter (left)
+      engine.addEmitter(50, 200, 40, 240, {
+        direction: 'right',
+        rate: 28,
+        temperature: 300,
+        mass: 1.0
       });
 
-      // 2. Throat Zone
+      // Outlet absorber (right)
+      engine.addSink(910, 180, 40, 280, {
+        direction: 'right',
+        absorptionEfficiency: 1.0
+      });
+
+      // Sensors: Inlet, Throat, Diffuser
       engine.addSensor({
-        label: 'Zone 2: Engpass (P ↓, v ↑)',
-        x: 420,
-        y: 260,
+        label: 'Inlet (Wide, Low v)',
+        x: 120,
+        y: 180,
+        width: 120,
+        height: 280,
+        color: '#38bdf8'
+      });
+      engine.addSensor({
+        label: 'Throat (Constriction, High v, Low P)',
+        x: 450,
+        y: 270,
         width: 100,
-        height: 120,
+        height: 100,
         color: '#f59e0b'
       });
-
-      // 3. Diffuser / Outlet Zone
       engine.addSensor({
-        label: 'Zone 3: Auslass',
-        x: 720,
-        y: 200,
+        label: 'Diffuser (Recovery)',
+        x: 760,
+        y: 180,
         width: 140,
-        height: 240,
+        height: 280,
         color: '#10b981'
       });
 
-      // Continuous Emitter at Inlet
-      engine.addEmitter({
-        x: 35,
-        y: 320,
-        vx: 240,
-        vy: 0,
-        spreadY: 280,
-        rate: 55,
-        temperature: 250,
-        radius: 4.5
-      });
-
-      // Pre-fill with flowing particles
-      for (let x = 60; x < 840; x += 35) {
-        for (let y = 200; y < 450; y += 35) {
-          // Check if within channel
-          let topY = 160, botY = 480;
-          if (x >= 250 && x <= 420) {
-            const frac = (x - 250) / 170;
-            topY = 160 + frac * 95;
-            botY = 480 - frac * 95;
-          } else if (x > 420 && x < 520) {
-            topY = 255;
-            botY = 385;
-          } else if (x >= 520 && x <= 700) {
-            const frac = (x - 520) / 180;
-            topY = 255 - frac * 95;
-            botY = 385 + frac * 95;
-          }
-
-          if (y > topY + 10 && y < botY - 10) {
-            // Speed higher in throat
-            const speedFactor = (x > 380 && x < 560) ? 1.8 : 1.0;
-            const p = engine.addParticle(x, y, 160 * speedFactor + (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, 4.5);
-            p.tag = 'flow';
-          }
-        }
-      }
+      // Pre-fill steady flow gas
+      engine.spawnGasRaster(120, 200, 120, 240, 60, 1.0, 300, 'uniform_speed', 'Inlet Gas');
+      engine.spawnGasRaster(450, 280, 100, 80, 35, 1.0, 270, 'uniform_speed', 'Throat Gas');
+      engine.spawnGasRaster(760, 200, 130, 240, 60, 1.0, 300, 'uniform_speed', 'Exit Gas');
     }
   },
 
-  // 3. 2-Kammer Wärme- & Druckausgleich
-  twoChambers: {
-    name: '2-Kammer Wärme- & Druckausgleich',
-    description: 'Heißes vs. kaltes Gas mit wärmeleitender oder entfernbarer Trennwand. Demonstration des 2. Hauptsatzes.',
+  // 3. Dual-Chamber Thermal Equalization
+  dualChamber: {
+    id: 'dualChamber',
+    name: 'Dual-Chamber Thermal Equalization',
+    category: 'Heat Transfer & 2nd Law',
+    icon: 'chambers',
+    description: 'High-temperature gas and cryogenic gas separated by a thermally conductive partition wall.',
     load: (engine) => {
       engine.clear();
       engine.timeScale = 1.0;
 
-      // Outer Box (X in [60, 840], Y in [100, 520])
-      engine.addWall(60, 100, 840, 100);
-      engine.addWall(60, 520, 840, 520);
-      engine.addWall(60, 100, 60, 520, { type: 'isothermal', temperature: 550, label: 'Heizwand (550K)' });
-      engine.addWall(840, 100, 840, 520, { type: 'isothermal', temperature: 100, label: 'Kühlwand (100K)' });
+      // Outer insulated container (800x440)
+      engine.addWall(80, 120, 880, 120, { thickness: 8, conductivity: 0 });
+      engine.addWall(80, 560, 880, 560, { thickness: 8, conductivity: 0 });
+      engine.addWall(80, 120, 80, 560, { thickness: 8, conductivity: 0 });
+      engine.addWall(880, 120, 880, 560, { thickness: 8, conductivity: 0 });
 
-      // Central movable / heat-conducting partition piston
-      engine.addPiston({
-        label: 'Trennschieber / Kolben',
-        orientation: 'horizontal',
-        x: 450,
-        y: 310,
-        width: 18,
-        height: 410,
-        minPos: 120,
-        maxPos: 780,
-        mode: 'free',
-        mass: 30,
-        friction: 0.04
+      // Central conductive dividing wall (kappa = 0.85)
+      engine.addWall(480, 120, 480, 560, {
+        thickness: 8,
+        conductivity: 0.85,
+        label: 'Conductive Partition (κ = 0.85)'
       });
 
-      // Sensor Left (Hot)
+      // Sensors: Left (Hot), Right (Cold)
       engine.addSensor({
-        label: 'Kammer Links (Heiß)',
-        x: 80,
-        y: 120,
-        width: 320,
-        height: 380,
+        label: 'Chamber Left (Hot)',
+        x: 100,
+        y: 140,
+        width: 360,
+        height: 400,
         color: '#ef4444'
       });
-
-      // Sensor Right (Cold)
       engine.addSensor({
-        label: 'Kammer Rechts (Kalt)',
-        x: 490,
-        y: 120,
-        width: 330,
-        height: 380,
+        label: 'Chamber Right (Cold)',
+        x: 500,
+        y: 140,
+        width: 360,
+        height: 400,
         color: '#3b82f6'
       });
 
-      // Spawn Hot gas left (High T), Cold gas right (Low T)
-      engine.spawnGasRegion(90, 130, 320, 360, 160, 500, { tag: 'hot' });
-      engine.spawnGasRegion(480, 130, 330, 360, 160, 120, { tag: 'cold' });
+      // Hot gas left (750K), Cold gas right (125K)
+      engine.spawnGasRaster(120, 160, 320, 360, 120, 1.0, 750, 'maxwell_boltzmann', 'Hot Gas (750K)');
+      engine.spawnGasRaster(520, 160, 320, 360, 120, 1.0, 125, 'maxwell_boltzmann', 'Cold Gas (125K)');
     }
   },
 
-  // 4. Adiabatische vs. Isotherme Kompression
-  compressionCylinder: {
-    name: 'Adiabatische & Isotherme Kompression',
-    description: 'Zylinder mit beweglichem Kolben. Schiebe den Kolben per Maus oder Motor für Kompressionswärme!',
+  // 4. Joule-Thomson Expansion & Throttle Valve
+  jouleThomson: {
+    id: 'jouleThomson',
+    name: 'Joule-Thomson Throttle Expansion',
+    category: 'Thermodynamic Expansion',
+    icon: 'throttle',
+    description: 'High-pressure gas forced through a narrow throttle valve aperture into an expansion chamber.',
     load: (engine) => {
       engine.clear();
       engine.timeScale = 1.0;
 
-      // Cylinder Box (X in [80, 780], Y in [140, 480])
-      engine.addWall(80, 140, 780, 140, { label: 'Zylinderwand' });
-      engine.addWall(80, 480, 780, 480);
-      engine.addWall(80, 140, 80, 480, { label: 'Zylinderboden' });
+      // Outer enclosure
+      engine.addWall(60, 150, 900, 150, { thickness: 6 });
+      engine.addWall(60, 510, 900, 510, { thickness: 6 });
+      engine.addWall(60, 150, 60, 510, { thickness: 6 });
+      engine.addWall(900, 150, 900, 510, { thickness: 6 });
 
-      // Cylinder Piston
-      engine.addPiston({
-        label: 'Kompressionskolben',
-        orientation: 'horizontal',
-        x: 550,
-        y: 310,
-        width: 24,
-        height: 330,
-        minPos: 160,
-        maxPos: 760,
-        mode: 'manual',
-        mass: 40,
-        friction: 0.05
+      // Partition Wall with central Throttle Valve
+      engine.addWall(460, 150, 460, 260, { thickness: 6 });
+      engine.addThrottleValve(460, 260, 460, 400, {
+        openRatio: 0.25,
+        thickness: 8,
+        conductivity: 0.2
+      });
+      engine.addWall(460, 400, 460, 510, { thickness: 6 });
+
+      // Continuous high-pressure supply on left
+      engine.addEmitter(80, 230, 40, 200, {
+        direction: 'right',
+        rate: 22,
+        temperature: 450,
+        mass: 1.0
       });
 
-      // Sensor inside cylinder volume
+      // Exhaust / Low-pressure sink on far right
+      engine.addSink(840, 230, 40, 200, {
+        direction: 'right',
+        absorptionEfficiency: 0.95
+      });
+
+      // Upstream & Downstream Sensor Zones
       engine.addSensor({
-        label: 'Zylindervolumen',
+        label: 'High-Pressure Upstream (P1, T1)',
+        x: 140,
+        y: 170,
+        width: 300,
+        height: 320,
+        color: '#f97316'
+      });
+      engine.addSensor({
+        label: 'Low-Pressure Downstream (P2, T2)',
+        x: 480,
+        y: 170,
+        width: 340,
+        height: 320,
+        color: '#10b981'
+      });
+
+      // Pre-fill upstream chamber
+      engine.spawnGasRaster(160, 190, 260, 280, 110, 1.0, 450, 'maxwell_boltzmann', 'Upstream Gas');
+      engine.spawnGasRaster(500, 230, 300, 200, 40, 1.0, 250, 'maxwell_boltzmann', 'Downstream Gas');
+    }
+  },
+
+  // 5. Adiabatic & Isothermal Compression
+  compressionCylinder: {
+    id: 'compressionCylinder',
+    name: 'Adiabatic Cylinder Compression',
+    category: 'Work & Compression',
+    icon: 'piston',
+    description: 'Cylinder enclosed with a moving heavy piston demonstrating work extraction and PV compression heating.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Rigid Cylinder Chamber
+      engine.addWall(80, 140, 840, 140, { thickness: 6, conductivity: 0 });
+      engine.addWall(80, 500, 840, 500, { thickness: 6, conductivity: 0 });
+      engine.addWall(80, 140, 80, 500, { thickness: 6, conductivity: 0 });
+
+      // Compressor Piston (Motorized sweep)
+      engine.addPiston({
+        label: 'Compression Piston',
+        orientation: 'horizontal',
+        x: 600,
+        y: 320,
+        width: 28,
+        height: 350,
+        minPos: 200,
+        maxPos: 760,
+        mode: 'motorized',
+        frequency: 0.5,
+        amplitude: 220,
+        phase: 0,
+        mass: 50,
+        conductivity: 0
+      });
+
+      // Cylinder Sensor
+      engine.addSensor({
+        label: 'Cylinder Chamber',
         x: 100,
         y: 160,
-        width: 400,
-        height: 300,
+        width: 480,
+        height: 320,
         color: '#f59e0b'
       });
 
-      // Gas particles
-      engine.spawnGasRegion(110, 170, 400, 280, 220, 260);
+      // Enclosed Gas
+      engine.spawnGasRaster(120, 180, 440, 280, 160, 1.0, 280, 'maxwell_boltzmann', 'Cylinder Gas');
     }
   },
 
-  // 5. Brownsche Bewegung & Diffusion
+  // 6. Brownian Motion & Colloidal Diffusion
   brownianMotion: {
-    name: 'Brownsche Bewegung & Schwere Teilchen',
-    description: 'Große kolloidale Partikel umgeben von mikroskopischen Gasatomen demonstrieren thermische Fluktuationen.',
+    id: 'brownianMotion',
+    name: 'Brownian Motion & Colloidal Diffusion',
+    category: 'Statistical Mechanics',
+    icon: 'brownian',
+    description: 'Massive colloidal particles suspended in an ideal thermal bath undergoing random walk collisions.',
     load: (engine) => {
       engine.clear();
       engine.timeScale = 1.0;
 
-      // Closed Box
-      engine.addWall(80, 80, 820, 80);
-      engine.addWall(80, 560, 820, 560);
-      engine.addWall(80, 80, 80, 560);
-      engine.addWall(820, 80, 820, 560);
+      // Closed Container Box
+      engine.addWall(80, 80, 880, 80, { thickness: 6 });
+      engine.addWall(80, 580, 880, 580, { thickness: 6 });
+      engine.addWall(80, 80, 80, 580, { thickness: 6 });
+      engine.addWall(880, 80, 880, 580, { thickness: 6 });
 
-      // Light Gas Particles
-      engine.spawnGasRegion(100, 100, 700, 440, 320, 320, { radius: 4, mass: 1 });
-
-      // 3 Heavy Brownian Particles
-      const bp1 = engine.addParticle(300, 320, 0, 0, 18, 45);
-      bp1.tag = 'colloid';
-      const bp2 = engine.addParticle(600, 320, 0, 0, 22, 60);
-      bp2.tag = 'colloid';
-
-      // Sensor Zone
+      // Measurement Zone
       engine.addSensor({
-        label: 'Gesamtsystem',
+        label: 'Diffusion Bath',
         x: 90,
         y: 90,
-        width: 720,
-        height: 460,
+        width: 780,
+        height: 480,
         color: '#a855f7'
       });
+
+      // Background Light Gas (m = 0.5, fast)
+      engine.spawnGasRaster(100, 100, 760, 460, 240, 0.5, 350, 'maxwell_boltzmann', 'Thermal Gas Bath');
+
+      // Add 4 Heavy Colloidal Particles (m = 15.0 to 25.0)
+      const c1 = engine.addParticle(260, 300, 0, 0, 18.0);
+      c1.tag = 'colloid';
+      const c2 = engine.addParticle(480, 240, 0, 0, 22.0);
+      c2.tag = 'colloid';
+      const c3 = engine.addParticle(520, 420, 0, 0, 20.0);
+      c3.tag = 'colloid';
+      const c4 = engine.addParticle(700, 340, 0, 0, 25.0);
+      c4.tag = 'colloid';
     }
   }
 };
+
+if (typeof window !== 'undefined') {
+  window.Presets = Presets;
+}

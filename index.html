@@ -84,10 +84,10 @@
       <!-- ROW 1: Menu Bar, Centered Project Title & Save As -->
       <div class="header-row-menubar">
         <div class="menubar-left">
-          <div class="brand-badge">
+          <div class="brand-badge" id="brandBadge" title="Open Welcome Dashboard / Splash Screen">
             <img src="logo.png" alt="Logo" class="brand-logo-img">
           </div>
-          <span class="brand-title">Thermo Sandbox</span>
+          <span class="brand-title" id="brandTitle" title="Open Welcome Dashboard / Splash Screen">Thermo Sandbox</span>
 
           <div class="header-vdivider"></div>
 
@@ -690,6 +690,104 @@
           <p><b>3. Multi-Select & Transforms:</b> Hold <code>Shift</code> and click to select multiple objects. Use <code>TRANSFORM</code> tools to rotate 90° or flip horizontally / vertically.</p>
           <p><b>4. Thermal Triad:</b> Choose between constant-temperature <b>Reservoir</b>, permeable <b>Porous Matrix</b>, or impermeable <b>Solid Thermal Block</b>.</p>
           <p><b>5. Valves & Emitters:</b> Emitters feature 360° emission and can be clicked to toggle ON/OFF. Valves include Pressure Relief Valves (PRV) with automatic release.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Splash Screen / Welcome Dashboard Overlay -->
+    <div id="splashOverlay" class="splash-overlay" style="display: flex;">
+      <div class="splash-card" id="splashCard">
+        <!-- Splash Header -->
+        <div class="splash-header">
+          <div class="splash-brand">
+            <div class="splash-logo-wrap">
+              <img src="logo.png" alt="Thermo Sandbox Logo" class="splash-logo-img">
+            </div>
+            <div class="splash-brand-text">
+              <h1 class="splash-title">Thermo Sandbox</h1>
+              <p class="splash-subtitle">Interactive 2D Thermodynamic & Kinetic Particle Laboratory</p>
+            </div>
+          </div>
+          <button id="btnSplashClose" class="splash-close-btn" title="Return to Canvas (Esc)" style="display: none;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        <!-- Section 1: Quick Actions -->
+        <div class="splash-actions-row">
+          <button id="btnSplashNew" class="splash-action-card splash-action-primary">
+            <div class="splash-action-icon splash-icon-primary">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </div>
+            <div class="splash-action-content">
+              <span class="splash-action-title">New Simulation</span>
+              <span class="splash-action-desc">Start fresh with an empty canvas</span>
+            </div>
+          </button>
+
+          <button id="btnSplashOpen" class="splash-action-card splash-action-secondary">
+            <div class="splash-action-icon splash-icon-secondary">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="splash-action-content">
+              <span class="splash-action-title">Open Profile...</span>
+              <span class="splash-action-desc">Load simulation from JSON</span>
+            </div>
+          </button>
+
+          <button id="btnSplashResume" class="splash-action-card splash-action-accent" style="display: none;">
+            <div class="splash-action-icon splash-icon-accent">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </div>
+            <div class="splash-action-content">
+              <span class="splash-action-title">Return to Canvas</span>
+              <span class="splash-action-desc">Resume active experiment</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- Section 2: Split Columns (Recent Profiles & Physical Presets) -->
+        <div class="splash-grid-columns">
+          <!-- Left Column: Recent Profiles -->
+          <div class="splash-column">
+            <div class="splash-col-header">
+              <div class="splash-col-title-wrap">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span class="splash-col-title">Recent Profiles</span>
+              </div>
+              <button id="btnClearRecent" class="splash-clear-btn" title="Clear recent history">Clear History</button>
+            </div>
+            <div id="splashRecentContainer" class="splash-list-container">
+              <!-- Dynamically populated from localStorage -->
+              <div class="splash-empty-state">
+                <p>No recent profiles yet</p>
+                <span>Profiles you save or open will appear here</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Curated Physical Presets -->
+          <div class="splash-column">
+            <div class="splash-col-header">
+              <div class="splash-col-title-wrap">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                <span class="splash-col-title">Physical Presets & Experiments</span>
+              </div>
+            </div>
+            <div id="splashPresetsContainer" class="splash-presets-list">
+              <!-- Dynamically populated from Presets object in JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Splash Footer -->
+        <div class="splash-footer">
+          <div class="splash-footer-left">
+            <span class="splash-keyboard-hint">Tip: Click the <strong>Thermo Sandbox</strong> logo or press <kbd>Esc</kbd> anytime to open this dashboard.</span>
+          </div>
+          <div class="splash-footer-right">
+            <span class="splash-tag">v2.0 • WebGL 2 Accelerated</span>
+          </div>
         </div>
       </div>
     </div>

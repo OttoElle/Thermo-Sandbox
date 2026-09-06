@@ -25,6 +25,7 @@ files_order = [
     'src/analytics/TempTimeChart.js',
     'src/analytics/VelHistChart.js',
     'src/analytics/ChamberChart.js',
+    'src/presets/index.js',
     'src/main.js'
 ]
 

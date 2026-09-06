@@ -17,6 +17,7 @@ import { TextLabel } from './physics/TextLabel.js';
 import { ParticleGroup } from './physics/ParticleGroup.js';
 import { Regulator } from './physics/Regulator.js';
 import { ThrottleValve } from './physics/ThrottleValve.js';
+import { Presets } from './presets/index.js';
 
 // Canvas DOM Elements
 const canvas = document.getElementById('simCanvas');
@@ -36,6 +37,19 @@ const headerProjectTitle = document.getElementById('headerProjectTitle');
 const fileImportInput = document.getElementById('fileImportInput');
 const btnToolbarReset = document.getElementById('btnToolbarReset');
 const btnToolbarClear = document.getElementById('btnToolbarClear');
+const brandBadge = document.getElementById('brandBadge');
+const brandTitle = document.getElementById('brandTitle');
+
+// Splash Screen / Welcome Dashboard Elements
+const splashOverlay = document.getElementById('splashOverlay');
+const splashCard = document.getElementById('splashCard');
+const btnSplashNew = document.getElementById('btnSplashNew');
+const btnSplashOpen = document.getElementById('btnSplashOpen');
+const btnSplashResume = document.getElementById('btnSplashResume');
+const btnSplashClose = document.getElementById('btnSplashClose');
+const splashRecentContainer = document.getElementById('splashRecentContainer');
+const splashPresetsContainer = document.getElementById('splashPresetsContainer');
+const btnClearRecent = document.getElementById('btnClearRecent');
 
 // Transform Ribbon Elements
 const btnRotate90 = document.getElementById('btnRotate90');
@@ -149,6 +163,9 @@ renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
 // App Workflow State
 let currentProjectName = 'Default Profile';
 let isSimulating = false;
+let isSplashActive = true;
+let isAmbientSim = true;
+let hasActiveSession = false;
 let activeTool = 'select';
 let selectedItems = [];
 let popupTargetItem = null;
@@ -2095,6 +2112,7 @@ btnSaveDownload.addEventListener('click', () => {
   headerProjectTitle.textContent = `${chosenName}.json`;
 
   const state = engine.exportState(chosenName);
+  addRecentProfile(chosenName, state);
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -2124,6 +2142,9 @@ fileImportInput.addEventListener('change', (e) => {
       selectedItems = [];
       updateElementsList();
       renderToolProperties(activeTool);
+      addRecentProfile(currentProjectName, data);
+      hasActiveSession = true;
+      hideSplashScreen();
     } catch (err) {
       alert('Invalid JSON configuration file.');
     }
@@ -3581,6 +3602,12 @@ window.addEventListener('keydown', (e) => {
       document.getElementById('toolSelect')?.click();
     }
   } else if (e.code === 'Escape') {
+    if (isSplashActive) {
+      if (hasActiveSession) {
+        hideSplashScreen();
+      }
+      return;
+    }
     if (activeTool !== 'select') {
       document.getElementById('toolSelect')?.click();
     }
@@ -3862,24 +3889,277 @@ window.addEventListener('click', (e) => {
   if (e.target === chartModal) closeCustomChartModal();
 });
 
-// Default Scenario Setup
-function setupInitialScene() {
-  engine.clear();
-  engine.addWall(280, 120, 720, 120, { conductivity: 0, thickness: 4 });
-  engine.addWall(280, 580, 720, 580, { conductivity: 0, thickness: 4 });
-  engine.addWall(280, 120, 280, 580, { conductivity: 0, thickness: 4 });
-  engine.addWall(720, 120, 720, 580, { conductivity: 0, thickness: 4 });
-  engine.addWall(500, 120, 500, 580, { conductivity: 0.8, thickness: 4 });
-  engine.addSensor({ label: 'Chamber A', x: 300, y: 140, width: 180, height: 420, color: '#38bdf8' });
-  engine.addSensor({ label: 'Chamber B', x: 520, y: 140, width: 180, height: 420, color: '#ef4444' });
-  engine.spawnGasRaster(310, 160, 160, 380, 26, 1.0, 340, 'uniform_speed', 'Spawner Chamber A (340K)');
-  engine.spawnGasRaster(530, 160, 160, 380, 26, 1.0, 260, 'uniform_speed', 'Spawner Chamber B (260K)');
-  
-  const defaultState = engine.exportState('Default Profile');
-  engine.setLoadedProfile(defaultState);
+// ============================================================================
+// Splash Screen / Welcome Dashboard Controller
+// ============================================================================
+function formatTimeAgo(timestamp) {
+  if (!timestamp) return 'recently';
+  const diff = Date.now() - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
-setupInitialScene();
+function getRecentProfiles() {
+  try {
+    const raw = localStorage.getItem('thermo_recent_profiles');
+    return raw ? JSON.parse(raw) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function addRecentProfile(name, stateData) {
+  try {
+    let list = getRecentProfiles();
+    const particleCount = stateData.particles ? stateData.particles.length : (stateData.gasRasters ? stateData.gasRasters.reduce((s, r) => s + (r.count || 0), 0) : 0);
+    const elementCount = (stateData.walls?.length || 0) +
+      (stateData.pistons?.length || 0) +
+      (stateData.reservoirs?.length || 0) +
+      (stateData.emitters?.length || 0) +
+      (stateData.sinks?.length || 0) +
+      (stateData.thermalBlocks?.length || 0) +
+      (stateData.heatExchangers?.length || 0) +
+      (stateData.regenerators?.length || 0) +
+      (stateData.sensors?.length || 0) +
+      (stateData.throttleValves?.length || 0);
+
+    const cleanName = (name || 'Untitled Simulation').trim();
+    list = list.filter(item => item.name !== cleanName);
+    list.unshift({
+      id: 'rec_' + Date.now(),
+      name: cleanName,
+      timestamp: Date.now(),
+      particleCount,
+      elementCount,
+      data: stateData
+    });
+    if (list.length > 8) list = list.slice(0, 8);
+    localStorage.setItem('thermo_recent_profiles', JSON.stringify(list));
+    renderRecentProfiles();
+  } catch (err) {
+    console.warn('Failed to save recent profile:', err);
+  }
+}
+
+function clearRecentProfiles() {
+  localStorage.removeItem('thermo_recent_profiles');
+  renderRecentProfiles();
+}
+
+function renderRecentProfiles() {
+  if (!splashRecentContainer) return;
+  const list = getRecentProfiles();
+  if (list.length === 0) {
+    splashRecentContainer.innerHTML = `
+      <div class="splash-empty-state">
+        <p>No recent profiles yet</p>
+        <span>Profiles you save or open will appear here</span>
+      </div>
+    `;
+    return;
+  }
+
+  splashRecentContainer.innerHTML = '';
+  list.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'splash-recent-item';
+    el.innerHTML = `
+      <div class="splash-recent-left">
+        <span class="splash-recent-name">${item.name}</span>
+        <div class="splash-recent-meta">
+          <span class="splash-recent-badge">${item.particleCount || 0} particles</span>
+          <span class="splash-recent-badge">${item.elementCount || 0} elements</span>
+          <span>${formatTimeAgo(item.timestamp)}</span>
+        </div>
+      </div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    `;
+    el.addEventListener('click', () => {
+      loadProfileData(item.name, item.data);
+    });
+    splashRecentContainer.appendChild(el);
+  });
+}
+
+function renderSplashPresets() {
+  if (!splashPresetsContainer) return;
+  const presetsObj = window.Presets || Presets || {};
+  const keys = Object.keys(presetsObj);
+  if (keys.length === 0) {
+    splashPresetsContainer.innerHTML = '<div class="splash-empty-state"><p>No presets available</p></div>';
+    return;
+  }
+
+  splashPresetsContainer.innerHTML = '';
+  keys.forEach(key => {
+    const p = presetsObj[key];
+    const card = document.createElement('div');
+    card.className = 'splash-preset-card';
+    card.innerHTML = `
+      <div class="splash-preset-info">
+        <div class="splash-preset-top">
+          <span class="splash-preset-name">${p.name}</span>
+          <span class="splash-preset-badge">${p.category || 'Thermodynamics'}</span>
+        </div>
+        <p class="splash-preset-desc">${p.description}</p>
+      </div>
+      <div class="splash-preset-arrow">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    `;
+    card.addEventListener('click', () => {
+      isSimulating = false;
+      engine.isPaused = true;
+      p.load(engine);
+      currentProjectName = p.name;
+      headerProjectTitle.textContent = `${currentProjectName}.json`;
+      const state = engine.exportState(p.name);
+      addRecentProfile(p.name, state);
+      selectedItems = [];
+      updateElementsList();
+      renderToolProperties(activeTool);
+      hasActiveSession = true;
+      hideSplashScreen();
+    });
+    splashPresetsContainer.appendChild(card);
+  });
+}
+
+function loadProfileData(name, data) {
+  isSimulating = false;
+  engine.isPaused = true;
+  currentProjectName = name;
+  headerProjectTitle.textContent = `${name}.json`;
+  engine.setLoadedProfile(data);
+  selectedItems = [];
+  updateElementsList();
+  renderToolProperties(activeTool);
+  hasActiveSession = true;
+  hideSplashScreen();
+}
+
+function setupAmbientScene() {
+  engine.clear();
+  engine.timeScale = 1.0;
+  engine.isPaused = false;
+  
+  const w = Math.max(1400, window.innerWidth || 1400);
+  const h = Math.max(900, window.innerHeight || 900);
+  
+  // Boundary walls enclosing the viewport
+  engine.addWall(0, 0, w, 0, { conductivity: 0, thickness: 16 });
+  engine.addWall(w, 0, w, h, { conductivity: 0, thickness: 16 });
+  engine.addWall(w, h, 0, h, { conductivity: 0, thickness: 16 });
+  engine.addWall(0, h, 0, 0, { conductivity: 0, thickness: 16 });
+  
+  // Gentle ambient particle cloud drifting in background
+  engine.spawnGasRaster(140, 120, w - 280, h - 240, 95, 1.0, 320, 'maxwell_boltzmann', 'Ambient Gas Bath');
+  
+  // 3 Soft Brownian colloidal particles
+  const col1 = engine.addParticle(w * 0.35, h * 0.45, 30, -15, 12.0);
+  col1.tag = 'colloid';
+  const col2 = engine.addParticle(w * 0.65, h * 0.55, -25, 30, 15.0);
+  col2.tag = 'colloid';
+  const col3 = engine.addParticle(w * 0.50, h * 0.30, 15, 20, 10.0);
+  col3.tag = 'colloid';
+}
+
+function showSplashScreen(options = {}) {
+  isSplashActive = true;
+  document.body.classList.add('splash-mode');
+  if (splashOverlay) {
+    splashOverlay.classList.remove('hidden');
+    splashOverlay.style.display = 'flex';
+  }
+  
+  const isReturning = options.isReturning || hasActiveSession;
+  if (btnSplashResume) {
+    btnSplashResume.style.display = isReturning ? 'flex' : 'none';
+  }
+  if (btnSplashClose) {
+    btnSplashClose.style.display = isReturning ? 'flex' : 'none';
+  }
+  
+  renderRecentProfiles();
+  renderSplashPresets();
+}
+
+function hideSplashScreen() {
+  isSplashActive = false;
+  isAmbientSim = false;
+  hasActiveSession = true;
+  document.body.classList.remove('splash-mode');
+  if (splashOverlay) {
+    splashOverlay.classList.add('hidden');
+    setTimeout(() => {
+      if (!isSplashActive && splashOverlay) {
+        splashOverlay.style.display = 'none';
+      }
+    }, 250);
+  }
+}
+
+// Splash Screen Action Event Listeners
+btnSplashNew?.addEventListener('click', () => {
+  isSimulating = false;
+  engine.isPaused = true;
+  engine.clear();
+  
+  // Standard chamber outer boundaries
+  engine.addWall(160, 100, 960, 100, { conductivity: 0, thickness: 4 });
+  engine.addWall(160, 620, 960, 620, { conductivity: 0, thickness: 4 });
+  engine.addWall(160, 100, 160, 620, { conductivity: 0, thickness: 4 });
+  engine.addWall(960, 100, 960, 620, { conductivity: 0, thickness: 4 });
+  
+  currentProjectName = 'Untitled Simulation';
+  headerProjectTitle.textContent = 'Untitled Simulation.json';
+  const state = engine.exportState('Untitled Simulation');
+  engine.setLoadedProfile(state);
+  selectedItems = [];
+  updateElementsList();
+  renderToolProperties(activeTool);
+  hideSplashScreen();
+});
+
+btnSplashOpen?.addEventListener('click', () => {
+  fileImportInput.click();
+});
+
+btnSplashResume?.addEventListener('click', () => {
+  hideSplashScreen();
+});
+
+btnSplashClose?.addEventListener('click', () => {
+  hideSplashScreen();
+});
+
+brandBadge?.addEventListener('click', () => {
+  showSplashScreen({ isReturning: hasActiveSession });
+});
+
+brandTitle?.addEventListener('click', () => {
+  showSplashScreen({ isReturning: hasActiveSession });
+});
+
+btnClearRecent?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  clearRecentProfiles();
+});
+
+splashOverlay?.addEventListener('click', (e) => {
+  if (e.target === splashOverlay && hasActiveSession) {
+    hideSplashScreen();
+  }
+});
+
+// App Startup: Launch in Ambient Splash Mode
+setupAmbientScene();
+showSplashScreen({ isReturning: false });
 updateViewMenuLabels();
 const defaultToolBtn = document.getElementById('toolSelect');
 if (defaultToolBtn) selectToolButton(defaultToolBtn);
@@ -3896,11 +4176,13 @@ function animate(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (!engine.isPaused && isSimulating) {
-    historyTimer += dt;
-    if (historyTimer >= 0.05) {
-      pushHistoryFrame();
-      historyTimer = 0;
+  if ((!engine.isPaused && isSimulating) || (isSplashActive && isAmbientSim)) {
+    if (isSimulating) {
+      historyTimer += dt;
+      if (historyTimer >= 0.05) {
+        pushHistoryFrame();
+        historyTimer = 0;
+      }
     }
     engine.step(dt);
   }

@@ -5280,6 +5280,390 @@ class DashboardChart {
 }
 
 
+// --- src/presets/index.js ---
+const Presets = {
+  // 1. Split-Stirling Cryocooler / Heat Engine
+  splitStirling: {
+    id: 'splitStirling',
+    name: 'Split-Stirling Cryocooler',
+    category: 'Thermodynamic Cycles',
+    icon: 'stirling',
+    description: 'Dual-piston compressor, split pipe, regenerator matrix, cold finger, and displacer piston.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Outer boundaries / Compressor housing (Left side)
+      engine.addWall(60, 160, 280, 160, { thickness: 6 });
+      engine.addWall(60, 480, 280, 480, { thickness: 6 });
+      engine.addWall(60, 160, 60, 480, { thickness: 6 });
+
+      // Split Pipe connecting compressor to regenerator
+      engine.addWall(280, 160, 280, 290, { thickness: 6 });
+      engine.addWall(280, 290, 560, 290, { thickness: 6 });
+      engine.addWall(280, 350, 560, 350, { thickness: 6 });
+      engine.addWall(280, 350, 280, 480, { thickness: 6 });
+
+      // Ambient Heat Exchanger along split pipe (rejection at 300K)
+      engine.addHeatExchanger(330, 275, 120, 90, {
+        temperature: 300,
+        conductivity: 0.8,
+        label: 'Ambient Cooler (300K)'
+      });
+
+      // Cold Finger / Expander Cylinder (Right side)
+      engine.addWall(560, 80, 700, 80, { thickness: 6 });
+      engine.addWall(560, 80, 560, 290, { thickness: 6 });
+      engine.addWall(700, 80, 700, 540, { thickness: 6 });
+      engine.addWall(560, 350, 560, 540, { thickness: 6 });
+      engine.addWall(560, 540, 700, 540, { thickness: 6 });
+
+      // Regenerator Matrix in Cold Finger
+      engine.addRegeneratorMatrix(570, 160, 120, 110, {
+        orientation: 'vertical',
+        temperature: 200,
+        heatCapacity: 450,
+        conductivity: 0.75,
+        label: 'Regenerator Matrix'
+      });
+
+      // Compressor Piston (Motorized harmonic drive)
+      engine.addPiston({
+        label: 'Compressor Piston',
+        orientation: 'horizontal',
+        x: 160,
+        y: 320,
+        width: 24,
+        height: 310,
+        minPos: 80,
+        maxPos: 250,
+        mode: 'motorized',
+        frequency: 0.8,
+        amplitude: 50,
+        phase: 0
+      });
+
+      // Displacer Piston in Bouncing Volume (Phase-shifted)
+      engine.addPiston({
+        label: 'Displacer Piston',
+        orientation: 'vertical',
+        x: 630,
+        y: 420,
+        width: 20,
+        height: 130,
+        minPos: 310,
+        maxPos: 490,
+        mode: 'motorized',
+        frequency: 0.8,
+        amplitude: 45,
+        phase: 80 // ~80 degrees phase lead for Stirling expansion
+      });
+
+      // Sensor Chambers
+      engine.addSensor({
+        label: 'Compression Space',
+        x: 180,
+        y: 180,
+        width: 90,
+        height: 280,
+        color: '#f97316'
+      });
+      engine.addSensor({
+        label: 'Expansion Cold Head',
+        x: 570,
+        y: 90,
+        width: 120,
+        height: 65,
+        color: '#38bdf8'
+      });
+
+      // Working Gas
+      engine.spawnGasRaster(180, 200, 90, 240, 90, 1.0, 300, 'maxwell_boltzmann', 'Compressor Gas');
+      engine.spawnGasRaster(570, 95, 120, 60, 45, 1.0, 220, 'maxwell_boltzmann', 'Cold Space Gas');
+    }
+  },
+
+  // 2. Venturi Nozzle & Bernoulli Effect
+  venturiTube: {
+    id: 'venturiTube',
+    name: 'Venturi Nozzle & Bernoulli Flow',
+    category: 'Fluid & Aerodynamics',
+    icon: 'venturi',
+    description: 'Converging-diverging contraction channel demonstrating velocity increase and pressure drop.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Top contoured wall
+      engine.addWall(40, 160, 260, 160, { thickness: 5 });
+      engine.addWall(260, 160, 440, 260, { thickness: 5 });
+      engine.addWall(440, 260, 560, 260, { thickness: 5 }); // Throat
+      engine.addWall(560, 260, 740, 160, { thickness: 5 });
+      engine.addWall(740, 160, 960, 160, { thickness: 5 });
+
+      // Bottom contoured wall
+      engine.addWall(40, 480, 260, 480, { thickness: 5 });
+      engine.addWall(260, 480, 440, 380, { thickness: 5 });
+      engine.addWall(440, 380, 560, 380, { thickness: 5 }); // Throat
+      engine.addWall(560, 380, 740, 480, { thickness: 5 });
+      engine.addWall(740, 480, 960, 480, { thickness: 5 });
+
+      // Inlet continuous emitter (left)
+      engine.addEmitter(50, 200, 40, 240, {
+        direction: 'right',
+        rate: 28,
+        temperature: 300,
+        mass: 1.0
+      });
+
+      // Outlet absorber (right)
+      engine.addSink(910, 180, 40, 280, {
+        direction: 'right',
+        absorptionEfficiency: 1.0
+      });
+
+      // Sensors: Inlet, Throat, Diffuser
+      engine.addSensor({
+        label: 'Inlet (Wide, Low v)',
+        x: 120,
+        y: 180,
+        width: 120,
+        height: 280,
+        color: '#38bdf8'
+      });
+      engine.addSensor({
+        label: 'Throat (Constriction, High v, Low P)',
+        x: 450,
+        y: 270,
+        width: 100,
+        height: 100,
+        color: '#f59e0b'
+      });
+      engine.addSensor({
+        label: 'Diffuser (Recovery)',
+        x: 760,
+        y: 180,
+        width: 140,
+        height: 280,
+        color: '#10b981'
+      });
+
+      // Pre-fill steady flow gas
+      engine.spawnGasRaster(120, 200, 120, 240, 60, 1.0, 300, 'uniform_speed', 'Inlet Gas');
+      engine.spawnGasRaster(450, 280, 100, 80, 35, 1.0, 270, 'uniform_speed', 'Throat Gas');
+      engine.spawnGasRaster(760, 200, 130, 240, 60, 1.0, 300, 'uniform_speed', 'Exit Gas');
+    }
+  },
+
+  // 3. Dual-Chamber Thermal Equalization
+  dualChamber: {
+    id: 'dualChamber',
+    name: 'Dual-Chamber Thermal Equalization',
+    category: 'Heat Transfer & 2nd Law',
+    icon: 'chambers',
+    description: 'High-temperature gas and cryogenic gas separated by a thermally conductive partition wall.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Outer insulated container (800x440)
+      engine.addWall(80, 120, 880, 120, { thickness: 8, conductivity: 0 });
+      engine.addWall(80, 560, 880, 560, { thickness: 8, conductivity: 0 });
+      engine.addWall(80, 120, 80, 560, { thickness: 8, conductivity: 0 });
+      engine.addWall(880, 120, 880, 560, { thickness: 8, conductivity: 0 });
+
+      // Central conductive dividing wall (kappa = 0.85)
+      engine.addWall(480, 120, 480, 560, {
+        thickness: 8,
+        conductivity: 0.85,
+        label: 'Conductive Partition (κ = 0.85)'
+      });
+
+      // Sensors: Left (Hot), Right (Cold)
+      engine.addSensor({
+        label: 'Chamber Left (Hot)',
+        x: 100,
+        y: 140,
+        width: 360,
+        height: 400,
+        color: '#ef4444'
+      });
+      engine.addSensor({
+        label: 'Chamber Right (Cold)',
+        x: 500,
+        y: 140,
+        width: 360,
+        height: 400,
+        color: '#3b82f6'
+      });
+
+      // Hot gas left (750K), Cold gas right (125K)
+      engine.spawnGasRaster(120, 160, 320, 360, 120, 1.0, 750, 'maxwell_boltzmann', 'Hot Gas (750K)');
+      engine.spawnGasRaster(520, 160, 320, 360, 120, 1.0, 125, 'maxwell_boltzmann', 'Cold Gas (125K)');
+    }
+  },
+
+  // 4. Joule-Thomson Expansion & Throttle Valve
+  jouleThomson: {
+    id: 'jouleThomson',
+    name: 'Joule-Thomson Throttle Expansion',
+    category: 'Thermodynamic Expansion',
+    icon: 'throttle',
+    description: 'High-pressure gas forced through a narrow throttle valve aperture into an expansion chamber.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Outer enclosure
+      engine.addWall(60, 150, 900, 150, { thickness: 6 });
+      engine.addWall(60, 510, 900, 510, { thickness: 6 });
+      engine.addWall(60, 150, 60, 510, { thickness: 6 });
+      engine.addWall(900, 150, 900, 510, { thickness: 6 });
+
+      // Partition Wall with central Throttle Valve
+      engine.addWall(460, 150, 460, 260, { thickness: 6 });
+      engine.addThrottleValve(460, 260, 460, 400, {
+        openRatio: 0.25,
+        thickness: 8,
+        conductivity: 0.2
+      });
+      engine.addWall(460, 400, 460, 510, { thickness: 6 });
+
+      // Continuous high-pressure supply on left
+      engine.addEmitter(80, 230, 40, 200, {
+        direction: 'right',
+        rate: 22,
+        temperature: 450,
+        mass: 1.0
+      });
+
+      // Exhaust / Low-pressure sink on far right
+      engine.addSink(840, 230, 40, 200, {
+        direction: 'right',
+        absorptionEfficiency: 0.95
+      });
+
+      // Upstream & Downstream Sensor Zones
+      engine.addSensor({
+        label: 'High-Pressure Upstream (P1, T1)',
+        x: 140,
+        y: 170,
+        width: 300,
+        height: 320,
+        color: '#f97316'
+      });
+      engine.addSensor({
+        label: 'Low-Pressure Downstream (P2, T2)',
+        x: 480,
+        y: 170,
+        width: 340,
+        height: 320,
+        color: '#10b981'
+      });
+
+      // Pre-fill upstream chamber
+      engine.spawnGasRaster(160, 190, 260, 280, 110, 1.0, 450, 'maxwell_boltzmann', 'Upstream Gas');
+      engine.spawnGasRaster(500, 230, 300, 200, 40, 1.0, 250, 'maxwell_boltzmann', 'Downstream Gas');
+    }
+  },
+
+  // 5. Adiabatic & Isothermal Compression
+  compressionCylinder: {
+    id: 'compressionCylinder',
+    name: 'Adiabatic Cylinder Compression',
+    category: 'Work & Compression',
+    icon: 'piston',
+    description: 'Cylinder enclosed with a moving heavy piston demonstrating work extraction and PV compression heating.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Rigid Cylinder Chamber
+      engine.addWall(80, 140, 840, 140, { thickness: 6, conductivity: 0 });
+      engine.addWall(80, 500, 840, 500, { thickness: 6, conductivity: 0 });
+      engine.addWall(80, 140, 80, 500, { thickness: 6, conductivity: 0 });
+
+      // Compressor Piston (Motorized sweep)
+      engine.addPiston({
+        label: 'Compression Piston',
+        orientation: 'horizontal',
+        x: 600,
+        y: 320,
+        width: 28,
+        height: 350,
+        minPos: 200,
+        maxPos: 760,
+        mode: 'motorized',
+        frequency: 0.5,
+        amplitude: 220,
+        phase: 0,
+        mass: 50,
+        conductivity: 0
+      });
+
+      // Cylinder Sensor
+      engine.addSensor({
+        label: 'Cylinder Chamber',
+        x: 100,
+        y: 160,
+        width: 480,
+        height: 320,
+        color: '#f59e0b'
+      });
+
+      // Enclosed Gas
+      engine.spawnGasRaster(120, 180, 440, 280, 160, 1.0, 280, 'maxwell_boltzmann', 'Cylinder Gas');
+    }
+  },
+
+  // 6. Brownian Motion & Colloidal Diffusion
+  brownianMotion: {
+    id: 'brownianMotion',
+    name: 'Brownian Motion & Colloidal Diffusion',
+    category: 'Statistical Mechanics',
+    icon: 'brownian',
+    description: 'Massive colloidal particles suspended in an ideal thermal bath undergoing random walk collisions.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Closed Container Box
+      engine.addWall(80, 80, 880, 80, { thickness: 6 });
+      engine.addWall(80, 580, 880, 580, { thickness: 6 });
+      engine.addWall(80, 80, 80, 580, { thickness: 6 });
+      engine.addWall(880, 80, 880, 580, { thickness: 6 });
+
+      // Measurement Zone
+      engine.addSensor({
+        label: 'Diffusion Bath',
+        x: 90,
+        y: 90,
+        width: 780,
+        height: 480,
+        color: '#a855f7'
+      });
+
+      // Background Light Gas (m = 0.5, fast)
+      engine.spawnGasRaster(100, 100, 760, 460, 240, 0.5, 350, 'maxwell_boltzmann', 'Thermal Gas Bath');
+
+      // Add 4 Heavy Colloidal Particles (m = 15.0 to 25.0)
+      const c1 = engine.addParticle(260, 300, 0, 0, 18.0);
+      c1.tag = 'colloid';
+      const c2 = engine.addParticle(480, 240, 0, 0, 22.0);
+      c2.tag = 'colloid';
+      const c3 = engine.addParticle(520, 420, 0, 0, 20.0);
+      c3.tag = 'colloid';
+      const c4 = engine.addParticle(700, 340, 0, 0, 25.0);
+      c4.tag = 'colloid';
+    }
+  }
+};
+
+if (typeof window !== 'undefined') {
+  window.Presets = Presets;
+}
+
+
 // --- src/main.js ---
 
 // Canvas DOM Elements
@@ -5300,6 +5684,19 @@ const headerProjectTitle = document.getElementById('headerProjectTitle');
 const fileImportInput = document.getElementById('fileImportInput');
 const btnToolbarReset = document.getElementById('btnToolbarReset');
 const btnToolbarClear = document.getElementById('btnToolbarClear');
+const brandBadge = document.getElementById('brandBadge');
+const brandTitle = document.getElementById('brandTitle');
+
+// Splash Screen / Welcome Dashboard Elements
+const splashOverlay = document.getElementById('splashOverlay');
+const splashCard = document.getElementById('splashCard');
+const btnSplashNew = document.getElementById('btnSplashNew');
+const btnSplashOpen = document.getElementById('btnSplashOpen');
+const btnSplashResume = document.getElementById('btnSplashResume');
+const btnSplashClose = document.getElementById('btnSplashClose');
+const splashRecentContainer = document.getElementById('splashRecentContainer');
+const splashPresetsContainer = document.getElementById('splashPresetsContainer');
+const btnClearRecent = document.getElementById('btnClearRecent');
 
 // Transform Ribbon Elements
 const btnRotate90 = document.getElementById('btnRotate90');
@@ -5413,6 +5810,9 @@ renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
 // App Workflow State
 let currentProjectName = 'Default Profile';
 let isSimulating = false;
+let isSplashActive = true;
+let isAmbientSim = true;
+let hasActiveSession = false;
 let activeTool = 'select';
 let selectedItems = [];
 let popupTargetItem = null;
@@ -7359,6 +7759,7 @@ btnSaveDownload.addEventListener('click', () => {
   headerProjectTitle.textContent = `${chosenName}.json`;
 
   const state = engine.exportState(chosenName);
+  addRecentProfile(chosenName, state);
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -7388,6 +7789,9 @@ fileImportInput.addEventListener('change', (e) => {
       selectedItems = [];
       updateElementsList();
       renderToolProperties(activeTool);
+      addRecentProfile(currentProjectName, data);
+      hasActiveSession = true;
+      hideSplashScreen();
     } catch (err) {
       alert('Invalid JSON configuration file.');
     }
@@ -8845,6 +9249,12 @@ window.addEventListener('keydown', (e) => {
       document.getElementById('toolSelect')?.click();
     }
   } else if (e.code === 'Escape') {
+    if (isSplashActive) {
+      if (hasActiveSession) {
+        hideSplashScreen();
+      }
+      return;
+    }
     if (activeTool !== 'select') {
       document.getElementById('toolSelect')?.click();
     }
@@ -9126,24 +9536,277 @@ window.addEventListener('click', (e) => {
   if (e.target === chartModal) closeCustomChartModal();
 });
 
-// Default Scenario Setup
-function setupInitialScene() {
-  engine.clear();
-  engine.addWall(280, 120, 720, 120, { conductivity: 0, thickness: 4 });
-  engine.addWall(280, 580, 720, 580, { conductivity: 0, thickness: 4 });
-  engine.addWall(280, 120, 280, 580, { conductivity: 0, thickness: 4 });
-  engine.addWall(720, 120, 720, 580, { conductivity: 0, thickness: 4 });
-  engine.addWall(500, 120, 500, 580, { conductivity: 0.8, thickness: 4 });
-  engine.addSensor({ label: 'Chamber A', x: 300, y: 140, width: 180, height: 420, color: '#38bdf8' });
-  engine.addSensor({ label: 'Chamber B', x: 520, y: 140, width: 180, height: 420, color: '#ef4444' });
-  engine.spawnGasRaster(310, 160, 160, 380, 26, 1.0, 340, 'uniform_speed', 'Spawner Chamber A (340K)');
-  engine.spawnGasRaster(530, 160, 160, 380, 26, 1.0, 260, 'uniform_speed', 'Spawner Chamber B (260K)');
-  
-  const defaultState = engine.exportState('Default Profile');
-  engine.setLoadedProfile(defaultState);
+// ============================================================================
+// Splash Screen / Welcome Dashboard Controller
+// ============================================================================
+function formatTimeAgo(timestamp) {
+  if (!timestamp) return 'recently';
+  const diff = Date.now() - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
-setupInitialScene();
+function getRecentProfiles() {
+  try {
+    const raw = localStorage.getItem('thermo_recent_profiles');
+    return raw ? JSON.parse(raw) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function addRecentProfile(name, stateData) {
+  try {
+    let list = getRecentProfiles();
+    const particleCount = stateData.particles ? stateData.particles.length : (stateData.gasRasters ? stateData.gasRasters.reduce((s, r) => s + (r.count || 0), 0) : 0);
+    const elementCount = (stateData.walls?.length || 0) +
+      (stateData.pistons?.length || 0) +
+      (stateData.reservoirs?.length || 0) +
+      (stateData.emitters?.length || 0) +
+      (stateData.sinks?.length || 0) +
+      (stateData.thermalBlocks?.length || 0) +
+      (stateData.heatExchangers?.length || 0) +
+      (stateData.regenerators?.length || 0) +
+      (stateData.sensors?.length || 0) +
+      (stateData.throttleValves?.length || 0);
+
+    const cleanName = (name || 'Untitled Simulation').trim();
+    list = list.filter(item => item.name !== cleanName);
+    list.unshift({
+      id: 'rec_' + Date.now(),
+      name: cleanName,
+      timestamp: Date.now(),
+      particleCount,
+      elementCount,
+      data: stateData
+    });
+    if (list.length > 8) list = list.slice(0, 8);
+    localStorage.setItem('thermo_recent_profiles', JSON.stringify(list));
+    renderRecentProfiles();
+  } catch (err) {
+    console.warn('Failed to save recent profile:', err);
+  }
+}
+
+function clearRecentProfiles() {
+  localStorage.removeItem('thermo_recent_profiles');
+  renderRecentProfiles();
+}
+
+function renderRecentProfiles() {
+  if (!splashRecentContainer) return;
+  const list = getRecentProfiles();
+  if (list.length === 0) {
+    splashRecentContainer.innerHTML = `
+      <div class="splash-empty-state">
+        <p>No recent profiles yet</p>
+        <span>Profiles you save or open will appear here</span>
+      </div>
+    `;
+    return;
+  }
+
+  splashRecentContainer.innerHTML = '';
+  list.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'splash-recent-item';
+    el.innerHTML = `
+      <div class="splash-recent-left">
+        <span class="splash-recent-name">${item.name}</span>
+        <div class="splash-recent-meta">
+          <span class="splash-recent-badge">${item.particleCount || 0} particles</span>
+          <span class="splash-recent-badge">${item.elementCount || 0} elements</span>
+          <span>${formatTimeAgo(item.timestamp)}</span>
+        </div>
+      </div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    `;
+    el.addEventListener('click', () => {
+      loadProfileData(item.name, item.data);
+    });
+    splashRecentContainer.appendChild(el);
+  });
+}
+
+function renderSplashPresets() {
+  if (!splashPresetsContainer) return;
+  const presetsObj = window.Presets || Presets || {};
+  const keys = Object.keys(presetsObj);
+  if (keys.length === 0) {
+    splashPresetsContainer.innerHTML = '<div class="splash-empty-state"><p>No presets available</p></div>';
+    return;
+  }
+
+  splashPresetsContainer.innerHTML = '';
+  keys.forEach(key => {
+    const p = presetsObj[key];
+    const card = document.createElement('div');
+    card.className = 'splash-preset-card';
+    card.innerHTML = `
+      <div class="splash-preset-info">
+        <div class="splash-preset-top">
+          <span class="splash-preset-name">${p.name}</span>
+          <span class="splash-preset-badge">${p.category || 'Thermodynamics'}</span>
+        </div>
+        <p class="splash-preset-desc">${p.description}</p>
+      </div>
+      <div class="splash-preset-arrow">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    `;
+    card.addEventListener('click', () => {
+      isSimulating = false;
+      engine.isPaused = true;
+      p.load(engine);
+      currentProjectName = p.name;
+      headerProjectTitle.textContent = `${currentProjectName}.json`;
+      const state = engine.exportState(p.name);
+      addRecentProfile(p.name, state);
+      selectedItems = [];
+      updateElementsList();
+      renderToolProperties(activeTool);
+      hasActiveSession = true;
+      hideSplashScreen();
+    });
+    splashPresetsContainer.appendChild(card);
+  });
+}
+
+function loadProfileData(name, data) {
+  isSimulating = false;
+  engine.isPaused = true;
+  currentProjectName = name;
+  headerProjectTitle.textContent = `${name}.json`;
+  engine.setLoadedProfile(data);
+  selectedItems = [];
+  updateElementsList();
+  renderToolProperties(activeTool);
+  hasActiveSession = true;
+  hideSplashScreen();
+}
+
+function setupAmbientScene() {
+  engine.clear();
+  engine.timeScale = 1.0;
+  engine.isPaused = false;
+  
+  const w = Math.max(1400, window.innerWidth || 1400);
+  const h = Math.max(900, window.innerHeight || 900);
+  
+  // Boundary walls enclosing the viewport
+  engine.addWall(0, 0, w, 0, { conductivity: 0, thickness: 16 });
+  engine.addWall(w, 0, w, h, { conductivity: 0, thickness: 16 });
+  engine.addWall(w, h, 0, h, { conductivity: 0, thickness: 16 });
+  engine.addWall(0, h, 0, 0, { conductivity: 0, thickness: 16 });
+  
+  // Gentle ambient particle cloud drifting in background
+  engine.spawnGasRaster(140, 120, w - 280, h - 240, 95, 1.0, 320, 'maxwell_boltzmann', 'Ambient Gas Bath');
+  
+  // 3 Soft Brownian colloidal particles
+  const col1 = engine.addParticle(w * 0.35, h * 0.45, 30, -15, 12.0);
+  col1.tag = 'colloid';
+  const col2 = engine.addParticle(w * 0.65, h * 0.55, -25, 30, 15.0);
+  col2.tag = 'colloid';
+  const col3 = engine.addParticle(w * 0.50, h * 0.30, 15, 20, 10.0);
+  col3.tag = 'colloid';
+}
+
+function showSplashScreen(options = {}) {
+  isSplashActive = true;
+  document.body.classList.add('splash-mode');
+  if (splashOverlay) {
+    splashOverlay.classList.remove('hidden');
+    splashOverlay.style.display = 'flex';
+  }
+  
+  const isReturning = options.isReturning || hasActiveSession;
+  if (btnSplashResume) {
+    btnSplashResume.style.display = isReturning ? 'flex' : 'none';
+  }
+  if (btnSplashClose) {
+    btnSplashClose.style.display = isReturning ? 'flex' : 'none';
+  }
+  
+  renderRecentProfiles();
+  renderSplashPresets();
+}
+
+function hideSplashScreen() {
+  isSplashActive = false;
+  isAmbientSim = false;
+  hasActiveSession = true;
+  document.body.classList.remove('splash-mode');
+  if (splashOverlay) {
+    splashOverlay.classList.add('hidden');
+    setTimeout(() => {
+      if (!isSplashActive && splashOverlay) {
+        splashOverlay.style.display = 'none';
+      }
+    }, 250);
+  }
+}
+
+// Splash Screen Action Event Listeners
+btnSplashNew?.addEventListener('click', () => {
+  isSimulating = false;
+  engine.isPaused = true;
+  engine.clear();
+  
+  // Standard chamber outer boundaries
+  engine.addWall(160, 100, 960, 100, { conductivity: 0, thickness: 4 });
+  engine.addWall(160, 620, 960, 620, { conductivity: 0, thickness: 4 });
+  engine.addWall(160, 100, 160, 620, { conductivity: 0, thickness: 4 });
+  engine.addWall(960, 100, 960, 620, { conductivity: 0, thickness: 4 });
+  
+  currentProjectName = 'Untitled Simulation';
+  headerProjectTitle.textContent = 'Untitled Simulation.json';
+  const state = engine.exportState('Untitled Simulation');
+  engine.setLoadedProfile(state);
+  selectedItems = [];
+  updateElementsList();
+  renderToolProperties(activeTool);
+  hideSplashScreen();
+});
+
+btnSplashOpen?.addEventListener('click', () => {
+  fileImportInput.click();
+});
+
+btnSplashResume?.addEventListener('click', () => {
+  hideSplashScreen();
+});
+
+btnSplashClose?.addEventListener('click', () => {
+  hideSplashScreen();
+});
+
+brandBadge?.addEventListener('click', () => {
+  showSplashScreen({ isReturning: hasActiveSession });
+});
+
+brandTitle?.addEventListener('click', () => {
+  showSplashScreen({ isReturning: hasActiveSession });
+});
+
+btnClearRecent?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  clearRecentProfiles();
+});
+
+splashOverlay?.addEventListener('click', (e) => {
+  if (e.target === splashOverlay && hasActiveSession) {
+    hideSplashScreen();
+  }
+});
+
+// App Startup: Launch in Ambient Splash Mode
+setupAmbientScene();
+showSplashScreen({ isReturning: false });
 updateViewMenuLabels();
 const defaultToolBtn = document.getElementById('toolSelect');
 if (defaultToolBtn) selectToolButton(defaultToolBtn);
@@ -9160,11 +9823,13 @@ function animate(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (!engine.isPaused && isSimulating) {
-    historyTimer += dt;
-    if (historyTimer >= 0.05) {
-      pushHistoryFrame();
-      historyTimer = 0;
+  if ((!engine.isPaused && isSimulating) || (isSplashActive && isAmbientSim)) {
+    if (isSimulating) {
+      historyTimer += dt;
+      if (historyTimer >= 0.05) {
+        pushHistoryFrame();
+        historyTimer = 0;
+      }
     }
     engine.step(dt);
   }
