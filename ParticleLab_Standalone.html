@@ -13306,25 +13306,30 @@ function setupAmbientScene() {
   engine.clear();
   engine.timeScale = 1.0;
   engine.isPaused = false;
+  isAmbientSim = true;
   
-  const w = Math.max(1400, window.innerWidth || 1400);
-  const h = Math.max(900, window.innerHeight || 900);
+  // Calculate world area corresponding to current viewport
+  const tl = renderer.screenToWorld ? renderer.screenToWorld(0, 0) : { x: -400, y: -250 };
+  const br = renderer.screenToWorld ? renderer.screenToWorld(canvas.width || window.innerWidth || 1400, canvas.height || window.innerHeight || 900) : { x: 1400, y: 850 };
   
-  // Boundary walls enclosing the viewport
-  engine.addWall(0, 0, w, 0, { conductivity: 0, thickness: 16 });
-  engine.addWall(w, 0, w, h, { conductivity: 0, thickness: 16 });
-  engine.addWall(w, h, 0, h, { conductivity: 0, thickness: 16 });
-  engine.addWall(0, h, 0, 0, { conductivity: 0, thickness: 16 });
+  const spanX = Math.max(800, br.x - tl.x);
+  const spanY = Math.max(500, br.y - tl.y);
   
-  // Gentle ambient particle cloud drifting in background
-  engine.spawnGasRaster(140, 120, w - 280, h - 240, 95, 1.0, 320, 'maxwell_boltzmann', 'Ambient Gas Bath');
+  // Gentle ambient particle cloud drifting freely across the whole screen - NO walls/box borders!
+  engine.spawnGasRaster(tl.x + 40, tl.y + 40, spanX - 80, spanY - 80, 85, 1.0, 310, 'maxwell_boltzmann');
   
-  // 3 Soft Brownian colloidal particles
-  const col1 = engine.addParticle(w * 0.35, h * 0.45, 30, -15, 12.0);
+  // Clear element & group tracking so ambient background has 0 elements
+  engine.particleGroups = [];
+  engine.elements = [];
+  
+  // Soft Brownian colloidal particles drifting around
+  const cx = (tl.x + br.x) * 0.5;
+  const cy = (tl.y + br.y) * 0.5;
+  const col1 = engine.addParticle(cx - 180, cy - 60, 24, -16, 12.0);
   col1.tag = 'colloid';
-  const col2 = engine.addParticle(w * 0.65, h * 0.55, -25, 30, 15.0);
+  const col2 = engine.addParticle(cx + 200, cy + 90, -18, 22, 14.0);
   col2.tag = 'colloid';
-  const col3 = engine.addParticle(w * 0.50, h * 0.30, 15, 20, 10.0);
+  const col3 = engine.addParticle(cx - 30, cy + 140, 16, -18, 10.0);
   col3.tag = 'colloid';
 }
 
@@ -13435,6 +13440,33 @@ function animate(now) {
       }
     }
     engine.step(dt);
+
+    if (isSplashActive && isAmbientSim) {
+      // Keep ambient particles floating seamlessly within visible screen area without needing walls
+      const tl = renderer.screenToWorld(0, 0);
+      const br = renderer.screenToWorld(canvas.width, canvas.height);
+      const pad = 50;
+      const minX = tl.x - pad, maxX = br.x + pad;
+      const minY = tl.y - pad, maxY = br.y + pad;
+
+      for (let i = 0; i < engine.particles.length; i++) {
+        const p = engine.particles[i];
+        if (p.pos.x < minX) {
+          p.pos.x = minX;
+          p.vel.x = Math.abs(p.vel.x);
+        } else if (p.pos.x > maxX) {
+          p.pos.x = maxX;
+          p.vel.x = -Math.abs(p.vel.x);
+        }
+        if (p.pos.y < minY) {
+          p.pos.y = minY;
+          p.vel.y = Math.abs(p.vel.y);
+        } else if (p.pos.y > maxY) {
+          p.pos.y = maxY;
+          p.vel.y = -Math.abs(p.vel.y);
+        }
+      }
+    }
   }
 
   renderer.render(engine, selectedItems);
