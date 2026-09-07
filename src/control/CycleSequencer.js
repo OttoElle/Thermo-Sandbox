@@ -1,94 +1,124 @@
 /**
  * CycleSequencer.js
- * Precision State-Machine & Phase Sequencer for Thermodynamic Cycles
- * Coordinates Pistons, Throttle Valves, and Thermal Elements in cyclic loops.
+ * Precision GRAFCET State-Machine & Sequence Controller for Thermodynamic Cycles
+ * Coordinates Pistons (TDC/BDC strokes), Throttle Valves, and Thermal Elements.
  */
 
 export class CycleSequencer {
   constructor() {
-    this.phases = [];
+    this.steps = [];
+    this.phases = this.steps; // Backward compatibility alias
     this.isEnabled = false;
     this.isLooping = true;
-    this.activePhaseIndex = 0;
-    this.elapsedPhaseTime = 0;
+    this.activeStepIndex = 0;
+    this.activePhaseIndex = 0; // Alias
+    this.elapsedStepTime = 0;
+    this.elapsedPhaseTime = 0; // Alias
     this.currentCycleCount = 1;
-    this.phaseProgress = 0; // 0.0 to 1.0 for UI progress bar
-    this.onPhaseChangeCallback = null;
+    this.stepProgress = 0; // 0.0 to 1.0 for UI progress bar
+    this.phaseProgress = 0; // Alias
+    this.onStepChangeCallback = null;
+    this.onPhaseChangeCallback = null; // Alias
   }
 
-  addPhase(options = {}) {
-    const phaseNum = this.phases.length + 1;
-    const phase = {
-      id: options.id || 'phase_' + Math.random().toString(36).substring(2, 9),
-      name: options.name || `Takt ${phaseNum}`,
+  addStep(options = {}) {
+    const stepNum = this.steps.length + 1;
+    const step = {
+      id: options.id || 'step_' + Math.random().toString(36).substring(2, 9),
+      name: options.name || `Step ${stepNum}`,
       actions: options.actions || [], // [{ type: 'piston'|'valve'|'thermal', targetId: '...', ... }]
-      trigger: options.trigger || {
+      transition: options.transition || options.trigger || {
         type: 'duration', // 'duration' | 'piston_target' | 'sensor'
-        duration: 1.0,    // seconds for duration trigger
+        duration: 1.5,    // seconds for duration trigger
+        pistonId: null,   // specific piston target, or null for all controlled pistons
+        pistonTarget: 'tdc', // 'tdc' | 'bdc'
         sensorId: null,   // for sensor trigger
         sensorMetric: 'pressure', // 'pressure' | 'temperature'
         sensorOperator: '>=',     // '>=' | '<='
         sensorThreshold: 200,     // kPa or K
-        fallbackTimeout: 5.0      // safety fallback timeout in seconds
+        fallbackTimeout: 6.0      // safety fallback timeout in seconds
       }
     };
-    this.phases.push(phase);
-    return phase;
+    // Ensure transition property is mirrored to trigger for compatibility
+    step.trigger = step.transition;
+    this.steps.push(step);
+    return step;
   }
 
-  removePhase(index) {
-    if (index >= 0 && index < this.phases.length) {
-      this.phases.splice(index, 1);
-      if (this.activePhaseIndex >= this.phases.length) {
-        this.activePhaseIndex = Math.max(0, this.phases.length - 1);
+  addPhase(options = {}) {
+    return this.addStep(options);
+  }
+
+  removeStep(index) {
+    if (index >= 0 && index < this.steps.length) {
+      this.steps.splice(index, 1);
+      if (this.activeStepIndex >= this.steps.length) {
+        this.activeStepIndex = Math.max(0, this.steps.length - 1);
+        this.activePhaseIndex = this.activeStepIndex;
+        this.elapsedStepTime = 0;
         this.elapsedPhaseTime = 0;
+        this.stepProgress = 0;
         this.phaseProgress = 0;
       }
     }
   }
 
-  movePhase(fromIdx, toIdx) {
-    if (fromIdx >= 0 && fromIdx < this.phases.length && toIdx >= 0 && toIdx < this.phases.length) {
-      const [item] = this.phases.splice(fromIdx, 1);
-      this.phases.splice(toIdx, 0, item);
-      if (this.activePhaseIndex === fromIdx) {
+  removePhase(index) {
+    return this.removeStep(index);
+  }
+
+  moveStep(fromIdx, toIdx) {
+    if (fromIdx >= 0 && fromIdx < this.steps.length && toIdx >= 0 && toIdx < this.steps.length) {
+      const [item] = this.steps.splice(fromIdx, 1);
+      this.steps.splice(toIdx, 0, item);
+      if (this.activeStepIndex === fromIdx) {
+        this.activeStepIndex = toIdx;
         this.activePhaseIndex = toIdx;
       }
     }
   }
 
-  duplicatePhase(index) {
-    if (index >= 0 && index < this.phases.length) {
-      const original = this.phases[index];
+  movePhase(fromIdx, toIdx) {
+    return this.moveStep(fromIdx, toIdx);
+  }
+
+  duplicateStep(index) {
+    if (index >= 0 && index < this.steps.length) {
+      const original = this.steps[index];
       const copy = {
-        id: 'phase_' + Math.random().toString(36).substring(2, 9),
-        name: `${original.name} (Kopie)`,
+        id: 'step_' + Math.random().toString(36).substring(2, 9),
+        name: `${original.name} (Copy)`,
         actions: JSON.parse(JSON.stringify(original.actions || [])),
-        trigger: JSON.parse(JSON.stringify(original.trigger || { type: 'duration', duration: 1.0 }))
+        transition: JSON.parse(JSON.stringify(original.transition || original.trigger || { type: 'duration', duration: 1.5 }))
       };
-      this.phases.splice(index + 1, 0, copy);
+      copy.trigger = copy.transition;
+      this.steps.splice(index + 1, 0, copy);
       return copy;
     }
     return null;
   }
 
-  addAction(phaseIndex, actionData) {
-    if (phaseIndex >= 0 && phaseIndex < this.phases.length) {
+  duplicatePhase(index) {
+    return this.duplicateStep(index);
+  }
+
+  addAction(stepIndex, actionData) {
+    if (stepIndex >= 0 && stepIndex < this.steps.length) {
       const action = {
         id: 'act_' + Math.random().toString(36).substring(2, 9),
         type: actionData.type || 'piston',
         targetId: actionData.targetId || null,
         ...actionData
       };
-      this.phases[phaseIndex].actions.push(action);
+      this.steps[stepIndex].actions.push(action);
       return action;
     }
     return null;
   }
 
-  removeAction(phaseIndex, actionIndex) {
-    if (phaseIndex >= 0 && phaseIndex < this.phases.length) {
-      const actions = this.phases[phaseIndex].actions;
+  removeAction(stepIndex, actionIndex) {
+    if (stepIndex >= 0 && stepIndex < this.steps.length) {
+      const actions = this.steps[stepIndex].actions;
       if (actionIndex >= 0 && actionIndex < actions.length) {
         actions.splice(actionIndex, 1);
       }
@@ -96,44 +126,80 @@ export class CycleSequencer {
   }
 
   reset() {
+    this.activeStepIndex = 0;
     this.activePhaseIndex = 0;
+    this.elapsedStepTime = 0;
     this.elapsedPhaseTime = 0;
     this.currentCycleCount = 1;
+    this.stepProgress = 0;
     this.phaseProgress = 0;
   }
 
-  getCurrentPhase() {
-    if (this.phases.length === 0) return null;
-    if (this.activePhaseIndex >= this.phases.length) this.activePhaseIndex = 0;
-    return this.phases[this.activePhaseIndex];
+  getCurrentStep() {
+    if (this.steps.length === 0) return null;
+    if (this.activeStepIndex >= this.steps.length) {
+      this.activeStepIndex = 0;
+      this.activePhaseIndex = 0;
+    }
+    return this.steps[this.activeStepIndex];
   }
 
-  applyPhaseActions(phase, engine) {
-    if (!phase || !engine) return;
+  getCurrentPhase() {
+    return this.getCurrentStep();
+  }
 
-    for (let i = 0; i < phase.actions.length; i++) {
-      const act = phase.actions[i];
+  /**
+   * Helper to resolve target position for a piston given a command:
+   * 'drive_tdc': Top Dead Center (minimum chamber volume / min travel)
+   * 'drive_bdc': Bottom Dead Center (maximum chamber volume / max travel)
+   */
+  resolvePistonTarget(piston, command, invert = false) {
+    if (!piston || typeof piston.getTravelLimits !== 'function') return piston ? piston.getPos() : 0;
+    const limits = piston.getTravelLimits();
+    const isTdc = command === 'drive_tdc' || command === 'tdc';
+    if (!invert) {
+      return isTdc ? limits.minTravel : limits.maxTravel;
+    } else {
+      return isTdc ? limits.maxTravel : limits.minTravel;
+    }
+  }
+
+  applyStepActions(step, engine) {
+    if (!step || !engine) return;
+
+    for (let i = 0; i < step.actions.length; i++) {
+      const act = step.actions[i];
       if (!act.targetId) continue;
 
       if (act.type === 'piston') {
         const piston = engine.pistons.find(p => p.id === act.targetId);
         if (piston) {
-          if (act.mode === 'controlled') {
+          const mode = act.mode || 'drive_tdc';
+          if (mode === 'drive_tdc' || mode === 'drive_bdc') {
+            piston.mode = 'controlled';
+            piston.targetPos = this.resolvePistonTarget(piston, mode, !!act.invertTdcBdc);
+            piston.targetSpeed = act.targetSpeed !== undefined ? act.targetSpeed : 160;
+          } else if (mode === 'controlled') {
             piston.mode = 'controlled';
             piston.targetPos = act.targetPos !== undefined ? act.targetPos : piston.getPos();
-            piston.targetSpeed = act.targetSpeed !== undefined ? act.targetSpeed : 150;
-          } else if (act.mode === 'hold') {
+            piston.targetSpeed = act.targetSpeed !== undefined ? act.targetSpeed : 160;
+          } else if (mode === 'hold') {
             piston.mode = 'hold';
             piston.velocity = 0;
-          } else if (act.mode === 'free') {
+          } else if (mode === 'free') {
             piston.mode = 'free';
           }
         }
       } else if (act.type === 'valve') {
         const valve = engine.throttleValves.find(v => v.id === act.targetId);
         if (valve) {
-          const ratio = act.openRatio !== undefined ? Math.max(0, Math.min(1, act.openRatio)) : 1.0;
-          valve.openRatio = ratio;
+          if (act.state === 'closed') {
+            valve.openRatio = 0.0;
+          } else if (act.state === 'open') {
+            valve.openRatio = 1.0;
+          } else if (act.openRatio !== undefined) {
+            valve.openRatio = Math.max(0, Math.min(1, act.openRatio));
+          }
           valve._updateGeometry();
         }
       } else if (act.type === 'thermal') {
@@ -141,120 +207,172 @@ export class CycleSequencer {
                       (engine.heatExchangers || []).find(hx => hx.id === act.targetId) ||
                       (engine.reservoirs || []).find(r => r.id === act.targetId);
         if (block) {
-          if (act.temperature !== undefined) block.temperature = act.temperature;
-          if (act.isActive !== undefined) block.isActive = act.isActive;
+          if (act.state === 'insulated' || act.isActive === false) {
+            block.isActive = false;
+          } else {
+            block.isActive = true;
+          }
+          if (act.temperature !== undefined) {
+            block.temperature = act.temperature;
+          }
         }
       }
     }
   }
 
-  advanceToNextPhase(engine) {
-    if (this.phases.length === 0) return;
+  applyPhaseActions(phase, engine) {
+    return this.applyStepActions(phase, engine);
+  }
 
-    const nextIndex = this.activePhaseIndex + 1;
-    if (nextIndex >= this.phases.length) {
+  advanceToNextStep(engine) {
+    if (this.steps.length === 0) return;
+
+    const nextIndex = this.activeStepIndex + 1;
+    if (nextIndex >= this.steps.length) {
       if (this.isLooping) {
         this.currentCycleCount++;
+        this.activeStepIndex = 0;
         this.activePhaseIndex = 0;
       } else {
         this.isEnabled = false;
+        this.stepProgress = 1.0;
         this.phaseProgress = 1.0;
         return;
       }
     } else {
+      this.activeStepIndex = nextIndex;
       this.activePhaseIndex = nextIndex;
     }
 
+    this.elapsedStepTime = 0;
     this.elapsedPhaseTime = 0;
+    this.stepProgress = 0;
     this.phaseProgress = 0;
 
-    const newPhase = this.getCurrentPhase();
-    if (newPhase) {
-      this.applyPhaseActions(newPhase, engine);
+    const newStep = this.getCurrentStep();
+    if (newStep) {
+      this.applyStepActions(newStep, engine);
     }
 
+    if (typeof this.onStepChangeCallback === 'function') {
+      this.onStepChangeCallback(this.activeStepIndex, this.currentCycleCount);
+    }
     if (typeof this.onPhaseChangeCallback === 'function') {
       this.onPhaseChangeCallback(this.activePhaseIndex, this.currentCycleCount);
     }
   }
 
+  advanceToNextPhase(engine) {
+    return this.advanceToNextStep(engine);
+  }
+
   step(dt, engine) {
-    if (!this.isEnabled || this.phases.length === 0 || !engine) {
+    if (!this.isEnabled || this.steps.length === 0 || !engine) {
       return;
     }
 
-    const phase = this.getCurrentPhase();
-    if (!phase) return;
+    const step = this.getCurrentStep();
+    if (!step) return;
 
     // Apply continuous controlled properties
-    this.applyPhaseActions(phase, engine);
+    this.applyStepActions(step, engine);
 
-    this.elapsedPhaseTime += dt;
-    const trig = phase.trigger || { type: 'duration', duration: 1.0 };
+    this.elapsedStepTime += dt;
+    this.elapsedPhaseTime = this.elapsedStepTime;
 
+    const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
     let conditionMet = false;
 
-    if (trig.type === 'duration') {
-      const totalDur = Math.max(0.05, trig.duration || 1.0);
-      this.phaseProgress = Math.min(1.0, this.elapsedPhaseTime / totalDur);
-      if (this.elapsedPhaseTime >= totalDur) {
+    if (transition.type === 'duration') {
+      const totalDur = Math.max(0.05, transition.duration || 1.5);
+      this.stepProgress = Math.min(1.0, this.elapsedStepTime / totalDur);
+      this.phaseProgress = this.stepProgress;
+      if (this.elapsedStepTime >= totalDur) {
         conditionMet = true;
       }
-    } else if (trig.type === 'piston_target') {
-      // Check if all pistons controlled in this phase have reached their targets
-      const controlledActions = phase.actions.filter(a => a.type === 'piston' && a.mode === 'controlled');
-      if (controlledActions.length === 0) {
-        conditionMet = this.elapsedPhaseTime >= 1.0;
-        this.phaseProgress = Math.min(1.0, this.elapsedPhaseTime / 1.0);
+    } else if (transition.type === 'piston_target') {
+      // Evaluate piston position: check specified piston or all driving pistons in this step
+      let targetPistons = [];
+      if (transition.pistonId) {
+        const p = engine.pistons.find(item => item.id === transition.pistonId);
+        if (p) targetPistons.push({ piston: p, target: transition.pistonTarget || 'tdc' });
+      } else {
+        // Collect all pistons commanded in this step
+        const drivingActs = step.actions.filter(a => a.type === 'piston' && (a.mode === 'drive_tdc' || a.mode === 'drive_bdc' || a.mode === 'controlled'));
+        for (const act of drivingActs) {
+          const p = engine.pistons.find(item => item.id === act.targetId);
+          if (p) {
+            const tgt = (act.mode === 'drive_tdc' || act.mode === 'drive_bdc') ? act.mode.replace('drive_', '') : 'pos';
+            targetPistons.push({ piston: p, target: tgt, targetPos: act.targetPos, invert: !!act.invertTdcBdc });
+          }
+        }
+      }
+
+      if (targetPistons.length === 0) {
+        // Fallback to 1.5s if no pistons are active
+        const fallback = transition.fallbackTimeout || 1.5;
+        this.stepProgress = Math.min(1.0, this.elapsedStepTime / fallback);
+        this.phaseProgress = this.stepProgress;
+        if (this.elapsedStepTime >= fallback) conditionMet = true;
       } else {
         let allReached = true;
         let totalPct = 0;
 
-        for (let i = 0; i < controlledActions.length; i++) {
-          const act = controlledActions[i];
-          const piston = engine.pistons.find(p => p.id === act.targetId);
-          if (piston) {
-            const curPos = piston.getPos();
-            const target = act.targetPos !== undefined ? act.targetPos : curPos;
-            const dist = Math.abs(target - curPos);
-            if (dist > 2.5) {
-              allReached = false;
-            }
-            const stroke = Math.max(10, Math.abs(target - (act._startPos !== undefined ? act._startPos : piston.minPos)));
-            const moved = Math.max(0, stroke - dist);
-            totalPct += Math.min(1.0, moved / stroke);
+        for (let i = 0; i < targetPistons.length; i++) {
+          const item = targetPistons[i];
+          const piston = item.piston;
+          let goalPos = 0;
+          if (item.target === 'tdc' || item.target === 'bdc') {
+            goalPos = this.resolvePistonTarget(piston, item.target, !!item.invert);
+          } else {
+            goalPos = item.targetPos !== undefined ? item.targetPos : piston.getPos();
           }
-        }
-        this.phaseProgress = totalPct / controlledActions.length;
 
-        const timeout = trig.fallbackTimeout || 8.0;
-        if (allReached || this.elapsedPhaseTime >= timeout) {
+          const curPos = piston.getPos();
+          const dist = Math.abs(goalPos - curPos);
+          if (dist > 3.0) {
+            allReached = false;
+          }
+
+          const limits = piston.getTravelLimits();
+          const stroke = Math.max(10, limits.stroke);
+          const fraction = Math.max(0, Math.min(1, 1.0 - (dist / stroke)));
+          totalPct += fraction;
+        }
+
+        this.stepProgress = totalPct / targetPistons.length;
+        this.phaseProgress = this.stepProgress;
+
+        const timeout = transition.fallbackTimeout || 8.0;
+        if (allReached || this.elapsedStepTime >= timeout) {
           conditionMet = true;
         }
       }
-    } else if (trig.type === 'sensor') {
-      const sensor = engine.sensors.find(s => s.id === trig.sensorId);
-      const timeout = trig.fallbackTimeout || 10.0;
+    } else if (transition.type === 'sensor') {
+      const sensor = engine.sensors.find(s => s.id === transition.sensorId);
+      const timeout = transition.fallbackTimeout || 10.0;
       if (!sensor) {
-        conditionMet = this.elapsedPhaseTime >= 1.5;
-        this.phaseProgress = Math.min(1.0, this.elapsedPhaseTime / 1.5);
+        conditionMet = this.elapsedStepTime >= 1.5;
+        this.stepProgress = Math.min(1.0, this.elapsedStepTime / 1.5);
+        this.phaseProgress = this.stepProgress;
       } else {
-        const val = trig.sensorMetric === 'temperature' ? sensor.temperature : (sensor.pressure / 1000.0); // Pressure in kPa
-        const thresh = trig.sensorThreshold !== undefined ? trig.sensorThreshold : 200;
-        const op = trig.sensorOperator || '>=';
+        const val = transition.sensorMetric === 'temperature' ? sensor.temperature : (sensor.pressure / 1000.0); // kPa
+        const thresh = transition.sensorThreshold !== undefined ? transition.sensorThreshold : 200;
+        const op = transition.sensorOperator || '>=';
 
         if (op === '>=' && val >= thresh) conditionMet = true;
         else if (op === '<=' && val <= thresh) conditionMet = true;
         else if (op === '>' && val > thresh) conditionMet = true;
         else if (op === '<' && val < thresh) conditionMet = true;
 
-        if (this.elapsedPhaseTime >= timeout) conditionMet = true;
-        this.phaseProgress = Math.min(1.0, this.elapsedPhaseTime / timeout);
+        if (this.elapsedStepTime >= timeout) conditionMet = true;
+        this.stepProgress = Math.min(1.0, this.elapsedStepTime / timeout);
+        this.phaseProgress = this.stepProgress;
       }
     }
 
     if (conditionMet) {
-      this.advanceToNextPhase(engine);
+      this.advanceToNextStep(engine);
     }
   }
 
@@ -262,9 +380,11 @@ export class CycleSequencer {
     return {
       isEnabled: this.isEnabled,
       isLooping: this.isLooping,
-      activePhaseIndex: this.activePhaseIndex,
+      activeStepIndex: this.activeStepIndex,
+      activePhaseIndex: this.activeStepIndex,
       currentCycleCount: this.currentCycleCount,
-      phases: JSON.parse(JSON.stringify(this.phases))
+      steps: JSON.parse(JSON.stringify(this.steps)),
+      phases: JSON.parse(JSON.stringify(this.steps))
     };
   }
 
@@ -272,10 +392,23 @@ export class CycleSequencer {
     if (!data) return;
     this.isEnabled = !!data.isEnabled;
     this.isLooping = data.isLooping !== undefined ? !!data.isLooping : true;
-    this.activePhaseIndex = typeof data.activePhaseIndex === 'number' ? data.activePhaseIndex : 0;
+    this.activeStepIndex = typeof data.activeStepIndex === 'number' ? data.activeStepIndex : (typeof data.activePhaseIndex === 'number' ? data.activePhaseIndex : 0);
+    this.activePhaseIndex = this.activeStepIndex;
     this.currentCycleCount = typeof data.currentCycleCount === 'number' ? data.currentCycleCount : 1;
+    this.elapsedStepTime = 0;
     this.elapsedPhaseTime = 0;
+    this.stepProgress = 0;
     this.phaseProgress = 0;
-    this.phases = Array.isArray(data.phases) ? JSON.parse(JSON.stringify(data.phases)) : [];
+    
+    const loaded = data.steps || data.phases;
+    this.steps = Array.isArray(loaded) ? JSON.parse(JSON.stringify(loaded)) : [];
+    this.phases = this.steps;
+
+    // Ensure transition property is properly initialized for each step
+    for (const step of this.steps) {
+      if (!step.transition && step.trigger) {
+        step.transition = step.trigger;
+      }
+    }
   }
 }

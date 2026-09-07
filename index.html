@@ -615,14 +615,6 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18m0 0l-5-5m5 5l5-5"/></svg>
         <span>Gravity</span>
       </button>
-
-      <div class="playback-divider"></div>
-
-      <!-- 6. Cycle Sequencer Toggle Button -->
-      <button class="sequencer-toggle-btn" id="btnToggleSequencer" title="Kreisprozess-Ablaufsteuerung (Phasen-Sequencer) öffnen">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        <span>Sequencer</span>
-      </button>
     </div>
 
     <!-- Floating Zoom Controls -->
@@ -710,47 +702,50 @@
       </div>
     </div>
 
-    <!-- Collapsible Bottom Drawer: Thermodynamic Cycle Sequencer -->
-    <div id="cycleSequencerDrawer" class="cycle-sequencer-drawer hidden">
-      <div class="seq-drawer-header">
+    <!-- Persistent Bottom Drawer: Thermodynamic Cycle Sequencer -->
+    <div id="cycleSequencerDrawer" class="cycle-sequencer-drawer is-collapsed">
+      <!-- Clickable Drawer Header Strip -->
+      <div class="seq-drawer-header" id="seqDrawerHeader" title="Click to toggle Cycle Sequencer timeline">
         <div class="seq-drawer-header-left">
+          <button id="seqDrawerChevron" class="seq-drawer-chevron" title="Expand / Collapse Sequencer">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+          </button>
           <div class="seq-drawer-brand">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            <span class="seq-drawer-title">Kreisprozess-Ablaufsteuerung</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span class="seq-drawer-title">CYCLE SEQUENCER</span>
           </div>
           <div class="seq-drawer-controls">
-            <label class="seq-toggle-label" title="Ablaufsteuerung bei Play/Simulation aktivieren">
+            <label class="seq-toggle-label" title="Enable Sequencer during simulation run">
               <input type="checkbox" id="seqToggleActive">
               <span class="seq-toggle-switch"></span>
-              <span class="seq-toggle-text">Sequencer aktiv</span>
+              <span class="seq-toggle-text">Active</span>
             </label>
-            <label class="seq-toggle-label" title="Endlosschleife: Nach letztem Takt wieder bei Takt 1 starten">
+            <label class="seq-toggle-label" title="Loop sequence continuously">
               <input type="checkbox" id="seqToggleLoop" checked>
               <span class="seq-toggle-switch"></span>
               <span class="seq-toggle-text">Loop</span>
             </label>
             <div id="seqCycleBadge" class="seq-cycle-badge">
-              <span class="seq-badge-status seq-status-idle">Bereit</span>
+              <span class="seq-badge-status seq-status-idle">Idle (No Steps)</span>
             </div>
           </div>
         </div>
 
         <div class="seq-drawer-header-right">
-          <button id="seqBtnReset" class="seq-header-btn" title="Auf ersten Takt zurücksetzen">
+          <button id="seqBtnReset" class="seq-header-btn" title="Reset to Step 1">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/></svg>
             <span>Reset</span>
           </button>
-          <button id="seqBtnAddPhase" class="seq-header-btn seq-btn-primary" title="Neuen Takt hinzufügen">
+          <button id="seqBtnAddStep" class="seq-header-btn seq-btn-primary" title="Add New Step">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            <span>+ Takt hinzufügen</span>
+            <span>+ Add Step</span>
           </button>
-          <button id="seqBtnClose" class="seq-close-btn" title="Schließen / Einklappen">&times;</button>
         </div>
       </div>
 
       <div class="seq-drawer-body">
-        <div id="seqPhasesList" class="seq-phases-container">
-          <!-- Dynamically populated phase cards -->
+        <div id="seqTimelineTrack" class="seq-timeline-track">
+          <!-- Dynamically populated GRAFCET Step Cards & Transition Nodes -->
         </div>
       </div>
     </div>

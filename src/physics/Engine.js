@@ -934,7 +934,8 @@ export class Engine {
       this.sequencer.importState(state.cycleSequencer);
     } else if (this.sequencer) {
       this.sequencer.reset();
-      this.sequencer.phases = [];
+      this.sequencer.steps = [];
+      this.sequencer.phases = this.sequencer.steps;
     }
 
     this._updateStats();

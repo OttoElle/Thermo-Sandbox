@@ -2008,7 +2008,7 @@ canvas#tempChartCanvas, canvas#velChartCanvas {
    ========================================================================== */
 .floating-playback-bar {
   position: absolute;
-  bottom: 20px;
+  bottom: 40px;
   left: 50%;
   transform: translateX(-50%);
   height: 54px;
@@ -2021,6 +2021,11 @@ canvas#tempChartCanvas, canvas#velChartCanvas {
   gap: 12px;
   box-shadow: var(--shadow-floating);
   z-index: 30;
+  transition: bottom 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+body.sequencer-expanded .floating-playback-bar {
+  bottom: 275px;
 }
 
 .playback-btn-group {
@@ -2393,7 +2398,7 @@ body.splash-mode #simCanvas {
   gap: 14px;
   padding: 20px 30px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: #0e1119;
+  background: #0d1017;
 }
 
 .splash-action-card {
@@ -2402,7 +2407,7 @@ body.splash-mode #simCanvas {
   gap: 14px;
   padding: 14px 18px;
   border-radius: 12px;
-  background: #181d28;
+  background: #141720;
   border: 1px solid rgba(255, 255, 255, 0.08);
   cursor: pointer;
   text-align: left;
@@ -2579,14 +2584,14 @@ body.splash-mode #simCanvas {
   justify-content: space-between;
   padding: 10px 14px;
   border-radius: 9px;
-  background: #181d28;
+  background: #141720;
   border: 1px solid rgba(255, 255, 255, 0.07);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .splash-recent-item:hover {
-  background: #202736;
+  background: #1a1e29;
   border-color: rgba(56, 189, 248, 0.4);
   transform: translateX(3px);
 }
@@ -2638,14 +2643,14 @@ body.splash-mode #simCanvas {
   justify-content: space-between;
   padding: 12px 16px;
   border-radius: 10px;
-  background: #181d28;
+  background: #141720;
   border: 1px solid rgba(255, 255, 255, 0.07);
   cursor: pointer;
   transition: all 0.16s ease;
 }
 
 .splash-preset-card:hover {
-  background: #202736;
+  background: #1a1e29;
   border-color: rgba(34, 197, 94, 0.4);
   transform: translateX(4px);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
@@ -2774,57 +2779,87 @@ body.splash-mode #simCanvas {
 }
 
 .cycle-sequencer-drawer {
-  position: absolute;
-  bottom: 84px;
-  left: 50%;
-  transform: translateX(-50%) translateY(0);
-  width: calc(100vw - 48px);
-  max-width: 1280px;
-  max-height: 380px;
-  background: #121622;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: 100vw;
+  height: 265px;
+  background: #0c0e14;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.7);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   z-index: 45;
-  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.22s ease;
-  visibility: visible;
-  opacity: 1;
+  transition: height 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.cycle-sequencer-drawer.hidden {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transform: translateX(-50%) translateY(20px);
+.cycle-sequencer-drawer.is-collapsed {
+  height: 32px;
+}
+
+.cycle-sequencer-drawer.is-collapsed .seq-drawer-body {
+  display: none;
 }
 
 .seq-drawer-header {
+  height: 32px;
+  min-height: 32px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 18px;
-  background: #0d1017;
+  padding: 0 14px;
+  background: #11141c;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  user-select: none;
   flex-shrink: 0;
+}
+
+.seq-drawer-header:hover {
+  background: #131722;
 }
 
 .seq-drawer-header-left {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 12px;
+}
+
+.seq-drawer-chevron {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), color 0.15s ease;
+}
+
+.seq-drawer-chevron:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.seq-drawer-chevron.is-expanded {
+  transform: rotate(180deg);
+  color: var(--accent-green);
 }
 
 .seq-drawer-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 700;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 800;
   color: #f3f4f6;
-  letter-spacing: -0.2px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
 .seq-drawer-brand svg {
@@ -2834,14 +2869,15 @@ body.splash-mode #simCanvas {
 .seq-drawer-controls {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+  margin-left: 8px;
 }
 
 .seq-toggle-label {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: 6px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
   cursor: pointer;
@@ -2853,10 +2889,10 @@ body.splash-mode #simCanvas {
 }
 
 .seq-toggle-switch {
-  width: 32px;
-  height: 18px;
+  width: 28px;
+  height: 16px;
   background: rgba(255, 255, 255, 0.12);
-  border-radius: 9px;
+  border-radius: 8px;
   position: relative;
   transition: background 0.18s ease;
 }
@@ -2866,8 +2902,8 @@ body.splash-mode #simCanvas {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   background: #ffffff;
   border-radius: 50%;
   transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1);
@@ -2878,18 +2914,18 @@ body.splash-mode #simCanvas {
 }
 
 .seq-toggle-label input:checked + .seq-toggle-switch::after {
-  transform: translateX(14px);
+  transform: translateX(12px);
 }
 
 .seq-cycle-badge {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 10px;
-  background: rgba(255, 255, 255, 0.05);
+  gap: 6px;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  font-size: 11.5px;
+  border-radius: 6px;
+  font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
 }
 
@@ -2916,26 +2952,26 @@ body.splash-mode #simCanvas {
 .seq-drawer-header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .seq-header-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 5px 11px;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 6px;
+  padding: 3px 9px;
   color: #e5e7eb;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.14s ease;
 }
 
 .seq-header-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.11);
   color: #ffffff;
 }
 
@@ -2951,77 +2987,56 @@ body.splash-mode #simCanvas {
   color: #ffffff;
 }
 
-.seq-close-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  font-size: 20px;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border-radius: 6px;
-  transition: color 0.15s ease, background 0.15s ease;
-  margin-left: 6px;
-}
-
-.seq-close-btn:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
-}
-
 .seq-drawer-body {
-  padding: 16px 20px;
+  padding: 10px 14px;
   overflow-x: auto;
   overflow-y: hidden;
   flex: 1;
   display: flex;
-  align-items: center;
+  align-items: stretch;
 }
 
-.seq-phases-container {
+.seq-timeline-track {
   display: flex;
   align-items: stretch;
-  gap: 12px;
+  gap: 6px;
   min-width: 100%;
 }
 
 .seq-empty-state {
-  margin: 20px auto;
+  margin: auto;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   color: var(--text-dim);
 }
 
 .seq-empty-icon {
-  font-size: 32px;
+  font-size: 28px;
   opacity: 0.6;
 }
 
 .seq-empty-title {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 700;
   color: var(--text-muted);
 }
 
 .seq-empty-desc {
-  font-size: 12px;
+  font-size: 11.5px;
   max-width: 440px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .seq-btn-empty-add {
   background: rgba(34, 197, 94, 0.15);
   border: 1px solid rgba(34, 197, 94, 0.35);
   color: #4ade80;
-  border-radius: 8px;
-  padding: 7px 16px;
-  font-size: 12px;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -3032,42 +3047,42 @@ body.splash-mode #simCanvas {
   color: #ffffff;
 }
 
-.seq-phase-card {
-  min-width: 300px;
-  max-width: 330px;
-  background: #181d28;
+.seq-step-card {
+  min-width: 290px;
+  max-width: 320px;
+  background: #131620;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 12px;
+  border-radius: 10px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   position: relative;
   overflow: hidden;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
   flex-shrink: 0;
 }
 
-.seq-phase-card.is-active {
+.seq-step-card.is-active {
   border-color: #22c55e;
-  box-shadow: 0 0 20px rgba(34, 197, 94, 0.22), inset 0 0 0 1px rgba(34, 197, 94, 0.25);
+  box-shadow: 0 0 16px rgba(34, 197, 94, 0.22), inset 0 0 0 1px rgba(34, 197, 94, 0.25);
 }
 
 .seq-card-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  padding-bottom: 8px;
+  padding-bottom: 6px;
 }
 
 .seq-card-num-badge {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
   background: rgba(255, 255, 255, 0.08);
   color: #f3f4f6;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -3075,29 +3090,29 @@ body.splash-mode #simCanvas {
   flex-shrink: 0;
 }
 
-.seq-phase-card.is-active .seq-card-num-badge {
+.seq-step-card.is-active .seq-card-num-badge {
   background: var(--accent-green);
   color: #0b1f11;
 }
 
-.seq-phase-title-input {
+.seq-step-title-input {
   background: transparent;
   border: 1px solid transparent;
   color: #f3f4f6;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  border-radius: 6px;
-  padding: 3px 6px;
+  border-radius: 5px;
+  padding: 2px 5px;
   flex: 1;
   min-width: 0;
   transition: all 0.15s ease;
 }
 
-.seq-phase-title-input:hover {
+.seq-step-title-input:hover {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.seq-phase-title-input:focus {
+.seq-step-title-input:focus {
   background: #0f121a;
   border-color: rgba(56, 189, 248, 0.5);
   outline: none;
@@ -3106,16 +3121,16 @@ body.splash-mode #simCanvas {
 .seq-card-tools {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .seq-icon-btn {
   background: transparent;
   border: none;
   color: var(--text-dim);
-  font-size: 11px;
-  width: 20px;
-  height: 20px;
+  font-size: 10px;
+  width: 19px;
+  height: 19px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3142,37 +3157,37 @@ body.splash-mode #simCanvas {
 .seq-actions-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-height: 52px;
-  max-height: 140px;
+  gap: 5px;
+  min-height: 48px;
+  max-height: 130px;
   overflow-y: auto;
 }
 
 .seq-no-actions {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-dim);
   font-style: italic;
-  padding: 8px 4px;
+  padding: 6px 4px;
   text-align: center;
 }
 
 .seq-action-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: #11151f;
+  gap: 5px;
+  background: #0d1017;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 7px;
-  padding: 5px 8px;
-  font-size: 11px;
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 10.5px;
 }
 
 .seq-act-badge {
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
-  padding: 2px 5px;
-  border-radius: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
   flex-shrink: 0;
 }
 
@@ -3193,18 +3208,45 @@ body.splash-mode #simCanvas {
 
 .seq-act-target-select,
 .seq-piston-mode-select,
+.seq-valve-state-select,
+.seq-thermal-state-select,
 .seq-select-add-type,
-.seq-select-trigger-type,
+.seq-transition-type-select,
+.seq-trig-piston-select,
+.seq-trig-target-select,
 .seq-sensor-select,
 .seq-metric-select,
 .seq-op-select {
   background: #0d1017;
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: #e5e7eb;
-  font-size: 10.5px;
+  font-size: 10px;
   border-radius: 5px;
   padding: 2px 4px;
   outline: none;
+}
+
+.seq-btn-invert-tdc {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 9px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+
+.seq-btn-invert-tdc:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.seq-btn-invert-tdc.is-inverted {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #38bdf8;
 }
 
 .seq-input-group {
@@ -3219,7 +3261,7 @@ body.splash-mode #simCanvas {
 
 .seq-input-lbl {
   color: var(--text-dim);
-  font-size: 9.5px;
+  font-size: 9px;
 }
 
 .seq-input-piston-pos,
@@ -3232,15 +3274,15 @@ body.splash-mode #simCanvas {
   border: none;
   color: #ffffff;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10.5px;
-  width: 44px;
+  font-size: 10px;
+  width: 42px;
   outline: none;
 }
 
 .seq-valve-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex: 1;
 }
 
@@ -3252,26 +3294,17 @@ body.splash-mode #simCanvas {
 
 .seq-valve-pct-lbl {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 9.5px;
   color: #f59e0b;
-  width: 32px;
+  width: 30px;
   text-align: right;
-}
-
-.seq-check-lbl {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  color: var(--text-muted);
-  cursor: pointer;
 }
 
 .seq-btn-remove-act {
   background: transparent;
   border: none;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 9.5px;
   cursor: pointer;
   padding: 2px 4px;
   border-radius: 3px;
@@ -3290,7 +3323,7 @@ body.splash-mode #simCanvas {
 
 .seq-select-add-type {
   width: 100%;
-  padding: 4px 6px;
+  padding: 3px 6px;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-muted);
   border-color: rgba(255, 255, 255, 0.07);
@@ -3302,70 +3335,100 @@ body.splash-mode #simCanvas {
   color: #ffffff;
 }
 
-.seq-trigger-section {
-  background: #11151f;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  padding: 8px;
+/* GRAFCET Discrete Transition Gate */
+.seq-transition-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.seq-flow-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.seq-transition-gate {
+  min-width: 215px;
+  max-width: 245px;
+  background: #0f121a;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  position: relative;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.seq-trigger-header {
+.seq-transition-gate.is-active {
+  border-style: solid;
+  border-color: #38bdf8;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.22);
+}
+
+.seq-transition-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
 }
 
-.seq-trigger-label {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--text-muted);
+.seq-transition-pill {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-dim);
+}
+
+.seq-transition-params {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .seq-trig-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.seq-trig-row-sensor {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 10.5px;
   color: var(--text-muted);
 }
 
-.seq-trig-desc {
-  font-size: 10px;
-  color: var(--text-dim);
-  font-style: italic;
-  flex: 1;
-}
-
-.seq-trig-sub {
+.seq-trig-col {
   display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  color: var(--text-dim);
+  flex-direction: column;
+  gap: 4px;
 }
 
-.seq-progress-track {
-  width: 100%;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 2px;
-  overflow: hidden;
+.seq-trig-timeout-row {
   margin-top: 2px;
 }
 
-.seq-progress-fill {
+.seq-param-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.seq-param-label-sm {
+  font-size: 9px;
+  color: var(--text-dim);
+}
+
+.seq-transition-progress-track {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 3px;
+}
+
+.seq-transition-progress-fill {
   height: 100%;
   background: linear-gradient(90deg, #22c55e, #38bdf8);
   width: 0%;
@@ -3373,18 +3436,10 @@ body.splash-mode #simCanvas {
   transition: width 0.06s linear;
 }
 
-.seq-phase-arrow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(255, 255, 255, 0.2);
-  flex-shrink: 0;
-}
-
 .seq-add-card-placeholder {
-  min-width: 130px;
+  min-width: 110px;
   border: 1px dashed rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3403,9 +3458,9 @@ body.splash-mode #simCanvas {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
   transition: color 0.18s ease;
 }
@@ -3413,4 +3468,5 @@ body.splash-mode #simCanvas {
 .seq-add-card-placeholder:hover .seq-add-card-inner {
   color: #4ade80;
 }
+
 
