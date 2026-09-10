@@ -1,19 +1,42 @@
 # Thermo Sandbox Codebase Index
 
 ## Root Directory
-- **index.html**: Main web interface markup (Ribbon toolbar, dual sidebars, modals, canvases, playback dock, persistent bottom sequencer drawer, splash dashboard).
-- **style.css**: Complete responsive stylesheet (Dark slate theme, glassmorphism, ribbon controls, charts, GRAFCET timeline, splash dashboard).
+- **index.html**: Main web interface markup (Ribbon toolbar, dual sidebars, modals, canvases, playback dock, persistent bottom sequencer drawer, splash dashboard, modular CSS links).
+- **style.css**: Master modular CSS aggregator (@import hub for variables, base, canvas, ribbon, sidebars, playback, modals, splash, and sequencer).
 - **bundle.js**: Monolithic bundled script compiled for offline execution and fast single-file deployment.
 - **ParticleLab_Standalone.html**: Zero-dependency standalone HTML bundle containing inlined CSS and JS.
-- **build_all.py**: Python compiler script assembling bundle.js and ParticleLab_Standalone.html.
+- **build_all.py**: Python compiler script assembling bundle.js, bundling all modular CSS, and generating ParticleLab_Standalone.html.
 - **Start_ParticleLab.bat**: Windows batch launcher for instant local preview.
 - **PROGRESS.md**: Context recovery and task completion log across sessions.
 - **INDEX.md**: Architectural directory and file purpose mapping.
 - **logo.png**: Application brand icon.
 
-## src/control/ (Cycle Automation & Sequencer)
-- **CycleSequencer.js**: Precision GRAFCET state machine and sequence controller coordinating pistons (TDC/BDC strokes), valves, and thermals.
-- **SequencerUI.js**: Persistent bottom drawer controller and interactive GRAFCET step-transition timeline track.
+## css/ (Modular CSS Architecture for Vibe-Coding)
+- **variables.css**: Design tokens (`:root`), color palette, accents, borders, and shadows.
+- **base.css**: Universal reset, custom scrollbars, body, and app viewport layout.
+- **canvas.css**: Hardware-accelerated canvases (`#glCanvas`, `#simCanvas`), context menu, context popup, and history badge.
+- **ribbon.css**: Top header, menu bar, and 2-row CAD construction ribbon toolbar with simulation lock states.
+- **sidebar-left.css**: Left sidebar (`#sidebarLeft`), CAD feature tree, group hierarchy badges, and Onshape tool options dialog.
+- **sidebar-right.css**: Right sidebar (`#sidebarRight`), system statistics grid, chamber cards accordion, and telemetry charts.
+- **playback.css**: Bottom floating playback dock, play/pause/step controls, speed slider, model & gravity toggles, and zoom controls.
+- **modals.css**: Modal dialog system, save/export dialog, file import preview, and simulation overlay lock card.
+- **splash.css**: Welcome dashboard overlay (`#splashOverlay`), quick actions, recent profiles, presets library, and splash-mode styling.
+- **sequencer.css**: Persistent bottom drawer (`#seqDrawerHeader`, `#seqDrawerBody`), GRAFCET timeline, step cards, and transition gates.
+
+## src/control/ (Cycle Automation & Sequencer Architecture)
+- **CycleSequencer.js**: Precision GRAFCET state machine coordinator managing steps, loop cycles, and state import/export.
+- **SequencerConditions.js**: Compound transition condition evaluator (Time Duration, Piston TDC/BDC/Position, Sensor Pressure/Temp) with AND/OR logic.
+- **SequencerExecutor.js**: Generic action snapshot applier updating pistons, valves, thermals, emitters, sinks, and regulators in the simulation engine.
+- **SequencerCatalogDefaults.js**: Canonical default parameter reference and lookup helpers conforming to TOOL_CATALOG.md for live default tracking and one-click reset.
+- **SequencerFieldControls.js**: Modular UI form controls (DualInput slider+number, 5-button direction toggles, segmented buttons) with default indicators and live modified status.
+- **SequencerActionFields.js**: Dynamic inspector property form generator and snapshot extractor for element action snapshots (omitting thickness, spawner, chamber).
+- **SequencerActionDialog.js**: Object-anchored floating CAD modal dialog with live cyan glow highlight, smooth camera centering, free header dragging, modified indicators, and Reset to Default button.
+- **SequencerTransitionDialog.js**: Compound transition configuration modal with AND/OR combining gates and safety fallback timeouts.
+- **SequencerTransitionBuilder.js**: 2D compound condition builder grid with bracketed rows, monochrome CAD SVG chips, clickable operator pills, and formula generator.
+- **SequencerSummary.js**: Summarizers, parameter key-value formatters, and expandable accordion body generators for step actions.
+- **SequencerTimeline.js**: Visual timeline renderer for alternating Step Cards and Transition Nodes with expandable Element Accordions and smooth camera zoom.
+- **SequencerDock.js**: Bottom unified dock bar controller, animated drawer expansion, loop/active toggle buttons with green active styling, and status badges.
+- **SequencerUI.js**: Master coordinator facade integrating dock, timeline, action dialog, transition dialog, and engine hooks.
 
 ## src/presets/ (Simulation Templates)
 - **index.js**: Library of built-in thermodynamic experiments (Split-Stirling Cryocooler, Venturi Nozzle, Dual-Chamber Partition, Joule-Thomson, Adiabatic Cylinder, Brownian Motion).

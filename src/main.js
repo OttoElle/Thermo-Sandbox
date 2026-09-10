@@ -159,7 +159,7 @@ window.engine = engine;
 window.renderer = renderer;
 const tempChart = new TempTimeChart(tempChartCanvas);
 const velChart = new VelHistChart(velChartCanvas);
-const sequencerUI = new SequencerUI(engine);
+const sequencerUI = new SequencerUI(engine, renderer);
 window.sequencerUI = sequencerUI;
 
 renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
@@ -1760,6 +1760,9 @@ function updateElementsList() {
       e.stopPropagation();
       const childIdx = parseInt(el.dataset.childindex, 10);
       const childItem = elements[childIdx];
+      if (childItem && window.sequencerUI && window.sequencerUI.handleItemPicked(childItem)) {
+        return;
+      }
       if (childItem) {
         selectedItems = [childItem];
         updateElementsList();
@@ -1826,6 +1829,9 @@ function updateElementsList() {
       const card = hdr.closest('.element-item-card');
       const idx = parseInt(card.dataset.elindex, 10);
       const item = elements[idx];
+      if (item && window.sequencerUI && window.sequencerUI.handleItemPicked(item)) {
+        return;
+      }
       if (item) {
         if (selectedItems.includes(item) && selectedItems.length === 1) {
           selectedItems = [];
@@ -2735,6 +2741,12 @@ canvas.addEventListener('mousedown', (e) => {
 
   const clickedItem = findItemAt(coords.worldX, coords.worldY);
 
+  // Sequencer Element Picking Interceptor
+  if (clickedItem && window.sequencerUI && window.sequencerUI.handleItemPicked(clickedItem)) {
+    isMouseDown = false;
+    return;
+  }
+
   // In Simulation Mode or Direct Click: Toggle interactive thermal/mechanical elements
   if (clickedItem && (isSimulating || (activeTool === 'select' && !e.shiftKey))) {
     if (
@@ -2903,6 +2915,15 @@ window.addEventListener('mousemove', (e) => {
     renderer.panX = panStartCamera.x + (coords.screenX - panStartScreen.x);
     renderer.panY = panStartCamera.y + (coords.screenY - panStartScreen.y);
     updatePopupPosition();
+    return;
+  }
+
+  // Sequencer Element Picking Hover Highlight
+  if (window.sequencerUI?.actionDialog?.isPicking) {
+    const hoveredItem = findItemAt(coords.worldX, coords.worldY);
+    const isValid = hoveredItem && window.sequencerUI.actionDialog.isPickable(hoveredItem);
+    renderer.highlightedSequencerItem = isValid ? hoveredItem : null;
+    canvas.style.cursor = isValid ? 'pointer' : 'crosshair';
     return;
   }
 

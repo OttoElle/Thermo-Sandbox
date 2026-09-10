@@ -7,7 +7,17 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Thermo Sandbox – 2D Particle Simulation</title>
-  <link rel="stylesheet" href="style.css">
+  <!-- Modular Stylesheets for Vibe-Coding Workflow -->
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/canvas.css">
+  <link rel="stylesheet" href="css/ribbon.css">
+  <link rel="stylesheet" href="css/sidebar-left.css">
+  <link rel="stylesheet" href="css/sidebar-right.css">
+  <link rel="stylesheet" href="css/playback.css">
+  <link rel="stylesheet" href="css/modals.css">
+  <link rel="stylesheet" href="css/splash.css">
+  <link rel="stylesheet" href="css/sequencer.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -558,63 +568,120 @@
       </div>
     </aside>
 
-    <!-- Floating Bottom Playback Bar -->
-    <div class="floating-playback-bar">
-      <!-- 1. Playback Control Buttons Group -->
-      <div class="playback-btn-group">
-        <button id="btnPlayPause" class="playback-btn btn-play" title="Play / Pause Simulation (Spacebar)">
-          <span id="playIcon" class="is-play">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
-          </span>
+    <!-- Unified Bottom Dock: Controls Bar & Thermodynamic Cycle Sequencer Drawer -->
+    <div class="unified-bottom-dock" id="unifiedBottomDock">
+      <!-- 1. Top Bar: Playback Controls & Sequencer Toggle Button -->
+      <div class="unified-dock-bar" id="unifiedDockBar">
+        <div class="playback-btn-group">
+          <button id="btnPlayPause" class="playback-btn btn-play" title="Play / Pause Simulation (Spacebar)">
+            <span id="playIcon" class="is-play">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
+            </span>
+          </button>
+          <button id="btnStopReset" class="playback-btn btn-stop" title="Stop & Reset to Initial State (Enables Building)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+          </button>
+          <button id="btnStepBack" class="playback-btn" title="Step Back (Previous Frame)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="5" y1="5" x2="5" y2="19"/><polyline points="12 19 5 12 12 5"/><line x1="19" y1="12" x2="6" y2="12"/></svg>
+          </button>
+          <button id="btnStep" class="playback-btn" title="Step Forward (S)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="19" y1="5" x2="19" y2="19"/><polyline points="12 5 19 12 12 19"/><line x1="5" y1="12" x2="18" y2="12"/></svg>
+          </button>
+        </div>
+
+        <div class="playback-divider"></div>
+
+        <!-- 2. Time Counter -->
+        <div class="time-counter">
+          <span class="time-label">t =</span>
+          <span id="timeVal" class="time-num">0.00 s</span>
+        </div>
+
+        <div class="playback-divider"></div>
+
+        <!-- 3. Speed Slider -->
+        <div class="speed-control">
+          <span id="speedVal" class="speed-val">1.00×</span>
+          <input type="range" id="speedSlider" min="0.1" max="3.0" step="0.05" value="1.0" class="styled-slider">
+        </div>
+
+        <div class="playback-divider"></div>
+
+        <!-- 4. Physics Model 1-Click Toggle -->
+        <div class="model-toggle-group" id="modelToggleGroup" title="Switch Simulation Physics Model">
+          <button class="model-toggle-btn active" data-model="hard_sphere">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="9" ry="4"/><ellipse cx="12" cy="12" rx="4" ry="9"/></svg>
+            <span>Ideal Fluid</span>
+          </button>
+          <button class="model-toggle-btn" data-model="lennard_jones" title="Real Fluid (Lennard-Jones Intermolecular Potential)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5c2 1 4 5 6 13 1 3 2 3 4-2 2-6 5-10 8-10"/></svg>
+            <span>Real Fluid</span>
+          </button>
+        </div>
+
+        <div class="playback-divider"></div>
+
+        <!-- 5. Particle Gravity Toggle -->
+        <button class="gravity-toggle-btn" id="btnToggleGravity" title="Toggle Downward Gravity for Particles">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18m0 0l-5-5m5 5l5-5"/></svg>
+          <span>Gravity</span>
         </button>
-        <button id="btnStopReset" class="playback-btn btn-stop" title="Stop & Reset to Initial State (Enables Building)">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
-        </button>
-        <button id="btnStepBack" class="playback-btn" title="Step Back (Previous Frame)">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="5" y1="5" x2="5" y2="19"/><polyline points="12 19 5 12 12 5"/><line x1="19" y1="12" x2="6" y2="12"/></svg>
-        </button>
-        <button id="btnStep" class="playback-btn" title="Step Forward (S)">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="19" y1="5" x2="19" y2="19"/><polyline points="12 5 19 12 12 19"/><line x1="5" y1="12" x2="18" y2="12"/></svg>
+
+        <div class="playback-divider"></div>
+
+        <!-- 6. Integrated Sequencer Toggle Button -->
+        <button class="sequencer-toggle-btn" id="btnToggleSequencer" title="Toggle Thermodynamic Cycle Sequencer">
+          <span class="seq-status-dot"></span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>Sequencer</span>
+          <svg class="seq-chevron-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="18 15 12 9 6 15"/></svg>
         </button>
       </div>
 
-      <div class="playback-divider"></div>
+      <!-- 2. Drawer Body: Timeline Track & Sequencer Controls -->
+      <div id="cycleSequencerDrawer" class="cycle-sequencer-drawer is-collapsed">
+        <div class="seq-drawer-header" id="seqDrawerHeader" title="Click to toggle Cycle Sequencer timeline">
+          <div class="seq-drawer-header-left">
+            <button id="seqDrawerChevron" class="seq-drawer-chevron" title="Expand / Collapse Sequencer">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+            </button>
+            <div class="seq-drawer-brand">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <span class="seq-drawer-title">CYCLE SEQUENCER</span>
+            </div>
+            <div class="seq-drawer-controls">
+              <button type="button" id="seqBtnActive" class="seq-mode-btn" title="Enable Sequencer during simulation run">
+                <span class="seq-mode-dot"></span>
+                <span>Active</span>
+              </button>
+              <button type="button" id="seqBtnLoop" class="seq-mode-btn active" title="Loop sequence continuously">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                <span>Loop</span>
+              </button>
+              <div id="seqCycleBadge" class="seq-cycle-badge">
+                <span class="seq-badge-status seq-status-idle">Idle (No Steps)</span>
+              </div>
+            </div>
+          </div>
 
-      <!-- 2. Time Counter: Directly next to playback buttons -->
-      <div class="time-counter">
-        <span class="time-label">t =</span>
-        <span id="timeVal" class="time-num">0.00 s</span>
+          <div class="seq-drawer-header-right">
+            <button id="seqBtnReset" class="seq-header-btn" title="Reset to Step 1">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/></svg>
+              <span>Reset</span>
+            </button>
+            <button id="seqBtnAddStep" class="seq-header-btn seq-btn-primary" title="Add New Step">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span>+ Add Step</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="seq-drawer-body">
+          <div id="seqTimelineTrack" class="seq-timeline-track">
+            <!-- Dynamically populated GRAFCET Step Cards & Transition Nodes -->
+          </div>
+        </div>
       </div>
-
-      <div class="playback-divider"></div>
-
-      <!-- 3. Speed Slider -->
-      <div class="speed-control">
-        <span id="speedVal" class="speed-val">1.00×</span>
-        <input type="range" id="speedSlider" min="0.1" max="3.0" step="0.05" value="1.0" class="styled-slider">
-      </div>
-
-      <div class="playback-divider"></div>
-
-      <!-- 4. Physics Model 1-Click Toggle with Clean SVG Badges -->
-      <div class="model-toggle-group" id="modelToggleGroup" title="Switch Simulation Physics Model">
-        <button class="model-toggle-btn active" data-model="hard_sphere">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="9" ry="4"/><ellipse cx="12" cy="12" rx="4" ry="9"/></svg>
-          <span>Ideal Fluid</span>
-        </button>
-        <button class="model-toggle-btn" data-model="lennard_jones" title="Real Fluid (Lennard-Jones Intermolecular Potential)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5c2 1 4 5 6 13 1 3 2 3 4-2 2-6 5-10 8-10"/></svg>
-          <span>Real Fluid</span>
-        </button>
-      </div>
-
-      <div class="playback-divider"></div>
-
-      <!-- 5. Particle Gravity 1-Click Toggle Button -->
-      <button class="gravity-toggle-btn" id="btnToggleGravity" title="Toggle Downward Gravity for Particles">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18m0 0l-5-5m5 5l5-5"/></svg>
-        <span>Gravity</span>
-      </button>
     </div>
 
     <!-- Floating Zoom Controls -->
@@ -702,53 +769,7 @@
       </div>
     </div>
 
-    <!-- Persistent Bottom Drawer: Thermodynamic Cycle Sequencer -->
-    <div id="cycleSequencerDrawer" class="cycle-sequencer-drawer is-collapsed">
-      <!-- Clickable Drawer Header Strip -->
-      <div class="seq-drawer-header" id="seqDrawerHeader" title="Click to toggle Cycle Sequencer timeline">
-        <div class="seq-drawer-header-left">
-          <button id="seqDrawerChevron" class="seq-drawer-chevron" title="Expand / Collapse Sequencer">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
-          </button>
-          <div class="seq-drawer-brand">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            <span class="seq-drawer-title">CYCLE SEQUENCER</span>
-          </div>
-          <div class="seq-drawer-controls">
-            <label class="seq-toggle-label" title="Enable Sequencer during simulation run">
-              <input type="checkbox" id="seqToggleActive">
-              <span class="seq-toggle-switch"></span>
-              <span class="seq-toggle-text">Active</span>
-            </label>
-            <label class="seq-toggle-label" title="Loop sequence continuously">
-              <input type="checkbox" id="seqToggleLoop" checked>
-              <span class="seq-toggle-switch"></span>
-              <span class="seq-toggle-text">Loop</span>
-            </label>
-            <div id="seqCycleBadge" class="seq-cycle-badge">
-              <span class="seq-badge-status seq-status-idle">Idle (No Steps)</span>
-            </div>
-          </div>
-        </div>
 
-        <div class="seq-drawer-header-right">
-          <button id="seqBtnReset" class="seq-header-btn" title="Reset to Step 1">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/></svg>
-            <span>Reset</span>
-          </button>
-          <button id="seqBtnAddStep" class="seq-header-btn seq-btn-primary" title="Add New Step">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            <span>+ Add Step</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="seq-drawer-body">
-        <div id="seqTimelineTrack" class="seq-timeline-track">
-          <!-- Dynamically populated GRAFCET Step Cards & Transition Nodes -->
-        </div>
-      </div>
-    </div>
 
     <!-- Splash Screen / Welcome Dashboard Overlay -->
     <div id="splashOverlay" class="splash-overlay" style="display: flex;">

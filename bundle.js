@@ -2300,28 +2300,513 @@ class ParticleGLRenderer {
 }
 
 
+// --- src/control/SequencerConditions.js ---
+/**
+ * SequencerConditions.js
+ * Compound Transition Condition Evaluator for Thermodynamic Cycle Sequencer
+ * Evaluates Time, Piston Position, and Sensor Metrics with AND/OR Logic.
+ */
+
+class SequencerConditions {
+  /**
+   * Helper to resolve target position for a piston given a command:
+   * 'tdc': Top Dead Center (minimum chamber volume / min travel)
+   * 'bdc': Bottom Dead Center (maximum chamber volume / max travel)
+   */
+  static resolvePistonTarget(piston, command, invert = false) {
+    if (!piston || typeof piston.getTravelLimits !== 'function') {
+      return piston ? piston.getPos() : 0;
+    }
+    const limits = piston.getTravelLimits();
+    const isTdc = command === 'tdc' || command === 'drive_tdc';
+    if (!invert) {
+      return isTdc ? limits.minTravel : limits.maxTravel;
+    } else {
+      return isTdc ? limits.maxTravel : limits.minTravel;
+    }
+  }
+
+  /**
+   * Evaluates an individual condition against the current simulation state.
+   */
+  static evaluateSingle(cond, elapsedStepTime, engine, step) {
+    if (!cond) return { met: true, progress: 1.0 };
+    const type = cond.type || 'duration';
+
+    if (type === 'duration') {
+      const dur = Math.max(0.05, cond.duration !== undefined ? cond.duration : 1.5);
+      const met = elapsedStepTime >= dur;
+      const progress = Math.min(1.0, elapsedStepTime / dur);
+      return { met, progress };
+    }
+
+    if (type === 'piston' || type === 'piston_target') {
+      let targetPistons = [];
+      if (cond.pistonId) {
+        const p = (engine.pistons || []).find(item => item.id === cond.pistonId);
+        if (p) {
+          targetPistons.push({
+            piston: p,
+            target: cond.pistonTarget || 'tdc',
+            targetPos: cond.targetPos,
+            invert: !!cond.invert
+          });
+        }
+      } else if (step && Array.isArray(step.actions)) {
+        // Collect all pistons commanded in this step if no specific piston is set
+        const driving = step.actions.filter(a => a.type === 'piston' && a.targetId);
+        for (const act of driving) {
+          const p = (engine.pistons || []).find(item => item.id === act.targetId);
+          if (p) {
+            const tgt = (act.mode === 'drive_tdc' || act.mode === 'drive_bdc') ? act.mode.replace('drive_', '') : (act.mode === 'controlled' ? 'custom' : 'tdc');
+            targetPistons.push({
+              piston: p,
+              target: tgt,
+              targetPos: act.targetPos,
+              invert: !!act.invertTdcBdc
+            });
+          }
+        }
+      }
+
+      if (targetPistons.length === 0) {
+        const fallback = cond.fallbackTimeout || 1.5;
+        const met = elapsedStepTime >= fallback;
+        return { met, progress: Math.min(1.0, elapsedStepTime / fallback) };
+      }
+
+      let allReached = true;
+      let totalFraction = 0;
+
+      for (let i = 0; i < targetPistons.length; i++) {
+        const item = targetPistons[i];
+        const p = item.piston;
+        let goal = 0;
+
+        if (item.target === 'tdc' || item.target === 'bdc') {
+          goal = this.resolvePistonTarget(p, item.target, !!item.invert);
+        } else if (item.targetPos !== undefined) {
+          goal = item.targetPos;
+        } else {
+          goal = p.getPos();
+        }
+
+        const dist = Math.abs(goal - p.getPos());
+        if (dist > 3.5) {
+          allReached = false;
+        }
+
+        const limits = p.getTravelLimits ? p.getTravelLimits() : { stroke: 100 };
+        const stroke = Math.max(10, limits.stroke || 100);
+        totalFraction += Math.max(0, Math.min(1.0, 1.0 - (dist / stroke)));
+      }
+
+      const progress = totalFraction / targetPistons.length;
+      return { met: allReached, progress };
+    }
+
+    if (type === 'sensor') {
+      const sensor = (engine.sensors || []).find(s => s.id === cond.sensorId);
+      if (!sensor) {
+        return { met: false, progress: 0.0 };
+      }
+
+      const metric = cond.sensorMetric || 'pressure';
+      // Sensor pressure is stored in Pa, metric can be Pa or kPa
+      let val = metric === 'temperature' ? sensor.temperature : sensor.pressure;
+      if (metric === 'pressure_kpa') {
+        val = sensor.pressure / 1000.0;
+      }
+
+      const thresh = cond.sensorThreshold !== undefined ? cond.sensorThreshold : 200;
+      const op = cond.sensorOperator || '>=';
+      let met = false;
+
+      if (op === '>=' && val >= thresh) met = true;
+      else if (op === '<=' && val <= thresh) met = true;
+      else if (op === '>' && val > thresh) met = true;
+      else if (op === '<' && val < thresh) met = true;
+
+      // Approximate progress based on threshold comparison
+      let progress = 0;
+      if (thresh !== 0) {
+        progress = Math.max(0, Math.min(1.0, val / thresh));
+        if (met) progress = 1.0;
+      } else {
+        progress = met ? 1.0 : 0.0;
+      }
+
+      return { met, progress };
+    }
+
+    return { met: true, progress: 1.0 };
+  }
+
+  /**
+   * Normalizes any transition object (legacy single condition, flat array, or 2D grid)
+   * into a canonical 2D compound grid structure.
+   */
+  static normalizeTransition(trans) {
+    if (!trans) {
+      return {
+        type: 'compound_grid',
+        fallbackTimeout: 10.0,
+        rows: [{ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] }],
+        rowOperators: []
+      };
+    }
+
+    const timeout = trans.fallbackTimeout !== undefined ? trans.fallbackTimeout : 10.0;
+
+    if (Array.isArray(trans.rows) && trans.rows.length > 0) {
+      const rows = trans.rows.map(r => {
+        const conds = Array.isArray(r.conditions) && r.conditions.length > 0
+          ? r.conditions.map(c => ({ ...c }))
+          : [{ type: 'duration', duration: 1.5 }];
+        const ops = Array.isArray(r.operators) ? [...r.operators] : [];
+        while (ops.length < conds.length - 1) {
+          ops.push('AND');
+        }
+        return { conditions: conds, operators: ops };
+      });
+      const rowOps = Array.isArray(trans.rowOperators) ? [...trans.rowOperators] : [];
+      while (rowOps.length < rows.length - 1) {
+        rowOps.push('OR');
+      }
+      return {
+        type: 'compound_grid',
+        fallbackTimeout: timeout,
+        rows,
+        rowOperators: rowOps
+      };
+    }
+
+    if (Array.isArray(trans.conditions) && trans.conditions.length > 0) {
+      const op = (trans.operator || 'AND').toUpperCase();
+      const ops = Array(Math.max(0, trans.conditions.length - 1)).fill(op);
+      return {
+        type: 'compound_grid',
+        fallbackTimeout: timeout,
+        rows: [{
+          conditions: trans.conditions.map(c => ({ ...c })),
+          operators: ops
+        }],
+        rowOperators: []
+      };
+    }
+
+    const singleCond = { ...trans };
+    delete singleCond.fallbackTimeout;
+    return {
+      type: 'compound_grid',
+      fallbackTimeout: timeout,
+      rows: [{
+        conditions: [singleCond.type ? singleCond : { type: 'duration', duration: 1.5 }],
+        operators: []
+      }],
+      rowOperators: []
+    };
+  }
+
+  /**
+   * Evaluates a list of results and binary operators using standard Boolean precedence (AND before OR).
+   */
+  static evaluateSequence(evalResults, operators = []) {
+    if (!evalResults || evalResults.length === 0) return { met: true, progress: 1.0 };
+    if (evalResults.length === 1) return evalResults[0];
+
+    const orGroups = [];
+    let currentAndGroup = [evalResults[0]];
+
+    for (let i = 0; i < operators.length; i++) {
+      const op = (operators[i] || 'AND').toUpperCase();
+      const nextItem = evalResults[i + 1] || { met: true, progress: 1.0 };
+      if (op === 'AND' || op === '&') {
+        currentAndGroup.push(nextItem);
+      } else {
+        orGroups.push(currentAndGroup);
+        currentAndGroup = [nextItem];
+      }
+    }
+    orGroups.push(currentAndGroup);
+
+    const groupResults = orGroups.map(group => {
+      const allMet = group.every(item => item.met);
+      const sumProg = group.reduce((sum, item) => sum + item.progress, 0);
+      const avgProg = sumProg / group.length;
+      return { met: allMet, progress: allMet ? 1.0 : avgProg };
+    });
+
+    const anyMet = groupResults.some(g => g.met);
+    const maxProg = Math.max(...groupResults.map(g => g.progress));
+    return { met: anyMet, progress: anyMet ? 1.0 : maxProg };
+  }
+
+  /**
+   * Evaluates 2D compound transition grid with bracketed rows and Boolean precedence.
+   */
+  static evaluate(transition, elapsedStepTime, engine, step) {
+    if (!transition) {
+      return { met: true, progress: 1.0 };
+    }
+
+    const norm = this.normalizeTransition(transition);
+
+    const timeout = norm.fallbackTimeout;
+    if (timeout > 0 && elapsedStepTime >= timeout) {
+      return { met: true, progress: 1.0 };
+    }
+
+    const rowResults = norm.rows.map(row => {
+      const condResults = row.conditions.map(c =>
+        this.evaluateSingle(c, elapsedStepTime, engine, step)
+      );
+      return this.evaluateSequence(condResults, row.operators);
+    });
+
+    return this.evaluateSequence(rowResults, norm.rowOperators);
+  }
+}
+
+
+// --- src/control/SequencerExecutor.js ---
+/**
+ * SequencerExecutor.js
+ * Generic Action Snapshot Executor for Thermodynamic Cycle Sequencer
+ * Applies element properties and snapshots to physical simulation objects.
+ */
+
+class SequencerExecutor {
+  /**
+   * Applies all action snapshots defined in a step to the active simulation engine.
+   */
+  static applyStepActions(step, engine) {
+    if (!step || !engine || !Array.isArray(step.actions)) return;
+
+    for (let i = 0; i < step.actions.length; i++) {
+      const act = step.actions[i];
+      if (!act || !act.targetId) continue;
+      this.applySingleAction(act, engine);
+    }
+  }
+
+  /**
+   * Applies a single action snapshot to its targeted element in engine.
+   */
+  static applySingleAction(act, engine) {
+    const targetId = act.targetId;
+    const type = act.type;
+
+    // 1. Pistons
+    if (type === 'piston') {
+      const piston = (engine.pistons || []).find(p => p.id === targetId);
+      if (!piston) return;
+
+      if (act.motionType) piston.mode = act.motionType;
+      if (act.mode) piston.mode = act.mode;
+      if (act.mass !== undefined) piston.mass = act.mass;
+      if (act.conductivity !== undefined) piston.conductivity = act.conductivity;
+      if (act.springK !== undefined) piston.springK = act.springK;
+      if (act.dampingCoeff !== undefined) piston.dampingCoeff = act.dampingCoeff;
+      if (act.dampingGamma !== undefined) piston.dampingCoeff = act.dampingGamma;
+      if (act.frequency !== undefined) piston.frequency = act.frequency;
+      if (act.motorFrequency !== undefined) piston.frequency = act.motorFrequency;
+      if (act.phase !== undefined) piston.phase = act.phase;
+      if (act.motorPhase !== undefined) piston.phase = act.motorPhase;
+
+      // Stroke commands (TDC / BDC / Controlled / Hold / Free)
+      if (act.strokeCommand === 'drive_tdc' || act.mode === 'drive_tdc') {
+        piston.mode = 'controlled';
+        piston.targetPos = SequencerConditions.resolvePistonTarget(piston, 'tdc', !!act.invertTdcBdc);
+        piston.targetSpeed = act.targetSpeed !== undefined ? act.targetSpeed : 160;
+      } else if (act.strokeCommand === 'drive_bdc' || act.mode === 'drive_bdc') {
+        piston.mode = 'controlled';
+        piston.targetPos = SequencerConditions.resolvePistonTarget(piston, 'bdc', !!act.invertTdcBdc);
+        piston.targetSpeed = act.targetSpeed !== undefined ? act.targetSpeed : 160;
+      } else if (act.mode === 'hold') {
+        piston.mode = 'hold';
+        piston.velocity = 0;
+      } else if (act.mode === 'free') {
+        piston.mode = 'free';
+      } else if (act.targetPos !== undefined) {
+        piston.targetPos = act.targetPos;
+      }
+      return;
+    }
+
+    // 2. Throttle Valves
+    if (type === 'throttle_valve' || type === 'throttle') {
+      const tv = (engine.throttleValves || []).find(v => v.id === targetId);
+      if (!tv) return;
+      if (act.state === 'bypassed') {
+        tv.openRatio = 1.0;
+      } else if (act.openRatio !== undefined) {
+        tv.openRatio = Math.max(0, Math.min(1.0, act.openRatio));
+      }
+      if (act.conductivity !== undefined) tv.conductivity = act.conductivity;
+      if (typeof tv._updateGeometry === 'function') tv._updateGeometry();
+      return;
+    }
+
+    // 3. Walls & Built-in Segment Valves
+    if (type === 'wall' || type === 'valve') {
+      const wall = (engine.walls || []).find(w => w.id === targetId);
+      if (!wall) return;
+
+      if (act.conductivity !== undefined) wall.conductivity = act.conductivity;
+
+      if (wall.isValve || wall.type === 'manual_valve') {
+        if (act.valveState === 'open' || act.state === 'open') wall.isOpen = true;
+        else if (act.valveState === 'closed' || act.state === 'closed') wall.isOpen = false;
+        else if (act.isOpen !== undefined) wall.isOpen = !!act.isOpen;
+      } else if (wall.isCheckValve || wall.type === 'check_valve') {
+        if (act.direction !== undefined) wall.direction = act.direction;
+        if (act.flowDirection !== undefined) wall.direction = act.flowDirection === 'reverse' ? -1 : 1;
+      } else if (wall.isReliefValve || wall.type === 'relief_valve') {
+        if (act.triggerPressure !== undefined) wall.triggerPressure = act.triggerPressure;
+        if (act.hysteresis !== undefined) wall.hysteresis = act.hysteresis;
+        if (act.pressureHysteresis !== undefined) wall.hysteresis = act.pressureHysteresis;
+        if (act.reliefMode !== undefined) wall.reliefMode = act.reliefMode;
+        if (act.direction !== undefined) wall.direction = act.direction;
+      }
+      return;
+    }
+
+    // 4. Reservoirs & Thermal Sinks
+    if (type === 'reservoir' || type === 'sink_thermal') {
+      const res = (engine.reservoirs || []).find(r => r.id === targetId);
+      if (!res) return;
+      if (act.isActive !== undefined) res.isActive = !!act.isActive;
+      if (act.temperature !== undefined) res.temperature = act.temperature;
+      if (act.conductance !== undefined) res.conductance = act.conductance;
+      if (act.conductivity !== undefined) res.conductance = act.conductivity;
+      if (act.thermalCoupling !== undefined) res.conductance = act.thermalCoupling;
+      return;
+    }
+
+    // 5. Heat Exchangers
+    if (type === 'heat_exchanger' || type === 'hx') {
+      const hx = (engine.heatExchangers || []).find(h => h.id === targetId);
+      if (!hx) return;
+      if (act.isActive !== undefined) hx.isActive = !!act.isActive;
+      if (act.temperature !== undefined) hx.temperature = act.temperature;
+      if (act.conductivity !== undefined) hx.conductivity = act.conductivity;
+      if (act.thermalCoupling !== undefined) hx.conductivity = act.thermalCoupling;
+      return;
+    }
+
+    // 6. Regenerator Matrices
+    if (type === 'regenerator' || type === 'regen') {
+      const regen = (engine.regenerators || []).find(rg => rg.id === targetId);
+      if (!regen) return;
+      if (act.isActive !== undefined) regen.isActive = !!act.isActive;
+      if (act.orientation !== undefined) regen.axis = act.orientation;
+      if (act.axis !== undefined) regen.axis = act.axis;
+      if (act.heatCapacity !== undefined) regen.heatCapacity = act.heatCapacity;
+      if (act.conductivity !== undefined) regen.conductivity = act.conductivity;
+      if (act.thermalCoupling !== undefined) regen.conductivity = act.thermalCoupling;
+      return;
+    }
+
+    // 7. Solid Thermal Blocks (Ressavoirs)
+    if (type === 'thermal_block' || type === 'ressavoir') {
+      const tb = (engine.thermalBlocks || []).find(b => b.id === targetId);
+      if (!tb) return;
+      if (act.isActive !== undefined) tb.isActive = !!act.isActive;
+      if (act.temperature !== undefined) tb.temperature = act.temperature;
+      if (act.heatCapacity !== undefined) tb.heatCapacity = act.heatCapacity;
+      if (act.conductivity !== undefined) tb.conductivity = act.conductivity;
+      return;
+    }
+
+    // 8. Particle Emitters
+    if (type === 'emitter' || type === 'source') {
+      const em = (engine.emitters || []).find(e => e.id === targetId);
+      if (!em) return;
+      if (act.state === 'firing' || act.isActive === true) em.enabled = true;
+      else if (act.state === 'paused' || act.isActive === false) em.enabled = false;
+      if (act.direction !== undefined) em.direction = act.direction;
+      if (act.flowDirection !== undefined) em.direction = act.flowDirection;
+      if (act.rate !== undefined) em.rate = act.rate;
+      if (act.temperature !== undefined) em.temperature = act.temperature;
+      if (act.mass !== undefined) em.mass = act.mass;
+      if (act.particleMass !== undefined) em.mass = act.particleMass;
+      if (act.maxParticles !== undefined) em.maxParticles = act.maxParticles;
+      if (act.capacityLimit !== undefined) em.maxParticles = act.capacityLimit;
+      return;
+    }
+
+    // 9. Particle Absorber Sinks
+    if (type === 'sink' || type === 'absorber') {
+      const snk = (engine.sinks || []).find(s => s.id === targetId);
+      if (!snk) return;
+      if (act.isActive !== undefined) snk.isActive = !!act.isActive;
+      if (act.direction !== undefined) snk.direction = act.direction;
+      if (act.tempFilterMode !== undefined) snk.tempFilterMode = act.tempFilterMode;
+      if (act.thermalFilter !== undefined) snk.tempFilterMode = act.thermalFilter;
+      if (act.filterTemperature !== undefined) snk.filterTemperature = act.filterTemperature;
+      if (act.cutoffTemp !== undefined) snk.filterTemperature = act.cutoffTemp;
+      if (act.absorptionEfficiency !== undefined) snk.absorptionEfficiency = act.absorptionEfficiency;
+      if (act.efficiency !== undefined) snk.absorptionEfficiency = act.efficiency;
+      if (act.maxParticles !== undefined) snk.maxParticles = act.maxParticles;
+      if (act.maxAbsorbed !== undefined) snk.maxParticles = act.maxAbsorbed;
+      return;
+    }
+
+    // 10. Population Regulators
+    if (type === 'regulator') {
+      const reg = (engine.regulators || []).find(r => r.id === targetId);
+      if (!reg) return;
+      if (act.isActive !== undefined) reg.isActive = !!act.isActive;
+      if (act.targetCount !== undefined) reg.targetCount = act.targetCount;
+      if (act.hysteresis !== undefined) reg.hysteresis = act.hysteresis;
+      if (act.temperature !== undefined) reg.temperature = act.temperature;
+      if (act.mass !== undefined) reg.mass = act.mass;
+      if (act.rate !== undefined) reg.rate = act.rate;
+      if (act.maxFlowRate !== undefined) reg.rate = act.maxFlowRate;
+      return;
+    }
+  }
+}
+
+
 // --- src/control/CycleSequencer.js ---
 /**
  * CycleSequencer.js
- * Precision GRAFCET State-Machine & Sequence Controller for Thermodynamic Cycles
- * Coordinates Pistons (TDC/BDC strokes), Throttle Valves, and Thermal Elements.
+ * Precision GRAFCET State-Machine Coordinator for Thermodynamic Cycle Sequencer
+ * Coordinates Steps, Action Snapshots, Transitions, and Continuous Simulation Execution.
  */
+
 
 class CycleSequencer {
   constructor() {
     this.steps = [];
-    this.phases = this.steps; // Backward compatibility alias
+    this.phases = this.steps; // Compatibility alias
     this.isEnabled = false;
     this.isLooping = true;
     this.activeStepIndex = 0;
-    this.activePhaseIndex = 0; // Alias
+    this.activePhaseIndex = 0; // Compatibility alias
     this.elapsedStepTime = 0;
-    this.elapsedPhaseTime = 0; // Alias
+    this.elapsedPhaseTime = 0; // Compatibility alias
     this.currentCycleCount = 1;
     this.stepProgress = 0; // 0.0 to 1.0 for UI progress bar
-    this.phaseProgress = 0; // Alias
+    this.phaseProgress = 0; // Compatibility alias
     this.onStepChangeCallback = null;
-    this.onPhaseChangeCallback = null; // Alias
+    this.onPhaseChangeCallback = null; // Compatibility alias
+    this.addStep({ name: 'Step 1' });
+  }
+
+  reset() {
+    this.activeStepIndex = 0;
+    this.activePhaseIndex = 0;
+    this.elapsedStepTime = 0;
+    this.elapsedPhaseTime = 0;
+    this.currentCycleCount = 1;
+    this.stepProgress = 0;
+    this.phaseProgress = 0;
+    if (this.steps.length === 0) {
+      this.addStep({ name: 'Step 1' });
+    }
   }
 
   addStep(options = {}) {
@@ -2329,20 +2814,17 @@ class CycleSequencer {
     const step = {
       id: options.id || 'step_' + Math.random().toString(36).substring(2, 9),
       name: options.name || `Step ${stepNum}`,
-      actions: options.actions || [], // [{ type: 'piston'|'valve'|'thermal', targetId: '...', ... }]
+      actions: options.actions || [],
       transition: options.transition || options.trigger || {
-        type: 'duration', // 'duration' | 'piston_target' | 'sensor'
-        duration: 1.5,    // seconds for duration trigger
-        pistonId: null,   // specific piston target, or null for all controlled pistons
-        pistonTarget: 'tdc', // 'tdc' | 'bdc'
-        sensorId: null,   // for sensor trigger
-        sensorMetric: 'pressure', // 'pressure' | 'temperature'
-        sensorOperator: '>=',     // '>=' | '<='
-        sensorThreshold: 200,     // kPa or K
-        fallbackTimeout: 6.0      // safety fallback timeout in seconds
+        type: 'duration',
+        duration: 1.5,
+        operator: 'AND',
+        conditions: [
+          { type: 'duration', duration: 1.5 }
+        ],
+        fallbackTimeout: 10.0
       }
     };
-    // Ensure transition property is mirrored to trigger for compatibility
     step.trigger = step.transition;
     this.steps.push(step);
     return step;
@@ -2387,12 +2869,12 @@ class CycleSequencer {
 
   duplicateStep(index) {
     if (index >= 0 && index < this.steps.length) {
-      const original = this.steps[index];
+      const orig = this.steps[index];
       const copy = {
         id: 'step_' + Math.random().toString(36).substring(2, 9),
-        name: `${original.name} (Copy)`,
-        actions: JSON.parse(JSON.stringify(original.actions || [])),
-        transition: JSON.parse(JSON.stringify(original.transition || original.trigger || { type: 'duration', duration: 1.5 }))
+        name: `${orig.name} (Copy)`,
+        actions: JSON.parse(JSON.stringify(orig.actions || [])),
+        transition: JSON.parse(JSON.stringify(orig.transition || orig.trigger || { type: 'duration', duration: 1.5 }))
       };
       copy.trigger = copy.transition;
       this.steps.splice(index + 1, 0, copy);
@@ -2409,8 +2891,8 @@ class CycleSequencer {
     if (stepIndex >= 0 && stepIndex < this.steps.length) {
       const action = {
         id: 'act_' + Math.random().toString(36).substring(2, 9),
-        type: actionData.type || 'piston',
         targetId: actionData.targetId || null,
+        type: actionData.type || 'piston',
         ...actionData
       };
       this.steps[stepIndex].actions.push(action);
@@ -2451,76 +2933,8 @@ class CycleSequencer {
     return this.getCurrentStep();
   }
 
-  /**
-   * Helper to resolve target position for a piston given a command:
-   * 'drive_tdc': Top Dead Center (minimum chamber volume / min travel)
-   * 'drive_bdc': Bottom Dead Center (maximum chamber volume / max travel)
-   */
-  resolvePistonTarget(piston, command, invert = false) {
-    if (!piston || typeof piston.getTravelLimits !== 'function') return piston ? piston.getPos() : 0;
-    const limits = piston.getTravelLimits();
-    const isTdc = command === 'drive_tdc' || command === 'tdc';
-    if (!invert) {
-      return isTdc ? limits.minTravel : limits.maxTravel;
-    } else {
-      return isTdc ? limits.maxTravel : limits.minTravel;
-    }
-  }
-
   applyStepActions(step, engine) {
-    if (!step || !engine) return;
-
-    for (let i = 0; i < step.actions.length; i++) {
-      const act = step.actions[i];
-      if (!act.targetId) continue;
-
-      if (act.type === 'piston') {
-        const piston = engine.pistons.find(p => p.id === act.targetId);
-        if (piston) {
-          const mode = act.mode || 'drive_tdc';
-          if (mode === 'drive_tdc' || mode === 'drive_bdc') {
-            piston.mode = 'controlled';
-            piston.targetPos = this.resolvePistonTarget(piston, mode, !!act.invertTdcBdc);
-            piston.targetSpeed = act.targetSpeed !== undefined ? act.targetSpeed : 160;
-          } else if (mode === 'controlled') {
-            piston.mode = 'controlled';
-            piston.targetPos = act.targetPos !== undefined ? act.targetPos : piston.getPos();
-            piston.targetSpeed = act.targetSpeed !== undefined ? act.targetSpeed : 160;
-          } else if (mode === 'hold') {
-            piston.mode = 'hold';
-            piston.velocity = 0;
-          } else if (mode === 'free') {
-            piston.mode = 'free';
-          }
-        }
-      } else if (act.type === 'valve') {
-        const valve = engine.throttleValves.find(v => v.id === act.targetId);
-        if (valve) {
-          if (act.state === 'closed') {
-            valve.openRatio = 0.0;
-          } else if (act.state === 'open') {
-            valve.openRatio = 1.0;
-          } else if (act.openRatio !== undefined) {
-            valve.openRatio = Math.max(0, Math.min(1, act.openRatio));
-          }
-          valve._updateGeometry();
-        }
-      } else if (act.type === 'thermal') {
-        const block = (engine.thermalBlocks || []).find(b => b.id === act.targetId) ||
-                      (engine.heatExchangers || []).find(hx => hx.id === act.targetId) ||
-                      (engine.reservoirs || []).find(r => r.id === act.targetId);
-        if (block) {
-          if (act.state === 'insulated' || act.isActive === false) {
-            block.isActive = false;
-          } else {
-            block.isActive = true;
-          }
-          if (act.temperature !== undefined) {
-            block.temperature = act.temperature;
-          }
-        }
-      }
-    }
+    SequencerExecutor.applyStepActions(step, engine);
   }
 
   applyPhaseActions(phase, engine) {
@@ -2574,112 +2988,30 @@ class CycleSequencer {
       return;
     }
 
-    const step = this.getCurrentStep();
-    if (!step) return;
+    const currentStep = this.getCurrentStep();
+    if (!currentStep) return;
 
     // Apply continuous controlled properties
-    this.applyStepActions(step, engine);
+    this.applyStepActions(currentStep, engine);
 
     this.elapsedStepTime += dt;
     this.elapsedPhaseTime = this.elapsedStepTime;
 
-    const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
-    let conditionMet = false;
+    const transition = currentStep.transition || currentStep.trigger;
+    const { met, progress } = SequencerConditions.evaluate(transition, this.elapsedStepTime, engine, currentStep);
 
-    if (transition.type === 'duration') {
-      const totalDur = Math.max(0.05, transition.duration || 1.5);
-      this.stepProgress = Math.min(1.0, this.elapsedStepTime / totalDur);
-      this.phaseProgress = this.stepProgress;
-      if (this.elapsedStepTime >= totalDur) {
-        conditionMet = true;
-      }
-    } else if (transition.type === 'piston_target') {
-      // Evaluate piston position: check specified piston or all driving pistons in this step
-      let targetPistons = [];
-      if (transition.pistonId) {
-        const p = engine.pistons.find(item => item.id === transition.pistonId);
-        if (p) targetPistons.push({ piston: p, target: transition.pistonTarget || 'tdc' });
-      } else {
-        // Collect all pistons commanded in this step
-        const drivingActs = step.actions.filter(a => a.type === 'piston' && (a.mode === 'drive_tdc' || a.mode === 'drive_bdc' || a.mode === 'controlled'));
-        for (const act of drivingActs) {
-          const p = engine.pistons.find(item => item.id === act.targetId);
-          if (p) {
-            const tgt = (act.mode === 'drive_tdc' || act.mode === 'drive_bdc') ? act.mode.replace('drive_', '') : 'pos';
-            targetPistons.push({ piston: p, target: tgt, targetPos: act.targetPos, invert: !!act.invertTdcBdc });
-          }
-        }
-      }
+    this.stepProgress = Math.max(0, Math.min(1.0, progress));
+    this.phaseProgress = this.stepProgress;
 
-      if (targetPistons.length === 0) {
-        // Fallback to 1.5s if no pistons are active
-        const fallback = transition.fallbackTimeout || 1.5;
-        this.stepProgress = Math.min(1.0, this.elapsedStepTime / fallback);
-        this.phaseProgress = this.stepProgress;
-        if (this.elapsedStepTime >= fallback) conditionMet = true;
-      } else {
-        let allReached = true;
-        let totalPct = 0;
-
-        for (let i = 0; i < targetPistons.length; i++) {
-          const item = targetPistons[i];
-          const piston = item.piston;
-          let goalPos = 0;
-          if (item.target === 'tdc' || item.target === 'bdc') {
-            goalPos = this.resolvePistonTarget(piston, item.target, !!item.invert);
-          } else {
-            goalPos = item.targetPos !== undefined ? item.targetPos : piston.getPos();
-          }
-
-          const curPos = piston.getPos();
-          const dist = Math.abs(goalPos - curPos);
-          if (dist > 3.0) {
-            allReached = false;
-          }
-
-          const limits = piston.getTravelLimits();
-          const stroke = Math.max(10, limits.stroke);
-          const fraction = Math.max(0, Math.min(1, 1.0 - (dist / stroke)));
-          totalPct += fraction;
-        }
-
-        this.stepProgress = totalPct / targetPistons.length;
-        this.phaseProgress = this.stepProgress;
-
-        const timeout = transition.fallbackTimeout || 8.0;
-        if (allReached || this.elapsedStepTime >= timeout) {
-          conditionMet = true;
-        }
-      }
-    } else if (transition.type === 'sensor') {
-      const sensor = engine.sensors.find(s => s.id === transition.sensorId);
-      const timeout = transition.fallbackTimeout || 10.0;
-      if (!sensor) {
-        conditionMet = this.elapsedStepTime >= 1.5;
-        this.stepProgress = Math.min(1.0, this.elapsedStepTime / 1.5);
-        this.phaseProgress = this.stepProgress;
-      } else {
-        const val = transition.sensorMetric === 'temperature' ? sensor.temperature : (sensor.pressure / 1000.0); // kPa
-        const thresh = transition.sensorThreshold !== undefined ? transition.sensorThreshold : 200;
-        const op = transition.sensorOperator || '>=';
-
-        if (op === '>=' && val >= thresh) conditionMet = true;
-        else if (op === '<=' && val <= thresh) conditionMet = true;
-        else if (op === '>' && val > thresh) conditionMet = true;
-        else if (op === '<' && val < thresh) conditionMet = true;
-
-        if (this.elapsedStepTime >= timeout) conditionMet = true;
-        this.stepProgress = Math.min(1.0, this.elapsedStepTime / timeout);
-        this.phaseProgress = this.stepProgress;
-      }
-    }
-
-    if (conditionMet) {
+    if (met) {
       this.advanceToNextStep(engine);
     }
   }
 
   exportState() {
+    if (this.steps.length === 0) {
+      this.addStep({ name: 'Step 1' });
+    }
     return {
       isEnabled: this.isEnabled,
       isLooping: this.isLooping,
@@ -2702,12 +3034,14 @@ class CycleSequencer {
     this.elapsedPhaseTime = 0;
     this.stepProgress = 0;
     this.phaseProgress = 0;
-    
+
     const loaded = data.steps || data.phases;
-    this.steps = Array.isArray(loaded) ? JSON.parse(JSON.stringify(loaded)) : [];
+    this.steps = Array.isArray(loaded) && loaded.length > 0 ? JSON.parse(JSON.stringify(loaded)) : [];
+    if (this.steps.length === 0) {
+      this.addStep({ name: 'Step 1' });
+    }
     this.phases = this.steps;
 
-    // Ensure transition property is properly initialized for each step
     for (const step of this.steps) {
       if (!step.transition && step.trigger) {
         step.transition = step.trigger;
@@ -3635,9 +3969,13 @@ class Engine {
 
     if (state.cycleSequencer && this.sequencer) {
       this.sequencer.importState(state.cycleSequencer);
+      if (this.sequencer.steps.length === 0) {
+        this.sequencer.addStep({ name: 'Step 1' });
+      }
     } else if (this.sequencer) {
       this.sequencer.reset();
       this.sequencer.steps = [];
+      this.sequencer.addStep({ name: 'Step 1' });
       this.sequencer.phases = this.sequencer.steps;
     }
 
@@ -3763,6 +4101,7 @@ class Renderer {
     this.snapCursor = null; // { x, y } in world coordinates
 
     this.maxSpeedReference = 380;
+    this.highlightedSequencerItem = null;
   }
 
   setGLCanvas(glCanvas) {
@@ -3966,6 +4305,11 @@ class Renderer {
       }
     }
 
+    // 9.5 Sequencer Action Selection Glow (Subtle Cyan Outline, No Handles)
+    if (this.highlightedSequencerItem) {
+      this.drawSequencerHighlight(this.highlightedSequencerItem);
+    }
+
     // 10. Draft Previews (Valves, Walls, Rectangles, Marquee Selection)
     if (this.draftInfo && this.draftInfo.isDrafting) {
       this.drawDraft(this.draftInfo);
@@ -3976,6 +4320,41 @@ class Renderer {
       this.drawSnapIndicator(this.snapCursor.x, this.snapCursor.y, this.snapCursor.isVertex);
     }
 
+    ctx.restore();
+  }
+
+  drawSequencerHighlight(item) {
+    if (!item) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.shadowColor = '#38bdf8';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 2.5;
+
+    if (item.p1 && item.p2) {
+      ctx.lineWidth = Math.max(4, (item.thickness || 4) + 4);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(item.p1.x, item.p1.y);
+      ctx.lineTo(item.p2.x, item.p2.y);
+      ctx.stroke();
+    } else {
+      let b = null;
+      if (typeof item.getBounds === 'function') {
+        b = item.getBounds();
+      } else if (item.x !== undefined && item.y !== undefined) {
+        b = { left: item.x, top: item.y, width: item.width || 40, height: item.height || 40 };
+      }
+      if (b) {
+        const left = b.left !== undefined ? b.left : (b.x !== undefined ? b.x : 0);
+        const top = b.top !== undefined ? b.top : (b.y !== undefined ? b.y : 0);
+        const width = b.width !== undefined ? b.width : ((b.right !== undefined ? b.right : left + 40) - left);
+        const height = b.height !== undefined ? b.height : ((b.bottom !== undefined ? b.bottom : top + 40) - top);
+        const pad = 4;
+        ctx.strokeRect(left - pad, top - pad, width + pad * 2, height + pad * 2);
+      }
+    }
     ctx.restore();
   }
 
@@ -5759,86 +6138,2110 @@ class DashboardChart {
 }
 
 
-// --- src/control/SequencerUI.js ---
-/**
- * SequencerUI.js
- * Visual GRAFCET Timeline Controller and Persistent Bottom Drawer
- * for Thermodynamic Cycle Sequencer
+// --- src/control/SequencerCatalogDefaults.js ---
+﻿/**
+ * SequencerCatalogDefaults.js
+ * Canonical default parameter values and lookup helpers according to TOOL_CATALOG.md.
+ * Used for default indicators and 'Reset to Default' functionality.
  */
 
-class SequencerUI {
-  constructor(engine) {
+const TOOL_DEFAULTS = {
+  wall: {
+    thickness: 4,
+    conductivity: 0.0
+  },
+  piston: {
+    strokeCommand: 'drive_tdc',
+    motionType: 'free',
+    targetSpeed: 160,
+    mass: 30,
+    conductivity: 0.20,
+    springK: 50,
+    frequency: 0.8,
+    phase: 0,
+    dampingCoeff: 25
+  },
+  manual_valve: {
+    valveState: 'open',
+    conductivity: 0.0
+  },
+  check_valve: {
+    direction: 1,
+    conductivity: 0.0
+  },
+  relief_valve: {
+    triggerPressure: 250,
+    pressureHysteresis: 25,
+    reliefMode: '1-way',
+    conductivity: 0.0
+  },
+  throttle_valve: {
+    state: 'active',
+    openRatio: 0.30,
+    conductivity: 0.0
+  },
+  reservoir: {
+    isActive: true,
+    temperature: 500,
+    conductivity: 0.80
+  },
+  heat_exchanger: {
+    isActive: true,
+    temperature: 300,
+    conductivity: 0.60
+  },
+  regenerator: {
+    isActive: true,
+    orientation: 'horizontal',
+    temperature: 300,
+    heatCapacity: 400,
+    conductivity: 0.70
+  },
+  thermal_block: {
+    isActive: true,
+    temperature: 300,
+    heatCapacity: 300,
+    conductivity: 0.60
+  },
+  emitter: {
+    state: 'firing',
+    direction: 'right',
+    rate: 8,
+    temperature: 300,
+    mass: 1.0,
+    maxParticles: 0
+  },
+  sink: {
+    isActive: true,
+    direction: '360',
+    tempFilterMode: 'all',
+    filterTemperature: 300,
+    absorptionEfficiency: 1.0,
+    maxParticles: 0
+  },
+  regulator: {
+    isActive: true,
+    targetCount: 50,
+    hysteresis: 3,
+    temperature: 300,
+    mass: 1.0,
+    rate: 15
+  }
+};
+
+class SequencerCatalogDefaults {
+  static getDefaultsForType(type) {
+    const d = TOOL_DEFAULTS[type] || {};
+    return JSON.parse(JSON.stringify(d));
+  }
+
+  static getDefault(type, prop) {
+    const d = TOOL_DEFAULTS[type];
+    return d && d[prop] !== undefined ? d[prop] : null;
+  }
+}
+
+
+// --- src/control/SequencerFieldControls.js ---
+/**
+ * SequencerFieldControls.js
+ * Modular UI field builders with default indicators and live modified highlighting.
+ * Conforms to TOOL_CATALOG.md specifications.
+ */
+
+class SequencerFieldControls {
+  static makeDualInput(label, id, min, max, step, value, unit = '', defVal = null) {
+    const hasDef = defVal !== null && defVal !== undefined;
+    const isMod = hasDef && Math.abs(parseFloat(value) - parseFloat(defVal)) > 1e-4;
+    const defTag = hasDef ? `<span class="seq-def-indicator" title="Standard: ${defVal}${unit}">(def: ${defVal})</span>` : '';
+    const defPct = hasDef ? Math.max(0, Math.min(100, ((parseFloat(defVal) - min) / (max - min)) * 100)) : null;
+    return `
+      <div class="field-row ${isMod ? 'is-modified' : ''}" data-def="${hasDef ? defVal : ''}" id="row_${id}">
+        <div class="field-label"><span>${label}</span>${defTag}</div>
+        <div class="dual-input-row">
+          <div class="slider-track-wrap">
+            <input type="range" id="${id}_slider" min="${min}" max="${max}" step="${step}" value="${value}" class="styled-slider">
+            ${hasDef ? `<div class="slider-notch" style="left: ${defPct}%;" title="Default: ${defVal}${unit}"></div>` : ''}
+          </div>
+          <input type="number" id="${id}_num" min="${min}" max="${max}" step="${step}" value="${value}" class="dual-num-input">
+          ${unit ? `<span style="font-size:10px; color:var(--text-dim);">${unit}</span>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  static attachDualInput(container, id, onChange) {
+    const slider = container.querySelector(`#${id}_slider`);
+    const num = container.querySelector(`#${id}_num`);
+    if (!slider || !num) return;
+    slider.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      num.value = val;
+      if (onChange) onChange(val);
+    });
+    num.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (!isNaN(val)) {
+        slider.value = val;
+        if (onChange) onChange(val);
+      }
+    });
+  }
+
+  static makeDirection5(id, currentDir = 'right', defDir = 'right') {
+    const isMod = String(currentDir) !== String(defDir);
+    return `
+      <div class="field-row ${isMod ? 'is-modified' : ''}" data-def="${defDir}" id="row_${id}">
+        <div class="field-label"><span>Direction</span><span class="seq-def-indicator">(def: ${defDir})</span></div>
+        <div class="btn-toggle-group" id="${id}">
+          <button type="button" class="sub-toggle-btn ${currentDir === 'right' ? 'active' : ''}" data-dir="right" title="Right">→</button>
+          <button type="button" class="sub-toggle-btn ${currentDir === 'left' ? 'active' : ''}" data-dir="left" title="Left">←</button>
+          <button type="button" class="sub-toggle-btn ${currentDir === 'down' ? 'active' : ''}" data-dir="down" title="Down">↓</button>
+          <button type="button" class="sub-toggle-btn ${currentDir === 'up' ? 'active' : ''}" data-dir="up" title="Up">↑</button>
+          <button type="button" class="sub-toggle-btn ${currentDir === '360' || currentDir === 'radial' ? 'active' : ''}" data-dir="360" title="Radial">360°</button>
+        </div>
+      </div>
+    `;
+  }
+
+  static attachDirection5(container, id, onChange) {
+    const group = container.querySelector(`#${id}`);
+    if (!group) return;
+    group.querySelectorAll('[data-dir]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('[data-dir]').forEach(x => x.classList.remove('active'));
+        btn.classList.add('active');
+        if (onChange) onChange(btn.dataset.dir);
+      });
+    });
+  }
+
+  static makeToggleGroup(id, options, currentVal, defVal = null) {
+    const hasDef = defVal !== null && defVal !== undefined;
+    const isMod = hasDef && String(currentVal) !== String(defVal);
+    const defTag = hasDef ? `<span class="seq-def-indicator">(def: ${defVal})</span>` : '';
+    const btns = options.map(opt => `
+      <button type="button" class="sub-toggle-btn ${String(opt.value) === String(currentVal) ? 'active' : ''}" data-val="${opt.value}">${opt.label}</button>
+    `).join('');
+    return `
+      <div class="field-row ${isMod ? 'is-modified' : ''}" data-def="${hasDef ? defVal : ''}" id="row_${id}">
+        <div class="field-label"><span>${id.replace(/([A-Z])/g, ' $1')}</span>${defTag}</div>
+        <div class="btn-toggle-group" id="${id}">${btns}</div>
+      </div>
+    `;
+  }
+
+  static attachToggleGroup(container, id, onChange) {
+    const group = container.querySelector(`#${id}`);
+    if (!group) return;
+    group.querySelectorAll('[data-val]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('[data-val]').forEach(x => x.classList.remove('active'));
+        btn.classList.add('active');
+        if (onChange) onChange(btn.dataset.val);
+      });
+    });
+  }
+
+  static renderPistonHTML(item, act, pfx = 'seqAct_') {
+    const stroke = act.strokeCommand || act.mode || 'drive_tdc';
+    const motion = act.motionType || item.mode || 'free';
+    const mass = act.mass !== undefined ? act.mass : (item.mass || 30);
+    const cond = act.conductivity !== undefined ? act.conductivity : (item.conductivity !== undefined ? item.conductivity : 0.20);
+    const spd = act.targetSpeed !== undefined ? act.targetSpeed : 160;
+    const springK = act.springK !== undefined ? act.springK : (item.springK || 50);
+    const freq = act.frequency !== undefined ? act.frequency : (item.frequency || 0.8);
+    const phase = act.phase !== undefined ? act.phase : (item.phase || 0);
+    const damp = act.dampingCoeff !== undefined ? act.dampingCoeff : (item.dampingCoeff || 25);
+
+    let modeInputs = '';
+    if (motion === 'spring') {
+      modeInputs = this.makeDualInput('Spring Constant k', `${pfx}pSpring`, 10, 500, 10, springK, 'N/m', 50);
+    } else if (motion === 'motorized') {
+      modeInputs = `
+        ${this.makeDualInput('Motor Frequency f', `${pfx}pFreq`, 0.1, 5.0, 0.1, freq, 'Hz', 0.8)}
+        ${this.makeDualInput('Phase Offset φ', `${pfx}pPhase`, -180, 180, 15, phase, '°', 0)}
+      `;
+    } else if (motion === 'damper') {
+      modeInputs = this.makeDualInput('Damping Load γ', `${pfx}pDamp`, 5, 150, 5, damp, 'Ns/m', 25);
+    }
+
+    return `
+      <div class="field-row ${stroke !== 'drive_tdc' ? 'is-modified' : ''}" data-def="drive_tdc" id="row_${pfx}strokeCommand">
+        <div class="field-label"><span>Stroke Command</span><span class="seq-def-indicator">(def: TDC)</span></div>
+        <select id="${pfx}strokeCommand" class="styled-select" style="width:100%;">
+          <option value="drive_tdc" ${stroke === 'drive_tdc' ? 'selected' : ''}>Drive to TDC (Min Volume)</option>
+          <option value="drive_bdc" ${stroke === 'drive_bdc' ? 'selected' : ''}>Drive to BDC (Max Volume)</option>
+          <option value="hold" ${stroke === 'hold' ? 'selected' : ''}>Hold Position</option>
+          <option value="free" ${stroke === 'free' ? 'selected' : ''}>Free Float</option>
+        </select>
+      </div>
+      <div class="field-row ${motion !== 'free' ? 'is-modified' : ''}" data-def="free" id="row_${pfx}motionType">
+        <div class="field-label"><span>Motion Mode</span><span class="seq-def-indicator">(def: Free)</span></div>
+        <select id="${pfx}motionType" class="styled-select" style="width:100%;">
+          <option value="free" ${motion === 'free' ? 'selected' : ''}>Free Floating (Displacer)</option>
+          <option value="spring" ${motion === 'spring' ? 'selected' : ''}>Spring Restrained (Accumulator)</option>
+          <option value="motorized" ${motion === 'motorized' ? 'selected' : ''}>Motorized Crank (Compressor)</option>
+          <option value="damper" ${motion === 'damper' ? 'selected' : ''}>Viscous Damper (Expander)</option>
+        </select>
+      </div>
+      ${this.makeDualInput('Drive Speed', `${pfx}pSpeed`, 20, 400, 10, spd, 'px/s', 160)}
+      ${this.makeDualInput('Piston Mass m', `${pfx}pMass`, 0, 150, 5, mass, 'kg', 30)}
+      ${this.makeDualInput('Conductivity κ', `${pfx}pCond`, 0, 1, 0.05, cond, '', 0.20)}
+      <div id="${pfx}pDynamic">${modeInputs}</div>
+    `;
+  }
+
+  static renderValveHTML(item, act, elType, pfx = 'seqAct_') {
+    const cond = act.conductivity !== undefined ? act.conductivity : (item.conductivity || 0);
+
+    if (elType === 'manual_valve') {
+      const isOpen = act.valveState === 'open' || (act.valveState === undefined && item.isOpen !== false);
+      return `
+        <div class="field-row ${!isOpen ? 'is-modified' : ''}" data-def="open">
+          <div class="field-label"><span>Valve State</span><span class="seq-def-indicator">(def: Open)</span></div>
+          <select id="${pfx}valveState" class="styled-select" style="width:100%;">
+            <option value="open" ${isOpen ? 'selected' : ''}>VALVE IS OPEN (Passable)</option>
+            <option value="closed" ${!isOpen ? 'selected' : ''}>VALVE IS CLOSED (Solid Barrier)</option>
+          </select>
+        </div>
+        ${this.makeDualInput('Conductivity κ', `${pfx}vCond`, 0, 1, 0.05, cond, '', 0.0)}
+      `;
+    }
+
+    if (elType === 'check_valve') {
+      const dir = act.direction !== undefined ? act.direction : (item.direction || 1);
+      return `
+        <div class="field-row ${dir !== 1 ? 'is-modified' : ''}" data-def="1">
+          <div class="field-label"><span>Allowed Flow Direction</span><span class="seq-def-indicator">(def: Forward)</span></div>
+          <div class="btn-toggle-group" id="${pfx}checkDir">
+            <button type="button" class="sub-toggle-btn ${dir === 1 ? 'active' : ''}" data-val="1">Forward →</button>
+            <button type="button" class="sub-toggle-btn ${dir === -1 ? 'active' : ''}" data-val="-1">Reverse ←</button>
+          </div>
+        </div>
+        ${this.makeDualInput('Conductivity κ', `${pfx}vCond`, 0, 1, 0.05, cond, '', 0.0)}
+      `;
+    }
+
+    if (elType === 'relief_valve') {
+      const trig = act.triggerPressure !== undefined ? act.triggerPressure : (item.triggerPressure || 250);
+      const hyst = act.pressureHysteresis !== undefined ? act.pressureHysteresis : (item.pressureHysteresis !== undefined ? item.pressureHysteresis : 25);
+      const mode = act.reliefMode || item.reliefMode || '1-way';
+      return `
+        <div class="field-row ${mode !== '1-way' && mode !== 'oneway' ? 'is-modified' : ''}" data-def="1-way">
+          <div class="field-label"><span>Relief Mode</span><span class="seq-def-indicator">(def: 1-Way)</span></div>
+          <div class="btn-toggle-group" id="${pfx}reliefMode">
+            <button type="button" class="sub-toggle-btn ${mode === '1-way' || mode === 'oneway' ? 'active' : ''}" data-val="1-way">1-Way</button>
+            <button type="button" class="sub-toggle-btn ${mode === '2-way' || mode === 'twoway' ? 'active' : ''}" data-val="2-way">2-Way</button>
+          </div>
+        </div>
+        ${this.makeDualInput('Trigger Pressure P_max', `${pfx}vTrig`, 50, 1000, 25, trig, 'Pa', 250)}
+        ${this.makeDualInput('Hysteresis Band ΔP', `${pfx}vHyst`, 0, 100, 5, hyst, 'Pa', 25)}
+        ${this.makeDualInput('Conductivity κ', `${pfx}vCond`, 0, 1, 0.05, cond, '', 0.0)}
+      `;
+    }
+
+    // throttle_valve
+    const state = act.state || (item.openRatio > 0 ? 'active' : 'bypassed');
+    const ratio = act.openRatio !== undefined ? Math.round(act.openRatio * 100) : Math.round((item.openRatio !== undefined ? item.openRatio : 0.3) * 100);
+    return `
+      <div class="field-row ${state !== 'active' ? 'is-modified' : ''}" data-def="active">
+        <div class="field-label"><span>Throttle State</span><span class="seq-def-indicator">(def: Active)</span></div>
+        <select id="${pfx}tvState" class="styled-select" style="width:100%;">
+          <option value="active" ${state === 'active' ? 'selected' : ''}>THROTTLE IS ACTIVE</option>
+          <option value="bypassed" ${state === 'bypassed' ? 'selected' : ''}>BYPASSED (100% Open)</option>
+        </select>
+      </div>
+      ${this.makeDualInput('Opening Ratio', `${pfx}tvOpen`, 0, 100, 5, ratio, '%', 30)}
+      ${this.makeDualInput('Conductivity κ', `${pfx}vCond`, 0, 1, 0.05, cond, '', 0.0)}
+    `;
+  }
+
+  static renderThermalHTML(item, act, elType, pfx = 'seqAct_') {
+    const isActive = act.isActive !== undefined ? act.isActive : (item.isActive !== false);
+    const defT = elType === 'reservoir' ? 500 : 300;
+    const defK = elType === 'reservoir' ? 0.8 : (elType === 'regenerator' ? 0.7 : 0.6);
+    const temp = act.temperature !== undefined ? act.temperature : (item.temperature || defT);
+    const cond = act.conductivity !== undefined ? act.conductivity : (item.conductivity !== undefined ? item.conductivity : (item.conductance || defK));
+    const cap = act.heatCapacity !== undefined ? act.heatCapacity : (item.heatCapacity || (elType === 'regenerator' ? 400 : 300));
+    const orient = act.orientation || item.orientation || 'horizontal';
+
+    let extraInputs = '';
+    if (elType === 'regenerator') {
+      extraInputs = `
+        <div class="field-row ${orient !== 'horizontal' ? 'is-modified' : ''}" data-def="horizontal">
+          <div class="field-label"><span>Orientation</span><span class="seq-def-indicator">(def: Horizontal)</span></div>
+          <div class="btn-toggle-group" id="${pfx}regenOrient">
+            <button type="button" class="sub-toggle-btn ${orient === 'horizontal' ? 'active' : ''}" data-val="horizontal">Horizontal</button>
+            <button type="button" class="sub-toggle-btn ${orient === 'vertical' ? 'active' : ''}" data-val="vertical">Vertical</button>
+          </div>
+        </div>
+        ${this.makeDualInput('Heat Capacity C', `${pfx}thCap`, 50, 1500, 50, cap, 'J/K', 400)}
+      `;
+    } else if (elType === 'thermal_block') {
+      extraInputs = this.makeDualInput('Heat Capacity C', `${pfx}thCap`, 50, 1500, 50, cap, 'J/K', 300);
+    }
+
+    return `
+      <div class="field-row ${!isActive ? 'is-modified' : ''}" data-def="true">
+        <div class="field-label"><span>Thermal State</span><span class="seq-def-indicator">(def: Active)</span></div>
+        <select id="${pfx}thState" class="styled-select" style="width:100%;">
+          <option value="true" ${isActive ? 'selected' : ''}>ACTIVE (Thermal Exchange)</option>
+          <option value="false" ${!isActive ? 'selected' : ''}>INSULATED / INACTIVE</option>
+        </select>
+      </div>
+      ${this.makeDualInput(elType === 'reservoir' ? 'Constant Temperature T' : 'Temperature T', `${pfx}thTemp`, 0, 1000, 25, temp, 'K', defT)}
+      ${this.makeDualInput(elType === 'reservoir' ? 'Thermal Coupling κ' : 'Conductivity κ', `${pfx}thCond`, 0.05, 1.0, 0.05, cond, '', defK)}
+      ${extraInputs}
+    `;
+  }
+
+  static renderParticleHTML(item, act, elType, pfx = 'seqAct_') {
+    if (elType === 'emitter') {
+      const isFiring = act.state === 'firing' || (act.state === undefined && item.isActive !== false);
+      const dir = act.direction || item.direction || 'right';
+      const rate = act.rate !== undefined ? act.rate : (item.rate || 8);
+      const temp = act.temperature !== undefined ? act.temperature : (item.temperature || 300);
+      const mass = act.mass !== undefined ? act.mass : (item.mass || 1.0);
+      const maxP = act.maxParticles !== undefined ? act.maxParticles : (item.maxParticles || 0);
+
+      return `
+        <div class="field-row ${!isFiring ? 'is-modified' : ''}" data-def="firing">
+          <div class="field-label"><span>Emitter State</span><span class="seq-def-indicator">(def: Firing)</span></div>
+          <select id="${pfx}emState" class="styled-select" style="width:100%;">
+            <option value="firing" ${isFiring ? 'selected' : ''}>EMITTER IS FIRING</option>
+            <option value="paused" ${!isFiring ? 'selected' : ''}>EMITTER IS PAUSED</option>
+          </select>
+        </div>
+        ${this.makeDirection5(`${pfx}emDir`, dir, 'right')}
+        ${this.makeDualInput('Rate', `${pfx}emRate`, 1, 50, 1, rate, '/s', 8)}
+        ${this.makeDualInput('Temperature T', `${pfx}emTemp`, 20, 800, 20, temp, 'K', 300)}
+        ${this.makeDualInput('Particle Mass m', `${pfx}emMass`, 0.2, 5.0, 0.2, mass, '', 1.0)}
+        ${this.makeDualInput('Capacity Limit (0 = ∞)', `${pfx}emMax`, 0, 500, 25, maxP, '', 0)}
+      `;
+    }
+
+    if (elType === 'sink') {
+      const isActive = act.isActive !== undefined ? act.isActive : (item.isActive !== false);
+      const dir = act.direction || item.direction || '360';
+      const filterMode = act.tempFilterMode || item.tempFilterMode || 'all';
+      const filterT = act.filterTemperature !== undefined ? act.filterTemperature : (item.filterTemperature || 300);
+      const eff = act.absorptionEfficiency !== undefined ? Math.round(act.absorptionEfficiency * 100) : Math.round((item.absorptionEfficiency !== undefined ? item.absorptionEfficiency : 1.0) * 100);
+      const maxP = act.maxParticles !== undefined ? act.maxParticles : (item.maxParticles || 0);
+
+      return `
+        <div class="field-row ${!isActive ? 'is-modified' : ''}" data-def="true">
+          <div class="field-label"><span>Absorber State</span><span class="seq-def-indicator">(def: Active)</span></div>
+          <select id="${pfx}snkState" class="styled-select" style="width:100%;">
+            <option value="true" ${isActive ? 'selected' : ''}>ABSORBER IS ACTIVE</option>
+            <option value="false" ${!isActive ? 'selected' : ''}>ABSORBER IS INACTIVE</option>
+          </select>
+        </div>
+        ${this.makeDirection5(`${pfx}snkDir`, dir, '360')}
+        <div class="field-row ${filterMode !== 'all' ? 'is-modified' : ''}" data-def="all">
+          <div class="field-label"><span>Thermal Filter</span><span class="seq-def-indicator">(def: All)</span></div>
+          <div class="btn-toggle-group" id="${pfx}snkFilterMode">
+            <button type="button" class="sub-toggle-btn ${filterMode === 'all' ? 'active' : ''}" data-val="all">All</button>
+            <button type="button" class="sub-toggle-btn ${filterMode === 'hot' ? 'active' : ''}" data-val="hot">Hot Only</button>
+            <button type="button" class="sub-toggle-btn ${filterMode === 'cold' ? 'active' : ''}" data-val="cold">Cold Only</button>
+          </div>
+        </div>
+        <div id="${pfx}snkFilterTRow" style="display:${filterMode !== 'all' ? 'block' : 'none'};">
+          ${this.makeDualInput('Threshold Temp T', `${pfx}snkFilterT`, 50, 800, 25, filterT, 'K', 300)}
+        </div>
+        ${this.makeDualInput('Absorption Efficiency', `${pfx}snkEff`, 10, 100, 5, eff, '%', 100)}
+        ${this.makeDualInput('Capacity Limit (0 = ∞)', `${pfx}snkMax`, 0, 500, 25, maxP, '', 0)}
+      `;
+    }
+
+    // regulator
+    const isActive = act.isActive !== undefined ? act.isActive : (item.isActive !== false);
+    const tgt = act.targetCount !== undefined ? act.targetCount : (item.targetCount || 50);
+    const hyst = act.hysteresis !== undefined ? act.hysteresis : (item.hysteresis || 3);
+    const temp = act.temperature !== undefined ? act.temperature : (item.temperature || 300);
+    const mass = act.mass !== undefined ? act.mass : (item.mass || 1.0);
+    const rate = act.rate !== undefined ? act.rate : (item.rate || 15);
+
+    return `
+      <div class="field-row ${!isActive ? 'is-modified' : ''}" data-def="true">
+        <div class="field-label"><span>Regulator State</span><span class="seq-def-indicator">(def: Active)</span></div>
+        <select id="${pfx}regState" class="styled-select" style="width:100%;">
+          <option value="true" ${isActive ? 'selected' : ''}>REGULATOR IS ACTIVE</option>
+          <option value="false" ${!isActive ? 'selected' : ''}>REGULATOR IS INACTIVE</option>
+        </select>
+      </div>
+      ${this.makeDualInput('Target Particle Count N', `${pfx}regTgt`, 5, 200, 5, tgt, '', 50)}
+      ${this.makeDualInput('Hysteresis Band ΔN', `${pfx}regHyst`, 1, 15, 1, hyst, '', 3)}
+      ${this.makeDualInput('Gas Temperature T', `${pfx}regTemp`, 20, 800, 20, temp, 'K', 300)}
+      ${this.makeDualInput('Particle Mass m', `${pfx}regMass`, 0.2, 5.0, 0.2, mass, '', 1.0)}
+      ${this.makeDualInput('Max Adjustment Rate', `${pfx}regRate`, 1, 50, 1, rate, '/s', 15)}
+    `;
+  }
+}
+
+
+// --- src/control/SequencerActionFields.js ---
+/**
+ * SequencerActionFields.js
+ * Generates and Extracts Property Inspector Form Controls for Element Action Snapshots.
+ * Delegates component rendering and controls to SequencerFieldControls.
+ * Conforms to TOOL_CATALOG.md specifications (excludes thickness, spawner, and chamber).
+ */
+
+
+class SequencerActionFields {
+  static getElementType(item) {
+    if (!item) return 'unknown';
+    // 1. Valves & Walls
+    if (item.type === 'manual_valve' || (item.isValve && !item.isCheckValve && !item.isReliefValve)) return 'manual_valve';
+    if (item.type === 'check_valve' || item.isCheckValve) return 'check_valve';
+    if (item.type === 'relief_valve' || item.isReliefValve) return 'relief_valve';
+    if (item.p1 && item.p2 && item.openRatio !== undefined) return 'throttle_valve';
+    if (item.openRatio !== undefined) return 'throttle_valve';
+    if (item.p1 && item.p2) return 'wall';
+
+    // 2. Piston
+    if (item.getTravelLimits || item.isPiston) return 'piston';
+
+    // 3. Particle Sources & Sinks (Must precede generic thermal checks)
+    if (item.rate !== undefined && (item.emittedCount !== undefined || item.direction !== undefined || item.enabled !== undefined)) return 'emitter';
+    if (item.absorptionEfficiency !== undefined || item.absorbedCount !== undefined || item.tempFilterMode !== undefined) return 'sink';
+    if (item.targetCount !== undefined || item.regulationState !== undefined) return 'regulator';
+
+    // 4. Thermals
+    if (item.temperatures && Array.isArray(item.temperatures)) return 'regenerator';
+    if (item.axis !== undefined && item.heatCapacity !== undefined) return 'regenerator';
+    if (item.permeable) return 'heat_exchanger';
+    if (item.heatCapacity !== undefined && item.temperature !== undefined) return 'thermal_block';
+    if (item.conductance !== undefined || (item.temperature !== undefined && item.contains)) return 'reservoir';
+
+    return 'unknown';
+  }
+
+  static renderFields(container, item, existingAction = {}, onChange = null, pfx = 'seqAct_') {
+    const elType = existingAction.type || this.getElementType(item);
+    let html = '';
+
+    if (elType === 'piston') {
+      html = SequencerFieldControls.renderPistonHTML(item, existingAction, pfx);
+    } else if (elType.includes('valve') || elType === 'throttle_valve') {
+      html = SequencerFieldControls.renderValveHTML(item, existingAction, elType, pfx);
+    } else if (['reservoir', 'heat_exchanger', 'regenerator', 'thermal_block'].includes(elType)) {
+      html = SequencerFieldControls.renderThermalHTML(item, existingAction, elType, pfx);
+    } else if (['emitter', 'sink', 'regulator'].includes(elType)) {
+      html = SequencerFieldControls.renderParticleHTML(item, existingAction, elType, pfx);
+    } else {
+      const cond = existingAction.conductivity !== undefined ? existingAction.conductivity : (item.conductivity || 0);
+      html = SequencerFieldControls.makeDualInput('Conductivity κ', `${pfx}wCond`, 0, 1, 0.05, cond);
+    }
+
+    container.innerHTML = html;
+    this._attachEventListeners(container, item, existingAction, elType, onChange, pfx);
+  }
+
+  static _attachEventListeners(container, item, act, elType, onChange = null, pfx = 'seqAct_') {
+    // 1. Synchronize all Dual Inputs in container & track default modifications
+    container.querySelectorAll('.field-row').forEach(row => {
+      const slider = row.querySelector('.styled-slider');
+      const num = row.querySelector('.dual-num-input');
+      const defValStr = row.dataset.def;
+      const hasDef = defValStr !== undefined && defValStr !== '';
+      const defVal = hasDef ? parseFloat(defValStr) : NaN;
+
+      const updateMod = (val) => {
+        if (!isNaN(defVal)) row.classList.toggle('is-modified', Math.abs(val - defVal) > 1e-4);
+      };
+
+      if (slider && num) {
+        slider.addEventListener('input', () => {
+          num.value = slider.value;
+          updateMod(parseFloat(slider.value));
+          if (onChange) onChange(this.extractSnapshot(container, item, act));
+        });
+        num.addEventListener('input', () => {
+          const v = parseFloat(num.value);
+          if (!isNaN(v)) {
+            slider.value = v;
+            updateMod(v);
+            if (onChange) onChange(this.extractSnapshot(container, item, act));
+          }
+        });
+      }
+    });
+
+    // 2. Track Select changes against default
+    container.querySelectorAll('select').forEach(sel => {
+      const row = sel.closest('.field-row');
+      sel.addEventListener('change', () => {
+        if (row && row.dataset.def !== undefined && row.dataset.def !== '') {
+          row.classList.toggle('is-modified', String(sel.value) !== String(row.dataset.def));
+        }
+        if (onChange) onChange(this.extractSnapshot(container, item, act));
+      });
+    });
+
+    // 3. Track Button Group changes against default & toggle active
+    container.querySelectorAll('.btn-toggle-group').forEach(grp => {
+      const row = grp.closest('.field-row');
+      grp.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          grp.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          const v = btn.dataset.val || btn.dataset.dir;
+          if (row && row.dataset.def !== undefined && row.dataset.def !== '') {
+            row.classList.toggle('is-modified', String(v) !== String(row.dataset.def));
+          }
+          if (onChange) onChange(this.extractSnapshot(container, item, act));
+        });
+      });
+    });
+
+    // 4. Element specific interactive handlers
+    if (elType === 'piston') {
+      const motionSelect = container.querySelector(`[id$="motionType"]`);
+      const dynamicSub = container.querySelector(`[id$="pDynamic"]`);
+      if (motionSelect && dynamicSub) {
+        motionSelect.addEventListener('change', () => {
+          const m = motionSelect.value;
+          let subHtml = '';
+          if (m === 'spring') {
+            subHtml = SequencerFieldControls.makeDualInput('Spring Constant k', `${pfx}pSpring`, 10, 500, 10, act.springK || item.springK || 50, 'N/m', 50);
+          } else if (m === 'motorized') {
+            subHtml = `
+              ${SequencerFieldControls.makeDualInput('Motor Frequency f', `${pfx}pFreq`, 0.1, 5.0, 0.1, act.frequency || item.frequency || 0.8, 'Hz', 0.8)}
+              ${SequencerFieldControls.makeDualInput('Phase Offset φ', `${pfx}pPhase`, -180, 180, 15, act.phase || item.phase || 0, '°', 0)}
+            `;
+          } else if (m === 'damper') {
+            subHtml = SequencerFieldControls.makeDualInput('Damping Load γ', `${pfx}pDamp`, 5, 150, 5, act.dampingCoeff || item.dampingCoeff || 25, 'Ns/m', 25);
+          }
+          dynamicSub.innerHTML = subHtml;
+          dynamicSub.querySelectorAll('.field-row').forEach(row => {
+            const s = row.querySelector('.styled-slider');
+            const n = row.querySelector('.dual-num-input');
+            const defValStr = row.dataset.def;
+            const defVal = defValStr ? parseFloat(defValStr) : NaN;
+            if (s && n) {
+              s.addEventListener('input', () => {
+                n.value = s.value;
+                if (!isNaN(defVal)) row.classList.toggle('is-modified', Math.abs(parseFloat(s.value) - defVal) > 1e-4);
+                if (onChange) onChange(this.extractSnapshot(container, item, act));
+              });
+              n.addEventListener('input', () => {
+                const v = parseFloat(n.value);
+                if (!isNaN(v)) {
+                  s.value = v;
+                  if (!isNaN(defVal)) row.classList.toggle('is-modified', Math.abs(v - defVal) > 1e-4);
+                  if (onChange) onChange(this.extractSnapshot(container, item, act));
+                }
+              });
+            }
+          });
+          if (onChange) onChange(this.extractSnapshot(container, item, act));
+        });
+      }
+    }
+
+    if (elType === 'sink') {
+      const filterGroup = container.querySelector(`[id$="snkFilterMode"]`);
+      const filterTRow = container.querySelector(`[id$="snkFilterTRow"]`);
+      if (filterGroup && filterTRow) {
+        filterGroup.querySelectorAll('button').forEach(btn => {
+          btn.addEventListener('click', () => {
+            filterTRow.style.display = btn.dataset.val !== 'all' ? 'block' : 'none';
+          });
+        });
+      }
+    }
+  }
+
+  static extractSnapshot(container, item, existingAction = {}) {
+    const elType = existingAction.type || this.getElementType(item);
+    const getVal = (suffix, def = 0) => {
+      const el = container.querySelector(`[id$="${suffix}_num"]`) || container.querySelector(`[id$="${suffix}_slider"]`);
+      return el ? parseFloat(el.value) : def;
+    };
+    const getActiveVal = (suffix, def = '') => {
+      const grp = container.querySelector(`[id$="${suffix}"]`);
+      const activeBtn = grp ? grp.querySelector('.sub-toggle-btn.active') : null;
+      return activeBtn ? (activeBtn.dataset.val || activeBtn.dataset.dir || def) : def;
+    };
+    const getSelectVal = (suffix, def = '') => {
+      const el = container.querySelector(`[id$="${suffix}"]`);
+      return el ? el.value : def;
+    };
+
+    const snapshot = {
+      id: existingAction.id || 'act_' + Math.random().toString(36).substring(2, 9),
+      targetId: item.id,
+      type: elType
+    };
+
+    if (elType === 'piston') {
+      const stroke = getSelectVal('strokeCommand', 'drive_tdc');
+      const motion = getSelectVal('motionType', 'free');
+      snapshot.strokeCommand = stroke;
+      snapshot.mode = stroke;
+      snapshot.motionType = motion;
+      snapshot.targetSpeed = getVal('pSpeed', 160);
+      snapshot.mass = getVal('pMass', 30);
+      snapshot.conductivity = getVal('pCond', 0.2);
+      if (motion === 'spring') snapshot.springK = getVal('pSpring', 50);
+      else if (motion === 'motorized') {
+        snapshot.motorFrequency = getVal('pFreq', 0.8);
+        snapshot.frequency = snapshot.motorFrequency;
+        snapshot.motorPhase = getVal('pPhase', 0);
+        snapshot.phase = snapshot.motorPhase;
+      } else if (motion === 'damper') {
+        snapshot.dampingGamma = getVal('pDamp', 25);
+        snapshot.dampingCoeff = snapshot.dampingGamma;
+      }
+    } else if (elType === 'manual_valve') {
+      const vs = getSelectVal('valveState', 'open');
+      snapshot.valveState = vs;
+      snapshot.isOpen = vs === 'open';
+      snapshot.conductivity = getVal('vCond', 0);
+    } else if (elType === 'check_valve') {
+      const d = parseInt(getActiveVal('checkDir', '1'), 10);
+      snapshot.direction = isNaN(d) ? 1 : d;
+      snapshot.flowDirection = snapshot.direction === 1 ? 'forward' : 'reverse';
+      snapshot.conductivity = getVal('vCond', 0);
+    } else if (elType === 'relief_valve') {
+      snapshot.reliefMode = getActiveVal('reliefMode', '1-way');
+      snapshot.triggerPressure = getVal('vTrig', 250);
+      snapshot.pressureHysteresis = getVal('vHyst', 25);
+      snapshot.hysteresis = snapshot.pressureHysteresis;
+      snapshot.conductivity = getVal('vCond', 0);
+    } else if (elType === 'throttle_valve') {
+      snapshot.state = getSelectVal('tvState', 'active');
+      snapshot.openRatio = getVal('tvOpen', 30) / 100.0;
+      snapshot.conductivity = getVal('vCond', 0);
+    } else if (['reservoir', 'heat_exchanger', 'regenerator', 'thermal_block'].includes(elType)) {
+      snapshot.isActive = getSelectVal('thState', 'true') === 'true';
+      snapshot.temperature = getVal('thTemp', 300);
+      snapshot.conductivity = getVal('thCond', 0.6);
+      snapshot.thermalCoupling = snapshot.conductivity;
+      if (elType === 'reservoir') snapshot.conductance = snapshot.conductivity;
+      if (elType === 'regenerator') {
+        snapshot.orientation = getActiveVal('regenOrient', 'horizontal');
+        snapshot.axis = snapshot.orientation;
+        snapshot.heatCapacity = getVal('thCap', 400);
+      } else if (elType === 'thermal_block') {
+        snapshot.heatCapacity = getVal('thCap', 300);
+      }
+    } else if (elType === 'emitter') {
+      snapshot.state = getSelectVal('emState', 'firing');
+      snapshot.isActive = snapshot.state === 'firing';
+      snapshot.direction = getActiveVal('emDir', 'right');
+      snapshot.flowDirection = snapshot.direction;
+      snapshot.rate = Math.round(getVal('emRate', 8));
+      snapshot.temperature = getVal('emTemp', 300);
+      snapshot.mass = getVal('emMass', 1.0);
+      snapshot.particleMass = snapshot.mass;
+      snapshot.maxParticles = Math.round(getVal('emMax', 0));
+      snapshot.capacityLimit = snapshot.maxParticles;
+    } else if (elType === 'sink') {
+      snapshot.isActive = getSelectVal('snkState', 'true') === 'true';
+      snapshot.direction = getActiveVal('snkDir', '360');
+      snapshot.tempFilterMode = getActiveVal('snkFilterMode', 'all');
+      snapshot.thermalFilter = snapshot.tempFilterMode;
+      snapshot.filterTemperature = getVal('snkFilterT', 300);
+      snapshot.cutoffTemp = snapshot.filterTemperature;
+      snapshot.absorptionEfficiency = getVal('snkEff', 100) / 100.0;
+      snapshot.efficiency = snapshot.absorptionEfficiency;
+      snapshot.maxParticles = Math.round(getVal('snkMax', 0));
+      snapshot.maxAbsorbed = snapshot.maxParticles;
+    } else if (elType === 'regulator') {
+      snapshot.isActive = getSelectVal('regState', 'true') === 'true';
+      snapshot.targetCount = Math.round(getVal('regTgt', 50));
+      snapshot.hysteresis = Math.round(getVal('regHyst', 3));
+      snapshot.temperature = getVal('regTemp', 300);
+      snapshot.mass = getVal('regMass', 1.0);
+      snapshot.rate = Math.round(getVal('regRate', 15));
+      snapshot.maxFlowRate = snapshot.rate;
+    } else {
+      snapshot.conductivity = getVal('wCond', 0);
+    }
+
+    return snapshot;
+  }
+}
+
+
+// --- src/control/SequencerActionDialog.js ---
+/**
+ * SequencerActionDialog.js
+ * Floating CAD-Styled Inspector Modal Anchored Next to Canvas Elements.
+ * Conforms to TOOL_CATALOG.md and Onshape CAD Tool Dialog visual specifications.
+ */
+
+
+class SequencerActionDialog {
+  constructor(engine, onActionSaved, renderer = null) {
     this.engine = engine;
-    this.sequencer = engine.sequencer;
+    this.renderer = renderer;
+    this.onActionSaved = onActionSaved;
+    this.isPicking = false;
+    this.targetStepIndex = null;
+    this.editingActionIndex = null;
+    this.selectedItem = null;
+
+    this.dialogEl = null;
+    this.toastEl = null;
+    this._initDOM();
+    this._initDraggable();
+  }
+
+  setRenderer(renderer) {
+    this.renderer = renderer;
+  }
+
+  _initDOM() {
+    // 1. Toast Notification for Picking Mode
+    let toast = document.getElementById('seqPickToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'seqPickToast';
+      toast.className = 'seq-pick-toast';
+      toast.style.display = 'none';
+      toast.innerHTML = `
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>Click an element on canvas or in the Elements Outline (ESC to cancel)</span>
+      `;
+      document.body.appendChild(toast);
+    }
+    this.toastEl = toast;
+
+    // 2. Floating CAD Action Dialog (Anchored next to element)
+    let dialog = document.getElementById('seqActionDialog');
+    if (!dialog) {
+      dialog = document.createElement('div');
+      dialog.id = 'seqActionDialog';
+      dialog.className = 'tool-dialog-panel seq-floating-action-dialog';
+      dialog.style.display = 'none';
+      dialog.innerHTML = `
+        <div class="tool-dialog-header" id="seqActHeader" title="Drag to move panel">
+          <button class="tool-dialog-btn btn-dialog-reset" id="seqActBtnReset" title="Reset to Catalog Defaults">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8m0 0V3m0 5h5"/></svg>
+          </button>
+          <div class="tool-dialog-title-group">
+            <span class="tool-dialog-badge" id="seqActBadge">ACTION</span>
+            <span class="tool-dialog-title" id="seqActTitle">Configure Element</span>
+          </div>
+          <div class="tool-dialog-actions">
+            <button class="tool-dialog-btn btn-dialog-close" id="seqActBtnClose" title="Close (Esc)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="tool-dialog-body" id="seqActFormContainer" style="max-height:360px; overflow-y:auto; padding:12px 14px;"></div>
+        <div class="modal-actions-row" style="padding:8px 12px; border-top:1px solid var(--border-subtle); display:flex; gap:8px; justify-content:flex-end; align-items:center;">
+          <button id="seqActBtnCancel" class="btn-pill btn-secondary-action" style="padding:4px 10px; font-size:11px;">Cancel</button>
+          <button id="seqActBtnSave" class="btn-pill btn-primary-action" style="padding:4px 10px; font-size:11px;">Save Action</button>
+        </div>
+      `;
+      document.body.appendChild(dialog);
+    }
+    this.dialogEl = dialog;
+
+    // Bind buttons
+    document.getElementById('seqActBtnClose')?.addEventListener('click', () => this.close());
+    document.getElementById('seqActBtnReset')?.addEventListener('click', () => this.resetToDefaults());
+    document.getElementById('seqActBtnCancel')?.addEventListener('click', () => this.close());
+    document.getElementById('seqActBtnSave')?.addEventListener('click', () => this._saveAction());
+
+    // ESC handling
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        if (this.isPicking) this.stopPicking();
+        else if (this.dialogEl && this.dialogEl.style.display !== 'none') this.close();
+      }
+    });
+  }
+
+  _initDraggable() {
+    const header = document.getElementById('seqActHeader');
+    if (!header || !this.dialogEl) return;
+
+    let isDragging = false;
+    let startX = 0, startY = 0, initLeft = 0, initTop = 0;
+
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.tool-dialog-actions') || e.target.closest('.btn-dialog-reset')) return;
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = this.dialogEl.getBoundingClientRect();
+      initLeft = rect.left;
+      initTop = rect.top;
+      header.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      this.dialogEl.style.left = `${initLeft + dx}px`;
+      this.dialogEl.style.top = `${initTop + dy}px`;
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        header.style.cursor = 'move';
+      }
+    });
+  }
+
+  startPicking(stepIndex) {
+    this.targetStepIndex = stepIndex;
+    this.editingActionIndex = null;
+    this.selectedItem = null;
+    this.isPicking = true;
+
+    this._setGlowHighlight(null);
+    if (this.toastEl) this.toastEl.style.display = 'flex';
+    document.body.classList.add('seq-picking-active');
+  }
+
+  stopPicking() {
+    this.isPicking = false;
+    this._setGlowHighlight(null);
+    if (this.toastEl) this.toastEl.style.display = 'none';
+    document.body.classList.remove('seq-picking-active');
+  }
+
+  isPickable(item) {
+    if (!item) return false;
+    if (item.isParticleGroup || item.label?.includes('Spawner') || item.permeable === 'sensor') return false;
+    if (item.contains && item.label && item.pressure !== undefined) return false;
+    return true;
+  }
+
+  handleItemPicked(item) {
+    if (!this.isPicking || !this.isPickable(item)) return false;
+    this.stopPicking();
+    this.openForElement(item, this.targetStepIndex);
+    return true;
+  }
+
+  openForElement(item, stepIndex, existingAction = null, actionIndex = null) {
+    if (!item) return;
+    this.selectedItem = item;
+    this.targetStepIndex = stepIndex;
+    this.editingActionIndex = actionIndex;
+
+    // 1. Trigger subtle glowing cyan outline on the canvas item
+    this._setGlowHighlight(item);
+
+    // 2. Camera focus if element is out of view
+    this._centerCameraIfNeeded(item);
+
+    // 3. Populate Title and Form Controls
+    const titleEl = document.getElementById('seqActTitle');
+    const badgeEl = document.getElementById('seqActBadge');
+    const formContainer = document.getElementById('seqActFormContainer');
+
+    const type = SequencerActionFields.getElementType(item);
+    if (badgeEl) badgeEl.textContent = type.toUpperCase().replace('_', ' ');
+    if (titleEl) titleEl.textContent = `Configure Action: ${item.label || item.name || type}`;
+
+    SequencerActionFields.renderFields(formContainer, item, existingAction || {});
+
+    // 4. Position dialog beside element and clamp to viewport
+    if (this.dialogEl) {
+      this.dialogEl.style.display = 'flex';
+      this._positionNearElement(item);
+    }
+  }
+
+  _setGlowHighlight(item) {
+    const rend = this.renderer || this.engine?.renderer;
+    if (rend) {
+      rend.highlightedSequencerItem = item;
+    }
+  }
+
+  _getElementBounds(item) {
+    if (!item) return { left: 0, right: 0, top: 0, bottom: 0, cx: 0, cy: 0 };
+    if (typeof item.getBounds === 'function') {
+      const b = item.getBounds();
+      return {
+        left: b.left,
+        right: b.right,
+        top: b.top,
+        bottom: b.bottom,
+        cx: (b.left + b.right) / 2,
+        cy: (b.top + b.bottom) / 2
+      };
+    }
+    if (item.p1 && item.p2) {
+      const left = Math.min(item.p1.x, item.p2.x);
+      const right = Math.max(item.p1.x, item.p2.x);
+      const top = Math.min(item.p1.y, item.p2.y);
+      const bottom = Math.max(item.p1.y, item.p2.y);
+      return { left, right, top, bottom, cx: (left + right) / 2, cy: (top + bottom) / 2 };
+    }
+    if (item.x !== undefined && item.y !== undefined) {
+      const w = item.width || 40, h = item.height || 40;
+      return { left: item.x, right: item.x + w, top: item.y, bottom: item.y + h, cx: item.x + w / 2, cy: item.y + h / 2 };
+    }
+    return { left: 0, right: 0, top: 0, bottom: 0, cx: 0, cy: 0 };
+  }
+
+  _centerCameraIfNeeded(item) {
+    const rend = this.renderer || this.engine?.renderer;
+    if (!rend) return;
+
+    const b = this._getElementBounds(item);
+    const screenCenter = rend.worldToScreen(b.cx, b.cy);
+
+    const leftBarW = document.getElementById('leftSidebar')?.offsetWidth || 340;
+    const rightBar = document.getElementById('sidebarRight');
+    const rightBarW = (rightBar && rightBar.style.display !== 'none' && !rightBar.classList.contains('collapsed')) ? rightBar.offsetWidth : 0;
+    const ribbonH = document.querySelector('.ribbon-container')?.offsetHeight || 115;
+    const dockH = document.getElementById('unifiedBottomDock')?.offsetHeight || 420;
+
+    const minX = leftBarW + 60;
+    const maxX = window.innerWidth - rightBarW - 60;
+    const minY = ribbonH + 50;
+    const maxY = window.innerHeight - dockH - 50;
+
+    if (screenCenter.x < minX || screenCenter.x > maxX || screenCenter.y < minY || screenCenter.y > maxY) {
+      const targetScreenX = (minX + maxX) / 2;
+      const targetScreenY = (minY + maxY) / 2;
+      rend.panX = targetScreenX - b.cx * rend.zoom;
+      rend.panY = targetScreenY - b.cy * rend.zoom;
+    }
+  }
+
+  _positionNearElement(item) {
+    if (!this.dialogEl) return;
+    const rend = this.renderer || this.engine?.renderer;
+    if (!rend) return;
+
+    const b = this._getElementBounds(item);
+    const screenBoxRight = rend.worldToScreen(b.right, b.top);
+    const screenBoxLeft = rend.worldToScreen(b.left, b.top);
+
+    const dialogW = this.dialogEl.offsetWidth || 300;
+    const dialogH = this.dialogEl.offsetHeight || 360;
+
+    const leftBarW = document.getElementById('leftSidebar')?.offsetWidth || 340;
+    const rightBar = document.getElementById('sidebarRight');
+    const rightBarW = (rightBar && rightBar.style.display !== 'none' && !rightBar.classList.contains('collapsed')) ? rightBar.offsetWidth : 0;
+    const ribbonH = document.querySelector('.ribbon-container')?.offsetHeight || 115;
+    const dockH = document.getElementById('unifiedBottomDock')?.offsetHeight || 420;
+
+    let targetX = screenBoxRight.x + 16;
+    let targetY = screenBoxRight.y - 10;
+
+    // If overflowing right, flip to left of element
+    if (targetX + dialogW > window.innerWidth - rightBarW - 10) {
+      targetX = screenBoxLeft.x - dialogW - 16;
+    }
+
+    // Viewport clamping
+    const clampedX = Math.max(leftBarW + 10, Math.min(window.innerWidth - rightBarW - dialogW - 10, targetX));
+    const clampedY = Math.max(ribbonH + 10, Math.min(window.innerHeight - dockH - dialogH - 10, targetY));
+
+    this.dialogEl.style.left = `${Math.round(clampedX)}px`;
+    this.dialogEl.style.top = `${Math.round(clampedY)}px`;
+  }
+
+  _saveAction() {
+    if (!this.selectedItem) return;
+    const formContainer = document.getElementById('seqActFormContainer');
+    const existing = (this.editingActionIndex !== null && this.engine.sequencer?.steps[this.targetStepIndex]?.actions[this.editingActionIndex]) || {};
+
+    const snapshot = SequencerActionFields.extractSnapshot(formContainer, this.selectedItem, existing);
+
+    if (this.editingActionIndex !== null) {
+      const step = this.engine.sequencer.steps[this.targetStepIndex];
+      if (step && step.actions[this.editingActionIndex]) {
+        step.actions[this.editingActionIndex] = snapshot;
+      }
+    } else {
+      this.engine.sequencer.addAction(this.targetStepIndex, snapshot);
+    }
+
+    this.close();
+    if (typeof this.onActionSaved === 'function') {
+      this.onActionSaved(this.targetStepIndex);
+    }
+  }
+
+  resetToDefaults() {
+    if (!this.selectedItem) return;
+    const formContainer = document.getElementById('seqActFormContainer');
+    if (!formContainer) return;
+    const type = SequencerActionFields.getElementType(this.selectedItem);
+    const defaults = SequencerCatalogDefaults.getDefaultsForType(type);
+    defaults.type = type;
+    SequencerActionFields.renderFields(formContainer, this.selectedItem, defaults);
+  }
+
+  close() {
+    this._setGlowHighlight(null);
+    if (this.dialogEl) this.dialogEl.style.display = 'none';
+    this.selectedItem = null;
+    this.editingActionIndex = null;
+  }
+}
+
+
+// --- src/control/SequencerTransitionBuilder.js ---
+/**
+ * SequencerTransitionBuilder.js
+ * Interactive 2D Visual Builder for Compound Transition Conditions.
+ * Renders bracketed rows, compact square monochrome SVG chips, and horizontal/vertical AND/OR operator pills.
+ */
+
+
+class SequencerTransitionBuilder {
+  constructor(callbacks = {}) {
+    this.callbacks = callbacks; // { onChange: (data) => void }
+    this.data = SequencerConditions.normalizeTransition(null);
+    this.expandedKey = '0_0';
+    this.engine = null;
+    this.containerEl = null;
+  }
+
+  setData(transitionData, engine = null) {
+    this.data = SequencerConditions.normalizeTransition(transitionData);
+    this.expandedKey = '0_0';
+    if (engine) this.engine = engine;
+  }
+
+  getData() {
+    return JSON.parse(JSON.stringify(this.data));
+  }
+
+  _btn(cls, html, title, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.innerHTML = html;
+    b.title = title;
+    b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+    return b;
+  }
+
+  render(containerEl, engine = null) {
+    if (containerEl) this.containerEl = containerEl;
+    if (engine) this.engine = engine;
+    if (!this.containerEl) return;
+
+    this.containerEl.innerHTML = '';
+    const gridEl = document.createElement('div');
+    gridEl.className = 'seq-trans-grid';
+
+    const rows = this.data.rows;
+
+    rows.forEach((row, rIdx) => {
+      const rowCard = document.createElement('div');
+      rowCard.className = 'seq-trans-row-card';
+
+      const leftBracket = document.createElement('span');
+      leftBracket.className = 'seq-trans-bracket';
+      leftBracket.textContent = '(';
+      rowCard.appendChild(leftBracket);
+
+      const chipsTrack = document.createElement('div');
+      chipsTrack.className = 'seq-trans-chips-track';
+
+      row.conditions.forEach((cond, cIdx) => {
+        const key = `${rIdx}_${cIdx}`;
+        chipsTrack.appendChild(this.expandedKey === key
+          ? this._renderExpandedChip(cond, rIdx, cIdx)
+          : this._renderCollapsedChip(cond, rIdx, cIdx));
+
+        if (cIdx < row.conditions.length - 1) {
+          const op = (row.operators[cIdx] || 'AND').toUpperCase();
+          const isOr = op === 'OR' || op === '||';
+          const pill = this._btn(`seq-trans-op-pill ${isOr ? 'is-or' : 'is-and'}`, isOr ? '||' : '&',
+            `Toggle operator: currently ${isOr ? 'OR' : 'AND'}`, () => {
+              row.operators[cIdx] = isOr ? 'AND' : 'OR';
+              this._notifyChange();
+              this.render();
+            });
+          chipsTrack.appendChild(pill);
+        }
+      });
+      rowCard.appendChild(chipsTrack);
+
+      const rightBracket = document.createElement('span');
+      rightBracket.className = 'seq-trans-bracket';
+      rightBracket.textContent = ')';
+      rowCard.appendChild(rightBracket);
+
+      const rowActions = document.createElement('div');
+      rowActions.className = 'seq-trans-row-actions';
+      rowActions.appendChild(this._btn('seq-trans-btn-mini btn-add-and', '+ &', 'Add condition to row with AND', () => {
+        row.conditions.push({ type: 'duration', duration: 1.5 });
+        row.operators.push('AND');
+        this.expandedKey = `${rIdx}_${row.conditions.length - 1}`;
+        this._notifyChange();
+        this.render();
+      }));
+      rowActions.appendChild(this._btn('seq-trans-btn-mini btn-add-or', '+ ||', 'Add condition to row with OR', () => {
+        row.conditions.push({ type: 'duration', duration: 1.5 });
+        row.operators.push('OR');
+        this.expandedKey = `${rIdx}_${row.conditions.length - 1}`;
+        this._notifyChange();
+        this.render();
+      }));
+
+      if (rows.length > 1) {
+        rowActions.appendChild(this._btn('seq-trans-btn-mini btn-del-row', '&times;', 'Delete row', () => {
+          rows.splice(rIdx, 1);
+          if (rIdx < this.data.rowOperators.length) this.data.rowOperators.splice(rIdx, 1);
+          else if (this.data.rowOperators.length > 0) this.data.rowOperators.pop();
+          this.expandedKey = '0_0';
+          this._notifyChange();
+          this.render();
+        }));
+      }
+
+      rowCard.appendChild(rowActions);
+      gridEl.appendChild(rowCard);
+
+      if (rIdx < rows.length - 1) {
+        const rowOp = (this.data.rowOperators[rIdx] || 'OR').toUpperCase();
+        const isOr = rowOp === 'OR' || rowOp === '||';
+        const vDivider = document.createElement('div');
+        vDivider.className = 'seq-trans-v-divider';
+        vDivider.appendChild(document.createElement('div')).className = 'seq-trans-v-line';
+        vDivider.appendChild(this._btn(`seq-trans-op-pill v-pill ${isOr ? 'is-or' : 'is-and'}`, isOr ? '||' : '&',
+          `Toggle row operator: currently ${isOr ? 'OR' : 'AND'}`, () => {
+            this.data.rowOperators[rIdx] = isOr ? 'AND' : 'OR';
+            this._notifyChange();
+            this.render();
+          }));
+        vDivider.appendChild(document.createElement('div')).className = 'seq-trans-v-line';
+        gridEl.appendChild(vDivider);
+      }
+    });
+
+    const addRowBar = document.createElement('div');
+    addRowBar.className = 'seq-trans-add-row-bar';
+    addRowBar.appendChild(this._btn('seq-trans-btn-add-row',
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span>& Zeile</span>',
+      'Add row with AND', () => {
+        this.data.rowOperators.push('AND');
+        this.data.rows.push({ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] });
+        this.expandedKey = `${this.data.rows.length - 1}_0`;
+        this._notifyChange();
+        this.render();
+      }));
+    addRowBar.appendChild(this._btn('seq-trans-btn-add-row',
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span>|| Zeile</span>',
+      'Add row with OR', () => {
+        this.data.rowOperators.push('OR');
+        this.data.rows.push({ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] });
+        this.expandedKey = `${this.data.rows.length - 1}_0`;
+        this._notifyChange();
+        this.render();
+      }));
+
+    gridEl.appendChild(addRowBar);
+    this.containerEl.appendChild(gridEl);
+  }
+
+  _renderCollapsedChip(cond, rIdx, cIdx) {
+    const chip = document.createElement('div');
+    chip.className = 'seq-trans-chip is-collapsed';
+    chip.title = `Click to edit: ${this._getTooltip(cond)}`;
+
+    let svg = '', badge = '';
+    const type = cond.type || 'duration';
+
+    if (type === 'duration') {
+      svg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+      badge = `${(cond.duration !== undefined ? cond.duration : 1.5).toFixed(1)}s`;
+    } else if (type === 'piston' || type === 'piston_target') {
+      svg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>';
+      badge = (cond.pistonTarget || 'tdc').toUpperCase();
+    } else if (type === 'sensor') {
+      svg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 12l3-3"/><path d="M7 12a5 5 0 0 1 10 0"/></svg>';
+      const metric = cond.sensorMetric === 'temperature' ? 'T' : 'P';
+      const unit = cond.sensorMetric === 'temperature' ? 'K' : 'Pa';
+      badge = `${metric}${cond.sensorOperator || '>='}${cond.sensorThreshold || 200}${unit}`;
+    }
+
+    chip.innerHTML = `<div class="seq-trans-chip-icon">${svg}</div><div class="seq-trans-chip-badge">${badge}</div>`;
+    chip.addEventListener('click', () => { this.expandedKey = `${rIdx}_${cIdx}`; this.render(); });
+    return chip;
+  }
+
+  _renderExpandedChip(cond, rIdx, cIdx) {
+    const chip = document.createElement('div');
+    chip.className = 'seq-trans-chip is-expanded';
+    const type = cond.type || 'duration';
+    const totalConds = this.data.rows.reduce((sum, r) => sum + r.conditions.length, 0);
+
+    chip.innerHTML = `
+      <div class="seq-trans-chip-header">
+        <select class="styled-select seq-chip-type-select">
+          <option value="duration" ${type === 'duration' ? 'selected' : ''}>Time Duration</option>
+          <option value="piston" ${type === 'piston' || type === 'piston_target' ? 'selected' : ''}>Piston Target</option>
+          <option value="sensor" ${type === 'sensor' ? 'selected' : ''}>Sensor Chamber</option>
+        </select>
+        <button type="button" class="btn-icon-sm btn-del-chip" title="Remove Condition" ${totalConds <= 1 ? 'disabled' : ''}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="seq-trans-chip-body"></div>
+    `;
+
+    const typeSelect = chip.querySelector('.seq-chip-type-select');
+    const bodyEl = chip.querySelector('.seq-trans-chip-body');
+
+    const updateBody = (curType, curData) => {
+      bodyEl.innerHTML = '';
+      if (curType === 'duration') {
+        const dur = curData.duration !== undefined ? curData.duration : 1.5;
+        bodyEl.innerHTML = `
+          <div class="field-row" style="margin-bottom:0;">
+            <div class="field-label"><span style="font-size:10px;">Elapsed >=</span><span class="field-num lbl-dur" style="font-size:10px;">${dur.toFixed(1)} s</span></div>
+            <input type="range" class="styled-slider input-dur" min="0.1" max="10.0" step="0.1" value="${dur}">
+          </div>
+        `;
+        const slider = bodyEl.querySelector('.input-dur');
+        const lbl = bodyEl.querySelector('.lbl-dur');
+        slider?.addEventListener('input', () => {
+          curData.duration = parseFloat(slider.value);
+          if (lbl) lbl.textContent = `${curData.duration.toFixed(1)} s`;
+          this._notifyChange();
+        });
+      } else if (curType === 'piston') {
+        if (!curData.pistonTarget) curData.pistonTarget = 'tdc';
+        const pistons = this.engine?.pistons || [];
+        let pOptions = `<option value="">All Pistons</option>`;
+        pistons.forEach((p, idx) => { pOptions += `<option value="${p.id}" ${curData.pistonId === p.id ? 'selected' : ''}>Piston ${idx + 1}</option>`; });
+        const tgt = curData.pistonTarget;
+        bodyEl.innerHTML = `
+          <select class="styled-select input-piston-id" style="width:100%; margin-bottom:2px;">${pOptions}</select>
+          <select class="styled-select input-piston-tgt" style="width:100%;">
+            <option value="tdc" ${tgt === 'tdc' ? 'selected' : ''}>Top Dead Center (TDC)</option>
+            <option value="bdc" ${tgt === 'bdc' ? 'selected' : ''}>Bottom Dead Center (BDC)</option>
+          </select>
+        `;
+        bodyEl.querySelector('.input-piston-id')?.addEventListener('change', (e) => { curData.pistonId = e.target.value || null; this._notifyChange(); });
+        bodyEl.querySelector('.input-piston-tgt')?.addEventListener('change', (e) => { curData.pistonTarget = e.target.value; this._notifyChange(); });
+      } else if (curType === 'sensor') {
+        if (!curData.sensorMetric) curData.sensorMetric = 'pressure';
+        if (!curData.sensorOperator) curData.sensorOperator = '>=';
+        if (curData.sensorThreshold === undefined) curData.sensorThreshold = 200;
+        const sensors = this.engine?.sensors || [];
+        let sOptions = sensors.length === 0 ? `<option value="">(No Chambers)</option>` : '';
+        sensors.forEach(s => { sOptions += `<option value="${s.id}" ${curData.sensorId === s.id ? 'selected' : ''}>${s.label || 'Chamber'}</option>`; });
+        const metric = curData.sensorMetric;
+        const op = curData.sensorOperator;
+        const thresh = curData.sensorThreshold;
+        bodyEl.innerHTML = `
+          <select class="styled-select input-sensor-id" style="width:100%; margin-bottom:2px;">${sOptions}</select>
+          <div style="display:flex; gap:4px; align-items:center; width:100%;">
+            <select class="styled-select input-sensor-metric" style="flex:1; min-width:0;">
+              <option value="pressure" ${metric === 'pressure' ? 'selected' : ''}>P (Pa)</option>
+              <option value="temperature" ${metric === 'temperature' ? 'selected' : ''}>T (K)</option>
+            </select>
+            <select class="styled-select input-sensor-op" style="width:46px; min-width:46px; text-align:center;">
+              <option value=">=" ${op === '>=' ? 'selected' : ''}>&gt;=</option>
+              <option value="<=" ${op === '<=' ? 'selected' : ''}>&lt;=</option>
+            </select>
+            <input type="number" class="styled-select input-sensor-thresh" value="${thresh}" style="width:56px; min-width:56px;">
+          </div>
+        `;
+        bodyEl.querySelector('.input-sensor-id')?.addEventListener('change', (e) => { curData.sensorId = e.target.value || null; this._notifyChange(); });
+        bodyEl.querySelector('.input-sensor-metric')?.addEventListener('change', (e) => { curData.sensorMetric = e.target.value; this._notifyChange(); });
+        bodyEl.querySelector('.input-sensor-op')?.addEventListener('change', (e) => { curData.sensorOperator = e.target.value; this._notifyChange(); });
+        bodyEl.querySelector('.input-sensor-thresh')?.addEventListener('input', (e) => { curData.sensorThreshold = parseFloat(e.target.value) || 0; this._notifyChange(); });
+      }
+    };
+
+    updateBody(type, cond);
+    typeSelect.addEventListener('change', () => { cond.type = typeSelect.value; updateBody(cond.type, cond); this._notifyChange(); });
+
+    chip.querySelector('.btn-del-chip')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const row = this.data.rows[rIdx];
+      row.conditions.splice(cIdx, 1);
+      if (cIdx < row.operators.length) row.operators.splice(cIdx, 1);
+      else if (row.operators.length > 0) row.operators.pop();
+      if (row.conditions.length === 0) {
+        this.data.rows.splice(rIdx, 1);
+        if (rIdx < this.data.rowOperators.length) this.data.rowOperators.splice(rIdx, 1);
+        else if (this.data.rowOperators.length > 0) this.data.rowOperators.pop();
+      }
+      if (this.data.rows.length === 0) {
+        this.data.rows.push({ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] });
+      }
+      this.expandedKey = '0_0';
+      this._notifyChange();
+      this.render();
+    });
+
+    return chip;
+  }
+
+  _getTooltip(cond) {
+    const type = cond.type || 'duration';
+    if (type === 'duration') return `Time >= ${(cond.duration || 1.5).toFixed(1)}s`;
+    if (type === 'piston' || type === 'piston_target') return `Piston reaches ${(cond.pistonTarget || 'tdc').toUpperCase()}`;
+    if (type === 'sensor') {
+      const metric = cond.sensorMetric === 'temperature' ? 'T' : 'P';
+      const unit = cond.sensorMetric === 'temperature' ? 'K' : 'Pa';
+      return `Sensor ${metric} ${cond.sensorOperator || '>='} ${cond.sensorThreshold || 200}${unit}`;
+    }
+    return 'Condition';
+  }
+
+  _notifyChange() {
+    if (typeof this.callbacks.onChange === 'function') {
+      this.callbacks.onChange(this.getData());
+    }
+  }
+}
+
+
+
+// --- src/control/SequencerTransitionDialog.js ---
+/**
+ * SequencerTransitionDialog.js
+ * Modal Configuration Dialog for Arbitrary 2D Compound Transition Conditions.
+ * Integrates SequencerTransitionBuilder for bracketed row blocks and Boolean precedence.
+ */
+
+
+class SequencerTransitionDialog {
+  constructor(engine, onTransitionSaved) {
+    this.engine = engine;
+    this.onTransitionSaved = onTransitionSaved;
+    this.targetStepIndex = null;
+    this.modalEl = null;
+    this.builder = new SequencerTransitionBuilder();
+
+    this._initDOM();
+  }
+
+  _initDOM() {
+    let modal = document.getElementById('seqTransitionModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'seqTransitionModal';
+      modal.className = 'modal-overlay';
+      modal.style.display = 'none';
+      modal.innerHTML = `
+        <div class="modal-card" style="width: 580px; max-width: 95vw;">
+          <div class="modal-header">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="tool-dialog-badge" style="background:rgba(56,189,248,0.18); color:#38bdf8;">GATE</span>
+              <h3 id="seqTransTitle" style="font-size:13px;">Configure Transition Conditions</h3>
+            </div>
+            <button id="seqTransBtnClose" class="modal-close-btn">&times;</button>
+          </div>
+          <div class="modal-body" style="padding:16px; gap:12px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:2px;">
+              <span style="font-size:10px; font-weight:700; letter-spacing:0.5px; color:var(--text-muted); text-transform:uppercase;">
+                Compound Conditions (Brackets &amp; Logic)
+              </span>
+              <span style="font-size:10px; color:var(--text-dim); font-style:italic;">
+                Row: ( &amp; / || ) • Vertical: &amp; / ||
+              </span>
+            </div>
+
+            <!-- 2D Grid Container -->
+            <div id="seqTransGridContainer" class="seq-trans-grid-container" style="max-height:340px; overflow-y:auto; padding-right:4px;"></div>
+
+            <!-- Fallback Safety Timeout -->
+            <div class="field-row" style="margin-top:6px; padding-top:10px; border-top:1px solid var(--border-subtle);">
+              <div class="field-label"><span>Fallback Safety Timeout</span><span class="field-num" id="lbl_seqTrans_timeout">10.0 s</span></div>
+              <input type="range" id="seqTrans_timeout" min="1" max="60" step="0.5" value="10" class="styled-slider">
+            </div>
+
+            <div class="modal-actions-row" style="margin-top:8px;">
+              <button id="seqTransBtnCancel" class="btn-pill btn-secondary-action">Cancel</button>
+              <button id="seqTransBtnSave" class="btn-pill btn-primary-action">Apply Transition</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+    this.modalEl = modal;
+
+    // Timeout slider readout
+    const timeoutSlider = modal.querySelector('#seqTrans_timeout');
+    const timeoutLbl = modal.querySelector('#lbl_seqTrans_timeout');
+    timeoutSlider?.addEventListener('input', () => {
+      if (timeoutLbl) timeoutLbl.textContent = `${parseFloat(timeoutSlider.value).toFixed(1)} s`;
+    });
+
+    // Modal action buttons
+    modal.querySelector('#seqTransBtnClose')?.addEventListener('click', () => this.close());
+    modal.querySelector('#seqTransBtnCancel')?.addEventListener('click', () => this.close());
+    modal.querySelector('#seqTransBtnSave')?.addEventListener('click', () => this._saveTransition());
+  }
+
+  open(stepIndex) {
+    this.targetStepIndex = stepIndex;
+    const step = this.engine.sequencer?.steps[stepIndex];
+    if (!step) return;
+
+    const title = document.getElementById('seqTransTitle');
+    if (title) {
+      const nextStepNum = stepIndex + 2 <= this.engine.sequencer.steps.length ? stepIndex + 2 : (this.engine.sequencer.isLooping ? '1' : 'End');
+      title.textContent = `Transition Gate: ${step.name} ➔ Step ${nextStepNum}`;
+    }
+
+    const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
+    this.builder.setData(transition, this.engine);
+
+    // Set fallback timeout
+    const timeoutSlider = this.modalEl.querySelector('#seqTrans_timeout');
+    const timeoutLbl = this.modalEl.querySelector('#lbl_seqTrans_timeout');
+    const timeoutVal = this.builder.data.fallbackTimeout !== undefined ? this.builder.data.fallbackTimeout : 10.0;
+    if (timeoutSlider) timeoutSlider.value = timeoutVal;
+    if (timeoutLbl) timeoutLbl.textContent = `${timeoutVal.toFixed(1)} s`;
+
+    // Render 2D Grid
+    const gridContainer = this.modalEl.querySelector('#seqTransGridContainer');
+    if (gridContainer) {
+      this.builder.render(gridContainer, this.engine);
+    }
+
+    if (this.modalEl) this.modalEl.style.display = 'flex';
+  }
+
+  _saveTransition() {
+    const step = this.engine.sequencer?.steps[this.targetStepIndex];
+    if (!step) return;
+
+    const transitionData = this.builder.getData();
+    const timeout = parseFloat(this.modalEl.querySelector('#seqTrans_timeout')?.value || '10');
+    transitionData.fallbackTimeout = timeout;
+
+    step.transition = transitionData;
+    step.trigger = transitionData;
+
+    this.close();
+    if (typeof this.onTransitionSaved === 'function') {
+      this.onTransitionSaved(this.targetStepIndex);
+    }
+  }
+
+  close() {
+    if (this.modalEl) this.modalEl.style.display = 'none';
+  }
+}
+
+
+
+// --- src/control/SequencerSummary.js ---
+
+class SequencerSummary {
+  static getActionSummary(act) {
+    if (!act) return 'No action';
+    const type = act.type || '';
+    if (type === 'piston') {
+      const mode = act.strokeCommand || act.mode || 'drive_tdc';
+      if (mode === 'drive_tdc') return 'Drive to TDC';
+      if (mode === 'drive_bdc') return 'Drive to BDC';
+      if (mode === 'hold') return 'Hold Position';
+      if (mode === 'free') return 'Free Float';
+      return `Target ${act.targetPos || 0}px`;
+    }
+    if (type === 'throttle_valve') {
+      return act.state === 'bypassed' ? 'Bypassed (100%)' : `Aperture ${Math.round((act.openRatio !== undefined ? act.openRatio : 0.3) * 100)}%`;
+    }
+    if (type === 'manual_valve') {
+      return act.valveState === 'closed' ? 'Closed' : 'Open';
+    }
+    if (type === 'check_valve') {
+      return act.direction === -1 ? 'Reverse (←)' : 'Forward (→)';
+    }
+    if (type === 'relief_valve') {
+      return `P_max: ${act.triggerPressure || 250} Pa`;
+    }
+    if (type === 'reservoir' || type === 'thermal_block' || type === 'heat_exchanger' || type === 'regenerator') {
+      return act.isActive === false ? 'Insulated' : `${Math.round(act.temperature || 300)} K`;
+    }
+    if (type === 'emitter') {
+      return act.state === 'paused' ? 'Paused' : `${act.rate || 8} pts/s @ ${Math.round(act.temperature || 300)}K`;
+    }
+    if (type === 'sink') {
+      return act.isActive === false ? 'Inactive' : `${Math.round((act.absorptionEfficiency !== undefined ? act.absorptionEfficiency : 1.0) * 100)}% Eff`;
+    }
+    if (type === 'regulator') {
+      return act.isActive === false ? 'Inactive' : `Target N = ${act.targetCount || 50}`;
+    }
+    return 'Snapshot set';
+  }
+
+  static formatConditionSummary(cond) {
+    if (!cond) return 'Immediate';
+    const type = cond.type || 'duration';
+    if (type === 'duration') {
+      return `⏱ ${(cond.duration !== undefined ? cond.duration : 1.5).toFixed(1)}s`;
+    }
+    if (type === 'piston' || type === 'piston_target') {
+      const tgt = (cond.pistonTarget || 'tdc').toUpperCase();
+      return `🎯 ${tgt}`;
+    }
+    if (type === 'sensor') {
+      const metric = cond.sensorMetric === 'temperature' ? 'T' : 'P';
+      const unit = cond.sensorMetric === 'temperature' ? 'K' : 'Pa';
+      return `📡 ${metric}${cond.sensorOperator || '>='}${cond.sensorThreshold || 200}${unit}`;
+    }
+    return 'Immediate';
+  }
+
+  static getTransitionSummary(trans) {
+    if (!trans) return 'Immediate';
+    const norm = SequencerConditions.normalizeTransition(trans);
+    if (!norm.rows || norm.rows.length === 0) return 'Immediate';
+
+    const rowSummaries = norm.rows.map(row => {
+      if (!row.conditions || row.conditions.length === 0) return 'Immediate';
+      const parts = [];
+      row.conditions.forEach((c, idx) => {
+        parts.push(this.formatConditionSummary(c));
+        if (idx < row.conditions.length - 1) {
+          const op = (row.operators[idx] || 'AND').toUpperCase();
+          parts.push(op === 'OR' || op === '||' ? '||' : '&');
+        }
+      });
+      const rowStr = parts.join(' ');
+      return norm.rows.length > 1 || row.conditions.length > 1 ? `(${rowStr})` : rowStr;
+    });
+
+    const finalParts = [];
+    rowSummaries.forEach((rStr, idx) => {
+      finalParts.push(rStr);
+      if (idx < rowSummaries.length - 1) {
+        const rOp = (norm.rowOperators[idx] || 'OR').toUpperCase();
+        finalParts.push(rOp === 'AND' || rOp === '&' ? '&' : '||');
+      }
+    });
+
+    return finalParts.join(' ');
+  }
+
+  static formatActionPropsHTML(act, item) {
+    if (!act) return '';
+    const type = act.type || (item ? item.constructor.name.toLowerCase() : 'unknown');
+    const rows = [];
+
+    const addRow = (label, val) => {
+      rows.push(`<div class="seq-action-prop-row"><span class="seq-prop-key">${label}</span><span class="seq-prop-val">${val}</span></div>`);
+    };
+
+    if (type === 'piston') {
+      const strokeMap = { drive_tdc: 'Drive to TDC (Min Vol)', drive_bdc: 'Drive to BDC (Max Vol)', hold: 'Hold Position', free: 'Free Float' };
+      addRow('Stroke', strokeMap[act.strokeCommand || 'drive_tdc'] || act.strokeCommand);
+      addRow('Motion Mode', (act.motionType || item?.mode || 'free').toUpperCase());
+      addRow('Target Speed', `${act.targetSpeed !== undefined ? act.targetSpeed : 160} px/s`);
+      addRow('Mass', `${act.mass !== undefined ? act.mass : (item?.mass || 30)} kg`);
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : (item?.conductivity || 0.2)).toFixed(2)}`);
+      if (act.motionType === 'spring') addRow('Spring k', `${act.springK || 50} N/m`);
+      if (act.motionType === 'motorized') addRow('Frequency', `${act.frequency || 0.8} Hz`);
+      if (act.motionType === 'damper') addRow('Damping γ', `${act.dampingCoeff || 25} Ns/m`);
+    } else if (type === 'manual_valve') {
+      addRow('State', act.valveState === 'open' || act.valveState === undefined ? 'OPEN' : 'CLOSED');
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    } else if (type === 'check_valve') {
+      addRow('Allowed Flow', (act.direction === -1 ? 'Reverse (←)' : 'Forward (→)'));
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    } else if (type === 'relief_valve') {
+      addRow('Relief Mode', (act.reliefMode || '1-way').toUpperCase());
+      addRow('Trigger P_max', `${act.triggerPressure || 250} Pa`);
+      addRow('Hysteresis ΔP', `${act.pressureHysteresis || 25} Pa`);
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    } else if (type === 'throttle_valve') {
+      addRow('State', act.state === 'bypassed' ? 'BYPASSED (100%)' : 'THROTTLED');
+      addRow('Opening Ratio', `${Math.round((act.openRatio !== undefined ? act.openRatio : 0.3) * 100)}%`);
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    } else if (['reservoir', 'heat_exchanger', 'regenerator', 'thermal_block'].includes(type)) {
+      addRow('Thermal State', act.isActive !== false ? 'ACTIVE' : 'INSULATED');
+      addRow('Temperature T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
+      addRow('Coupling κ', `${(act.conductivity !== undefined ? act.conductivity : (act.conductance || 0.6)).toFixed(2)}`);
+      if (act.heatCapacity !== undefined || (item && item.heatCapacity)) {
+        addRow('Heat Capacity C', `${act.heatCapacity !== undefined ? act.heatCapacity : item.heatCapacity} J/K`);
+      }
+      if (type === 'regenerator') addRow('Orientation', (act.orientation || 'horizontal').toUpperCase());
+    } else if (type === 'emitter') {
+      addRow('State', act.state === 'paused' ? 'PAUSED' : 'FIRING');
+      addRow('Direction', (act.direction || 'right').toUpperCase());
+      addRow('Rate', `${act.rate !== undefined ? act.rate : 8} /s`);
+      addRow('Temperature T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
+      addRow('Particle Mass', `${act.mass !== undefined ? act.mass : 1.0}`);
+      addRow('Max Limit', act.maxParticles > 0 ? `${act.maxParticles}` : 'Unlimited');
+    } else if (type === 'sink') {
+      addRow('State', act.isActive !== false ? 'ACTIVE' : 'INACTIVE');
+      addRow('Direction', (act.direction || '360').toUpperCase());
+      addRow('Efficiency', `${Math.round((act.absorptionEfficiency !== undefined ? act.absorptionEfficiency : 1.0) * 100)}%`);
+      addRow('Temp Filter', (act.tempFilterMode || 'all').toUpperCase());
+      addRow('Max Limit', act.maxParticles > 0 ? `${act.maxParticles}` : 'Unlimited');
+    } else if (type === 'regulator') {
+      addRow('State', act.isActive !== false ? 'ACTIVE' : 'INACTIVE');
+      addRow('Target Count N', `${act.targetCount !== undefined ? act.targetCount : 50}`);
+      addRow('Hysteresis ΔN', `±${act.hysteresis !== undefined ? act.hysteresis : 3}`);
+      addRow('Gas Temp T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
+      addRow('Max Rate', `${act.rate !== undefined ? act.rate : 15} /s`);
+    } else {
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    }
+
+    return `
+      <div class="seq-action-body">
+        <div class="seq-action-props-grid">
+          ${rows.join('')}
+        </div>
+      </div>
+    `;
+  }
+}
+
+
+// --- src/control/SequencerTimeline.js ---
+/**
+ * SequencerTimeline.js
+ * Horizontal Step Cards & Transition Nodes Timeline Track.
+ * Features expandable Element Accordions with settings inspection and smooth Camera Focus.
+ */
+
+
+class SequencerTimeline {
+  constructor(engine, callbacks = {}, renderer = null) {
+    this.engine = engine;
+    this.callbacks = callbacks;
+    this.renderer = renderer;
+    this.trackEl = document.getElementById('seqTimelineTrack');
+    this.expandedActions = new Set(); // Stores expanded action keys: `${sIdx}_${aIdx}`
+  }
+
+  init() {
+    this.render();
+  }
+
+  render() {
+    const sequencer = this.engine.sequencer;
+    if (!this.trackEl || !sequencer) return;
+
+    this.trackEl.innerHTML = '';
+    const steps = sequencer.steps || [];
+    const totalSteps = steps.length;
+
+    steps.forEach((step, sIdx) => {
+      // 1. Step Card
+      const stepCard = this._createStepCard(step, sIdx, totalSteps, sequencer);
+      this.trackEl.appendChild(stepCard);
+
+      // 2. Transition Gate (between steps)
+      if (sIdx < totalSteps - 1 || sequencer.isLooping) {
+        const transNode = this._createTransitionNode(step, sIdx, totalSteps, sequencer);
+        this.trackEl.appendChild(transNode);
+      }
+    });
+
+    // 3. Add Step Placeholder at end
+    const addPlaceholder = document.createElement('div');
+    addPlaceholder.className = 'seq-add-card-placeholder';
+    addPlaceholder.title = 'Append New Step';
+    addPlaceholder.innerHTML = `
+      <div class="seq-add-card-inner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Add Step</span>
+      </div>
+    `;
+    addPlaceholder.addEventListener('click', () => {
+      sequencer.addStep();
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    this.trackEl.appendChild(addPlaceholder);
+  }
+
+  _createStepCard(step, sIdx, totalSteps, sequencer) {
+    const card = document.createElement('div');
+    const isActive = sequencer.isEnabled && sequencer.activeStepIndex === sIdx;
+    card.className = `seq-step-card ${isActive ? 'is-active' : ''}`;
+    card.setAttribute('data-step-index', sIdx);
+
+    const actions = step.actions || [];
+    let actionsHtml = '';
+
+    if (actions.length === 0) {
+      actionsHtml = `
+        <div class="seq-no-actions" style="font-size:11px; color:var(--text-dim); font-style:italic; padding:8px 0; text-align:center;">
+          No element actions assigned
+        </div>
+      `;
+    } else {
+      actions.forEach((act, aIdx) => {
+        const item = this._findTargetItem(act.targetId);
+        const tag = (act.type || 'ITEM').toUpperCase().substring(0, 7);
+        const label = item?.label || item?.name || `${act.type} ${act.targetId ? act.targetId.substring(0, 6) : ''}`;
+        const key = `${sIdx}_${aIdx}`;
+        const isExpanded = this.expandedActions.has(key);
+
+        actionsHtml += `
+          <div class="seq-action-card ${isExpanded ? 'is-expanded' : ''}" data-step="${sIdx}" data-action="${aIdx}">
+            <div class="seq-action-header" data-step="${sIdx}" data-action="${aIdx}" title="Click to edit properties & zoom canvas">
+              <div class="seq-action-header-left">
+                <span class="seq-action-arrow">${isExpanded ? '▼' : '▶'}</span>
+                <span class="seq-tag-mini">${tag}</span>
+                <span class="seq-action-title">${label}</span>
+              </div>
+              <div class="seq-action-tools">
+                <button class="seq-act-btn btn-del-action" title="Remove Action" data-step="${sIdx}" data-action="${aIdx}">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>
+              </div>
+            </div>
+            ${isExpanded ? `<div class="seq-action-body" id="seqAccBody_${sIdx}_${aIdx}"></div>` : ''}
+          </div>
+        `;
+      });
+    }
+
+    card.innerHTML = `
+      <div class="seq-step-header">
+        <div class="seq-step-title-group">
+          <span class="seq-step-pill">STEP ${sIdx + 1}</span>
+          <input type="text" class="seq-step-name-input" value="${step.name}" title="Click to rename step">
+        </div>
+        <div class="seq-step-actions-nav">
+          <button class="seq-nav-btn btn-move-left" ${sIdx === 0 ? 'disabled' : ''} title="Move Left">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <button class="seq-nav-btn btn-move-right" ${sIdx === totalSteps - 1 ? 'disabled' : ''} title="Move Right">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button class="seq-nav-btn btn-duplicate-step" title="Duplicate Step">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="seq-nav-btn btn-delete-step" title="Delete Step">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="seq-step-body">
+        <div class="seq-actions-list">${actionsHtml}</div>
+        <button class="seq-btn-add-element" data-step="${sIdx}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>+ Add Element</span>
+        </button>
+      </div>
+    `;
+
+    // Step event bindings
+    card.querySelector('.seq-step-name-input')?.addEventListener('change', (e) => {
+      step.name = e.target.value.trim() || `Step ${sIdx + 1}`;
+    });
+    card.querySelector('.btn-move-left')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sequencer.moveStep(sIdx, sIdx - 1);
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    card.querySelector('.btn-move-right')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sequencer.moveStep(sIdx, sIdx + 1);
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    card.querySelector('.btn-duplicate-step')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sequencer.duplicateStep(sIdx);
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    card.querySelector('.btn-delete-step')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sequencer.removeStep(sIdx);
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    card.querySelector('.seq-btn-add-element')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (typeof this.callbacks.onAddElement === 'function') this.callbacks.onAddElement(sIdx);
+    });
+
+    // Accordion Header Click: Toggle expand & zoom to canvas element WITHOUT opening modal
+    card.querySelectorAll('.seq-action-header').forEach(hdr => {
+      hdr.addEventListener('click', (e) => {
+        if (e.target.closest('.seq-action-tools')) return;
+        const aIdx = parseInt(hdr.getAttribute('data-action'), 10);
+        const key = `${sIdx}_${aIdx}`;
+        const act = step.actions[aIdx];
+        const item = this._findTargetItem(act?.targetId);
+
+        if (this.expandedActions.has(key)) {
+          this.expandedActions.delete(key);
+          const rend = this.renderer || this.engine?.renderer || window.renderer;
+          if (rend) rend.highlightedSequencerItem = null;
+        } else {
+          this.expandedActions.clear();
+          this.expandedActions.add(key);
+          if (item) this._focusCameraOnItem(item);
+        }
+        this.render();
+      });
+    });
+
+    // Delete action button
+    card.querySelectorAll('.btn-del-action').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const aIdx = parseInt(btn.getAttribute('data-action'), 10);
+        this.expandedActions.delete(`${sIdx}_${aIdx}`);
+        sequencer.removeAction(sIdx, aIdx);
+        this.render();
+        if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+      });
+    });
+
+    // Populate interactive controls for expanded actions
+    actions.forEach((act, aIdx) => {
+      const key = `${sIdx}_${aIdx}`;
+      if (this.expandedActions.has(key)) {
+        const body = card.querySelector(`#seqAccBody_${sIdx}_${aIdx}`);
+        const item = this._findTargetItem(act.targetId);
+        if (body && item) {
+          const pfx = `seqAcc_${sIdx}_${aIdx}_`;
+          SequencerActionFields.renderFields(body, item, act, (updated) => {
+            Object.assign(act, updated);
+            if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+          }, pfx);
+        }
+      }
+    });
+
+    return card;
+  }
+
+  _focusCameraOnItem(item) {
+    const rend = this.renderer || this.engine?.renderer || window.renderer;
+    if (!rend || !item) return;
+
+    let cx = 400, cy = 300;
+    if (typeof item.getBounds === 'function') {
+      const b = item.getBounds();
+      cx = (b.left + b.right) / 2;
+      cy = (b.top + b.bottom) / 2;
+    } else if (item.p1 && item.p2) {
+      cx = (item.p1.x + item.p2.x) / 2;
+      cy = (item.p1.y + item.p2.y) / 2;
+    } else if (item.x !== undefined && item.y !== undefined) {
+      cx = item.x + (item.width || item.w || 40) / 2;
+      cy = item.y + (item.height || item.h || 40) / 2;
+    }
+
+    const leftBarW = document.getElementById('leftSidebar')?.offsetWidth || 340;
+    const rightBar = document.getElementById('sidebarRight');
+    const rightBarW = (rightBar && rightBar.style.display !== 'none' && !rightBar.classList.contains('collapsed')) ? rightBar.offsetWidth : 0;
+    const ribbonH = document.querySelector('.ribbon-container')?.offsetHeight || 115;
+    const dockH = document.getElementById('unifiedBottomDock')?.offsetHeight || 420;
+
+    const screenCenterX = (leftBarW + (window.innerWidth - rightBarW)) / 2;
+    const screenCenterY = (ribbonH + (window.innerHeight - dockH)) / 2;
+
+    const startPanX = rend.panX;
+    const startPanY = rend.panY;
+    const startZoom = rend.zoom;
+    const endZoom = Math.min(2.2, Math.max(startZoom, 1.25));
+    const endPanX = screenCenterX - cx * endZoom;
+    const endPanY = screenCenterY - cy * endZoom;
+
+    rend.highlightedSequencerItem = item;
+
+    const startTime = performance.now();
+    const duration = 280;
+    const step = (now) => {
+      const t = Math.min(1, (now - startTime) / duration);
+      const ease = 1 - Math.pow(1 - t, 3);
+      rend.panX = startPanX + (endPanX - startPanX) * ease;
+      rend.panY = startPanY + (endPanY - startPanY) * ease;
+      rend.zoom = startZoom + (endZoom - startZoom) * ease;
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  _createTransitionNode(step, sIdx, totalSteps, sequencer) {
+    const wrap = document.createElement('div');
+    wrap.className = 'seq-transition-wrapper';
+
+    const isActive = sequencer.isEnabled && sequencer.activeStepIndex === sIdx;
+    const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
+    const summary = SequencerSummary.getTransitionSummary(transition);
+    const progressPct = isActive ? Math.round(sequencer.stepProgress * 100) : 0;
+
+    wrap.innerHTML = `
+      <div class="seq-flow-arrow">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+      <div class="seq-transition-node ${isActive ? 'is-active' : ''}" data-step-trans="${sIdx}" title="Click to configure transition conditions">
+        <div class="seq-trans-header">
+          <span class="seq-trans-tag">TRANSITION</span>
+          <svg class="seq-trans-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <div class="seq-trans-desc">${summary}</div>
+        <div class="seq-transition-progress-track">
+          <div class="seq-transition-progress-fill" style="width: ${progressPct}%;"></div>
+        </div>
+      </div>
+      <div class="seq-flow-arrow">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    `;
+
+    wrap.querySelector('.seq-transition-node')?.addEventListener('click', () => {
+      if (typeof this.callbacks.onEditTransition === 'function') {
+        this.callbacks.onEditTransition(sIdx);
+      }
+    });
+
+    return wrap;
+  }
+
+  _findTargetItem(id) {
+    if (!id) return null;
+    const eng = this.engine;
+    return (eng.pistons || []).find(p => p.id === id) ||
+           (eng.walls || []).find(w => w.id === id) ||
+           (eng.throttleValves || []).find(v => v.id === id) ||
+           (eng.reservoirs || []).find(r => r.id === id) ||
+           (eng.heatExchangers || []).find(h => h.id === id) ||
+           (eng.regenerators || []).find(rg => rg.id === id) ||
+           (eng.thermalBlocks || []).find(b => b.id === id) ||
+           (eng.emitters || []).find(e => e.id === id) ||
+           (eng.sinks || []).find(s => s.id === id) ||
+           (eng.regulators || []).find(r => r.id === id);
+  }
+
+  updateActiveStep() {
+    const sequencer = this.engine.sequencer;
+    if (!sequencer || !this.trackEl) return;
+
+    const curIdx = sequencer.activeStepIndex;
+    const isRunning = sequencer.isEnabled;
+
+    this.trackEl.querySelectorAll('.seq-step-card').forEach((card, idx) => {
+      card.classList.toggle('is-active', isRunning && idx === curIdx);
+    });
+
+    this.trackEl.querySelectorAll('.seq-transition-node').forEach((gate, idx) => {
+      const isActive = isRunning && idx === curIdx;
+      gate.classList.toggle('is-active', isActive);
+      const fill = gate.querySelector('.seq-transition-progress-fill');
+      if (fill) fill.style.width = isActive ? `${Math.round(sequencer.stepProgress * 100)}%` : '0%';
+    });
+  }
+}
+
+
+// --- src/control/SequencerDock.js ---
+/**
+ * SequencerDock.js
+ * Unified Bottom Dock Controller & Expansion Shell for Cycle Sequencer.
+ */
+
+class SequencerDock {
+  constructor(engine, callbacks = {}) {
+    this.engine = engine;
+    this.callbacks = callbacks; // { onToggle, onAddStep, onReset, onRenderRequest }
     this.isOpen = false;
 
     // DOM Elements
     this.drawerEl = document.getElementById('cycleSequencerDrawer');
-    this.headerEl = document.getElementById('seqDrawerHeader');
+    this.btnToggleSequencer = document.getElementById('btnToggleSequencer');
     this.chevronBtn = document.getElementById('seqDrawerChevron');
-    this.activeToggle = document.getElementById('seqToggleActive');
-    this.loopToggle = document.getElementById('seqToggleLoop');
+    this.headerEl = document.getElementById('seqDrawerHeader');
+    this.btnActive = document.getElementById('seqBtnActive');
+    this.btnLoop = document.getElementById('seqBtnLoop');
     this.cycleBadge = document.getElementById('seqCycleBadge');
     this.btnAddStep = document.getElementById('seqBtnAddStep');
     this.btnReset = document.getElementById('seqBtnReset');
-    this.timelineTrack = document.getElementById('seqTimelineTrack');
 
     this._bindEvents();
-    this.render();
+    this.updateBadges();
   }
 
   _bindEvents() {
-    // Header click toggles drawer (unless clicking a specific interactive element)
-    this.headerEl?.addEventListener('click', (e) => {
-      if (e.target.closest('input, select, button, label, .seq-cycle-badge')) {
-        return;
-      }
+    // 1. Bottom Dock Toggle Button [⏱ Sequencer]
+    this.btnToggleSequencer?.addEventListener('click', (e) => {
+      e.stopPropagation();
       this.toggleDrawer();
     });
 
+    // 2. Chevron Button in Drawer Header
     this.chevronBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       this.toggleDrawer();
     });
 
-    this.activeToggle?.addEventListener('change', (e) => {
-      this.sequencer.isEnabled = e.target.checked;
-      this.updateBadges();
-      this.updateActiveStep();
+    // 3. Header strip click (unless clicking a control)
+    this.headerEl?.addEventListener('click', (e) => {
+      if (e.target.closest('input, select, button, label, .seq-cycle-badge')) return;
+      this.toggleDrawer();
     });
 
-    this.loopToggle?.addEventListener('change', (e) => {
-      this.sequencer.isLooping = e.target.checked;
-      this.render();
-    });
-
-    this.btnAddStep?.addEventListener('click', (e) => {
+    // 4. Active Button Toggle
+    this.btnActive?.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.sequencer.addStep();
-      this.render();
-      if (!this.isOpen) this.openDrawer();
+      const sequencer = this.engine.sequencer;
+      if (sequencer) {
+        sequencer.isEnabled = !sequencer.isEnabled;
+      }
+      this.updateBadges();
+      if (typeof this.callbacks.onRenderRequest === 'function') {
+        this.callbacks.onRenderRequest();
+      }
     });
 
+    // 5. Loop Button Toggle
+    this.btnLoop?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sequencer = this.engine.sequencer;
+      if (sequencer) {
+        sequencer.isLooping = !sequencer.isLooping;
+      }
+      this.updateBadges();
+      if (typeof this.callbacks.onRenderRequest === 'function') {
+        this.callbacks.onRenderRequest();
+      }
+    });
+
+    // 6. Reset Button
     this.btnReset?.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.sequencer.reset();
+      const sequencer = this.engine.sequencer;
+      if (sequencer) {
+        sequencer.reset();
+      }
       this.updateBadges();
-      this.updateActiveStep();
+      if (typeof this.callbacks.onReset === 'function') {
+        this.callbacks.onReset();
+      }
     });
 
-    this.sequencer.onStepChangeCallback = () => {
-      this.updateBadges();
-      this.updateActiveStep();
-    };
-    this.sequencer.onPhaseChangeCallback = this.sequencer.onStepChangeCallback;
+    // 7. Add Step Button
+    this.btnAddStep?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (typeof this.callbacks.onAddStep === 'function') {
+        this.callbacks.onAddStep();
+      }
+      if (!this.isOpen) this.openDrawer();
+    });
   }
 
   toggleDrawer() {
-    if (this.isOpen) {
-      this.closeDrawer();
-    } else {
-      this.openDrawer();
-    }
+    if (this.isOpen) this.closeDrawer();
+    else this.openDrawer();
   }
 
   openDrawer() {
@@ -5847,10 +8250,15 @@ class SequencerUI {
       this.drawerEl.classList.remove('is-collapsed');
     }
     document.body.classList.add('sequencer-expanded');
+    if (this.btnToggleSequencer) {
+      this.btnToggleSequencer.classList.add('active');
+    }
     if (this.chevronBtn) {
       this.chevronBtn.classList.add('is-expanded');
     }
-    this.render();
+    if (typeof this.callbacks.onToggle === 'function') {
+      this.callbacks.onToggle(true);
+    }
   }
 
   closeDrawer() {
@@ -5859,560 +8267,155 @@ class SequencerUI {
       this.drawerEl.classList.add('is-collapsed');
     }
     document.body.classList.remove('sequencer-expanded');
+    if (this.btnToggleSequencer) {
+      this.btnToggleSequencer.classList.remove('active');
+    }
     if (this.chevronBtn) {
       this.chevronBtn.classList.remove('is-expanded');
+    }
+    if (typeof this.callbacks.onToggle === 'function') {
+      this.callbacks.onToggle(false);
     }
   }
 
   updateBadges() {
+    const sequencer = this.engine.sequencer;
+    if (!sequencer) return;
+
+    const steps = sequencer.steps || [];
+    const total = steps.length;
+
+    // Update active toggle in bottom bar
+    const dot = this.btnToggleSequencer?.querySelector('.seq-status-dot');
+    if (dot) {
+      dot.classList.toggle('active', sequencer.isEnabled);
+    }
+
+    if (this.btnActive) this.btnActive.classList.toggle('active', !!sequencer.isEnabled);
+    if (this.btnLoop) this.btnLoop.classList.toggle('active', !!sequencer.isLooping);
+
     if (!this.cycleBadge) return;
-    const steps = this.sequencer.steps || this.sequencer.phases;
-    const totalSteps = steps.length;
 
-    if (totalSteps === 0) {
-      this.cycleBadge.innerHTML = `<span class="seq-badge-status seq-status-idle">Idle (No Steps)</span>`;
-      return;
-    }
-
-    if (!this.sequencer.isEnabled) {
-      this.cycleBadge.innerHTML = `
-        <span class="seq-badge-status seq-status-paused">Ready</span>
-        <span class="seq-badge-meta">${totalSteps} Steps</span>
-      `;
+    if (!sequencer.isEnabled) {
+      this.cycleBadge.innerHTML = total === 0
+        ? `<span class="seq-badge-status seq-status-idle">Idle (No Steps)</span>`
+        : `<span class="seq-badge-status seq-status-paused">Paused (${total} Steps)</span>`;
     } else {
-      const cur = this.sequencer.activeStepIndex + 1;
+      const cur = sequencer.activeStepIndex + 1;
       this.cycleBadge.innerHTML = `
-        <span class="seq-badge-status seq-status-running">● Active</span>
-        <span class="seq-badge-meta">Cycle #${this.sequencer.currentCycleCount} • Step ${cur}/${totalSteps}</span>
+        <span class="seq-badge-status seq-status-active">RUNNING</span>
+        <span class="seq-badge-meta">Cycle #${sequencer.currentCycleCount} • Step ${cur}/${total}</span>
       `;
-    }
-
-    if (this.activeToggle) {
-      this.activeToggle.checked = this.sequencer.isEnabled;
-    }
-    if (this.loopToggle) {
-      this.loopToggle.checked = this.sequencer.isLooping;
     }
   }
+}
 
-  updateActiveStep() {
-    if (!this.timelineTrack) return;
-    const curIdx = this.sequencer.activeStepIndex;
-    const isRunning = this.sequencer.isEnabled;
 
-    const cards = this.timelineTrack.querySelectorAll('.seq-step-card');
-    cards.forEach((card, idx) => {
-      const isActive = isRunning && (curIdx === idx);
-      card.classList.toggle('is-active', isActive);
+// --- src/control/SequencerUI.js ---
+/**
+ * SequencerUI.js
+ * Master UI Coordinator Facade for Thermodynamic Cycle Sequencer.
+ * Integrates SequencerDock, SequencerTimeline, SequencerActionDialog, and SequencerTransitionDialog.
+ */
+
+
+class SequencerUI {
+  constructor(engine, renderer = null) {
+    this.engine = engine;
+    this.renderer = renderer;
+    this.sequencer = engine.sequencer;
+
+    // 1. Action snapshot configuration modal & picker
+    this.actionDialog = new SequencerActionDialog(engine, () => {
+      this.render();
+      this.dock.updateBadges();
+    }, renderer);
+
+    // 2. Transition gate configuration modal
+    this.transitionDialog = new SequencerTransitionDialog(engine, () => {
+      this.render();
     });
 
-    const gates = this.timelineTrack.querySelectorAll('.seq-transition-gate');
-    gates.forEach((gate, idx) => {
-      const isActive = isRunning && (curIdx === idx);
-      gate.classList.toggle('is-active', isActive);
-      const fill = gate.querySelector('.seq-transition-progress-fill');
-      if (fill) {
-        fill.style.width = isActive ? `${Math.round(this.sequencer.stepProgress * 100)}%` : '0%';
+    // 3. Timeline track renderer
+    this.timeline = new SequencerTimeline(engine, {
+      onAddElement: (sIdx) => this.actionDialog.startPicking(sIdx),
+      onEditAction: (item, sIdx, act, aIdx) => this.actionDialog.openForElement(item, sIdx, act, aIdx),
+      onEditTransition: (sIdx) => this.transitionDialog.open(sIdx),
+      onStepModified: () => {
+        this.dock.updateBadges();
+        this.timeline.updateActiveStep();
+      }
+    }, renderer);
+
+    // 4. Bottom dock controller
+    this.dock = new SequencerDock(engine, {
+      onToggle: (isOpen) => {
+        if (isOpen) this.render();
+      },
+      onAddStep: () => {
+        this.sequencer.addStep();
+        this.render();
+        this.dock.updateBadges();
+      },
+      onReset: () => {
+        this.timeline.updateActiveStep();
+      },
+      onRenderRequest: () => {
+        this.render();
       }
     });
+
+    // Wire sequencer state callbacks
+    if (this.sequencer) {
+      this.sequencer.onStepChangeCallback = () => {
+        this.dock.updateBadges();
+        this.timeline.updateActiveStep();
+      };
+      this.sequencer.onPhaseChangeCallback = this.sequencer.onStepChangeCallback;
+    }
+
+    this.render();
   }
 
-  updateLive() {
-    if (!this.isOpen && !this.sequencer.isEnabled) return;
-    this.updateBadges();
-    this.updateActiveStep();
+  get isOpen() {
+    return this.dock ? this.dock.isOpen : false;
+  }
+
+  toggleDrawer() {
+    this.dock?.toggleDrawer();
+  }
+
+  openDrawer() {
+    this.dock?.openDrawer();
+  }
+
+  closeDrawer() {
+    this.dock?.closeDrawer();
   }
 
   render() {
-    if (!this.timelineTrack) return;
-    this.updateBadges();
+    this.timeline?.render();
+    this.dock?.updateBadges();
+  }
 
-    const steps = this.sequencer.steps || this.sequencer.phases;
+  updateBadges() {
+    this.dock?.updateBadges();
+  }
 
-    if (steps.length === 0) {
-      this.timelineTrack.innerHTML = `
-        <div class="seq-empty-state">
-          <div class="seq-empty-icon">⏱</div>
-          <div class="seq-empty-title">No Thermodynamic Sequence Steps Defined</div>
-          <div class="seq-empty-desc">Create your first step to coordinate pistons (TDC/BDC), throttle valves, and thermal reservoirs in cyclic loops.</div>
-          <button class="seq-btn-empty-add" id="seqBtnEmptyAdd">+ Create Step 1</button>
-        </div>
-      `;
-      document.getElementById('seqBtnEmptyAdd')?.addEventListener('click', () => {
-        this.sequencer.addStep({ name: 'Step 1: Intake' });
-        this.render();
-      });
-      return;
+  updateActiveStep() {
+    this.timeline?.updateActiveStep();
+  }
+
+  updateLive() {
+    if (!this.sequencer || !this.sequencer.isEnabled) return;
+    this.timeline?.updateActiveStep();
+  }
+
+  handleItemPicked(item) {
+    if (this.actionDialog && this.actionDialog.isPicking) {
+      return this.actionDialog.handleItemPicked(item);
     }
-
-    this.timelineTrack.innerHTML = '';
-
-    steps.forEach((step, sIdx) => {
-      // 1. Step Card (Actions)
-      const stepCard = document.createElement('div');
-      stepCard.className = `seq-step-card ${this.sequencer.isEnabled && this.sequencer.activeStepIndex === sIdx ? 'is-active' : ''}`;
-      stepCard.dataset.stepIndex = sIdx;
-
-      const headerHtml = `
-        <div class="seq-card-header">
-          <div class="seq-card-num-badge">${sIdx + 1}</div>
-          <input type="text" class="seq-step-title-input" value="${step.name || `Step ${sIdx + 1}`}" placeholder="Step Name">
-          <div class="seq-card-tools">
-            <button class="seq-icon-btn seq-btn-left" title="Move Left" ${sIdx === 0 ? 'disabled' : ''}>◀</button>
-            <button class="seq-icon-btn seq-btn-right" title="Move Right" ${sIdx === steps.length - 1 ? 'disabled' : ''}>▶</button>
-            <button class="seq-icon-btn seq-btn-dup" title="Duplicate Step">❐</button>
-            <button class="seq-icon-btn seq-btn-del" title="Delete Step">✕</button>
-          </div>
-        </div>
-      `;
-
-      let actionsHtml = '<div class="seq-actions-list">';
-      if (!step.actions || step.actions.length === 0) {
-        actionsHtml += `<div class="seq-no-actions">No active outputs (hold previous states)</div>`;
-      } else {
-        step.actions.forEach((act, aIdx) => {
-          actionsHtml += this._renderActionItem(act, aIdx, sIdx);
-        });
-      }
-      actionsHtml += '</div>';
-
-      const addActionHtml = `
-        <div class="seq-add-action-bar">
-          <select class="seq-select-add-type">
-            <option value="">+ Add Output Action...</option>
-            <option value="piston">Piston (Stroke / Hold / Free)</option>
-            <option value="valve">Throttle Valve (Open / Closed)</option>
-            <option value="thermal">Thermal Reservoir (Heat / Insulate)</option>
-          </select>
-        </div>
-      `;
-
-      stepCard.innerHTML = headerHtml + actionsHtml + addActionHtml;
-      this._bindStepCardEvents(stepCard, sIdx);
-      this.timelineTrack.appendChild(stepCard);
-
-      // 2. Discrete Transition Gate
-      const nextStepNum = (sIdx + 1) < steps.length ? (sIdx + 2) : (this.sequencer.isLooping ? '1 (Loop)' : 'End');
-      const transitionGate = this._renderTransitionGate(step, sIdx, nextStepNum);
-      this.timelineTrack.appendChild(transitionGate);
-    });
-
-    // End placeholder to add new step
-    const addEndBtn = document.createElement('div');
-    addEndBtn.className = 'seq-add-card-placeholder';
-    addEndBtn.title = "Add new step to sequence";
-    addEndBtn.innerHTML = `
-      <div class="seq-add-card-inner">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span>Add Step</span>
-      </div>
-    `;
-    addEndBtn.addEventListener('click', () => {
-      this.sequencer.addStep();
-      this.render();
-    });
-    this.timelineTrack.appendChild(addEndBtn);
-  }
-
-  _renderActionItem(act, aIdx, sIdx) {
-    if (act.type === 'piston') {
-      const pistons = this.engine.pistons || [];
-      const options = pistons.map(p => `<option value="${p.id}" ${p.id === act.targetId ? 'selected' : ''}>${p.label || 'Piston'} (${p.orientation === 'horizontal' ? 'H' : 'V'})</option>`).join('');
-      const mode = act.mode || 'drive_tdc';
-
-      return `
-        <div class="seq-action-item seq-act-piston" data-action-index="${aIdx}">
-          <div class="seq-act-badge seq-badge-piston">Piston</div>
-          <select class="seq-act-target-select">${options || '<option value="">No Pistons in Scene</option>'}</select>
-          <select class="seq-piston-mode-select">
-            <option value="drive_tdc" ${mode === 'drive_tdc' ? 'selected' : ''}>Drive to TDC (Top Dead Center)</option>
-            <option value="drive_bdc" ${mode === 'drive_bdc' ? 'selected' : ''}>Drive to BDC (Bottom Dead Center)</option>
-            <option value="hold" ${mode === 'hold' ? 'selected' : ''}>Hold (Isochoric)</option>
-            <option value="free" ${mode === 'free' ? 'selected' : ''}>Free Float</option>
-            <option value="controlled" ${mode === 'controlled' ? 'selected' : ''}>Custom Position...</option>
-          </select>
-          ${mode === 'drive_tdc' || mode === 'drive_bdc' ? `
-            <button class="seq-btn-invert-tdc ${act.invertTdcBdc ? 'is-inverted' : ''}" title="Invert TDC/BDC polarity (if chamber is on the other side)">
-              ⇄ Invert
-            </button>
-          ` : ''}
-          ${mode === 'controlled' ? `
-            <div class="seq-input-group" title="Target Position in px">
-              <span class="seq-input-lbl">Pos</span>
-              <input type="number" class="seq-input-piston-pos" value="${Math.round(act.targetPos !== undefined ? act.targetPos : 400)}" step="10">
-            </div>
-            <div class="seq-input-group" title="Speed in px/s">
-              <span class="seq-input-lbl">v</span>
-              <input type="number" class="seq-input-piston-speed" value="${Math.round(act.targetSpeed !== undefined ? act.targetSpeed : 160)}" step="20" min="10">
-            </div>
-          ` : ''}
-          <button class="seq-btn-remove-act" title="Remove Action">✕</button>
-        </div>
-      `;
-    } else if (act.type === 'valve') {
-      const valves = this.engine.throttleValves || [];
-      const options = valves.map(v => `<option value="${v.id}" ${v.id === act.targetId ? 'selected' : ''}>Valve (id: ${v.id.slice(0, 4)})</option>`).join('');
-      const state = act.state || (act.openRatio === 0 ? 'closed' : (act.openRatio === 1 ? 'open' : 'aperture'));
-      const pct = Math.round((act.openRatio !== undefined ? act.openRatio : 1.0) * 100);
-
-      return `
-        <div class="seq-action-item seq-act-valve" data-action-index="${aIdx}">
-          <div class="seq-act-badge seq-badge-valve">Valve</div>
-          <select class="seq-act-target-select">${options || '<option value="">No Valves in Scene</option>'}</select>
-          <select class="seq-valve-state-select">
-            <option value="open" ${state === 'open' ? 'selected' : ''}>Open (100%)</option>
-            <option value="closed" ${state === 'closed' ? 'selected' : ''}>Closed (0%)</option>
-            <option value="aperture" ${state === 'aperture' ? 'selected' : ''}>Aperture %</option>
-          </select>
-          ${state === 'aperture' ? `
-            <div class="seq-valve-controls">
-              <input type="range" min="0" max="100" class="seq-valve-slider" value="${pct}">
-              <span class="seq-valve-pct-lbl">${pct}%</span>
-            </div>
-          ` : ''}
-          <button class="seq-btn-remove-act" title="Remove Action">✕</button>
-        </div>
-      `;
-    } else if (act.type === 'thermal') {
-      const blocks = [
-        ...(this.engine.thermalBlocks || []),
-        ...(this.engine.heatExchangers || []),
-        ...(this.engine.reservoirs || [])
-      ];
-      const options = blocks.map(b => `<option value="${b.id}" ${b.id === act.targetId ? 'selected' : ''}>${b.label || 'Thermal'} (${Math.round(b.temperature)}K)</option>`).join('');
-      const isInsulated = act.state === 'insulated' || act.isActive === false;
-
-      return `
-        <div class="seq-action-item seq-act-thermal" data-action-index="${aIdx}">
-          <div class="seq-act-badge seq-badge-thermal">Thermal</div>
-          <select class="seq-act-target-select">${options || '<option value="">No Thermal Blocks</option>'}</select>
-          <select class="seq-thermal-state-select">
-            <option value="active" ${!isInsulated ? 'selected' : ''}>Active (Coupled)</option>
-            <option value="insulated" ${isInsulated ? 'selected' : ''}>Insulated (Off)</option>
-          </select>
-          ${!isInsulated ? `
-            <div class="seq-input-group" title="Target Temperature in Kelvin">
-              <input type="number" min="5" max="3000" step="25" class="seq-thermal-temp-input" value="${Math.round(act.temperature || 300)}">
-              <span class="seq-input-lbl">K</span>
-            </div>
-          ` : ''}
-          <button class="seq-btn-remove-act" title="Remove Action">✕</button>
-        </div>
-      `;
-    }
-    return '';
-  }
-
-  _renderTransitionGate(step, sIdx, nextStepLabel) {
-    const container = document.createElement('div');
-    container.className = 'seq-transition-wrapper';
-
-    // Left connecting flow arrow
-    const leftArrow = document.createElement('div');
-    leftArrow.className = 'seq-flow-arrow';
-    leftArrow.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="13 6 19 12 13 18"/></svg>`;
-
-    // Transition Gate Node
-    const gate = document.createElement('div');
-    gate.className = `seq-transition-gate ${this.sequencer.isEnabled && this.sequencer.activeStepIndex === sIdx ? 'is-active' : ''}`;
-    gate.dataset.stepIndex = sIdx;
-
-    const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
-
-    const gateHeader = `
-      <div class="seq-transition-header">
-        <span class="seq-transition-pill">TRANSITION ${sIdx + 1} ➔ ${nextStepLabel}</span>
-        <select class="seq-transition-type-select">
-          <option value="duration" ${transition.type === 'duration' ? 'selected' : ''}>⏱ Time Duration</option>
-          <option value="piston_target" ${transition.type === 'piston_target' ? 'selected' : ''}>🎯 Piston reaches TDC/BDC</option>
-          <option value="sensor" ${transition.type === 'sensor' ? 'selected' : ''}>📡 Sensor Threshold</option>
-        </select>
-      </div>
-    `;
-
-    let paramsHtml = '<div class="seq-transition-params">';
-    if (transition.type === 'duration') {
-      paramsHtml += `
-        <div class="seq-trig-row">
-          <span class="seq-param-label">Wait:</span>
-          <div class="seq-input-group">
-            <input type="number" min="0.05" max="120" step="0.1" class="seq-input-duration" value="${transition.duration || 1.5}">
-            <span class="seq-input-lbl">sec</span>
-          </div>
-        </div>
-      `;
-    } else if (transition.type === 'piston_target') {
-      const pistons = this.engine.pistons || [];
-      const pistonOptions = `<option value="">All Controlled Pistons</option>` +
-        pistons.map(p => `<option value="${p.id}" ${p.id === transition.pistonId ? 'selected' : ''}>${p.label || 'Piston'}</option>`).join('');
-
-      paramsHtml += `
-        <div class="seq-trig-col">
-          <div class="seq-trig-row">
-            <select class="seq-trig-piston-select">${pistonOptions}</select>
-            <select class="seq-trig-target-select">
-              <option value="tdc" ${(transition.pistonTarget || 'tdc') === 'tdc' ? 'selected' : ''}>Reaches TDC</option>
-              <option value="bdc" ${(transition.pistonTarget || 'tdc') === 'bdc' ? 'selected' : ''}>Reaches BDC</option>
-            </select>
-          </div>
-          <div class="seq-trig-row seq-trig-timeout-row">
-            <span class="seq-param-label-sm">Fallback Timeout:</span>
-            <div class="seq-input-group">
-              <input type="number" min="0.5" max="60" step="0.5" class="seq-input-timeout" value="${transition.fallbackTimeout || 6.0}">
-              <span class="seq-input-lbl">s</span>
-            </div>
-          </div>
-        </div>
-      `;
-    } else if (transition.type === 'sensor') {
-      const sensors = this.engine.sensors || [];
-      const sensorOptions = sensors.map(s => `<option value="${s.id}" ${s.id === transition.sensorId ? 'selected' : ''}>${s.label || 'Sensor'} (id: ${s.id.slice(0, 4)})</option>`).join('');
-
-      paramsHtml += `
-        <div class="seq-trig-col">
-          <div class="seq-trig-row">
-            <select class="seq-sensor-select">${sensorOptions || '<option value="">No Sensors</option>'}</select>
-            <select class="seq-metric-select">
-              <option value="pressure" ${transition.sensorMetric === 'pressure' ? 'selected' : ''}>Pressure (kPa)</option>
-              <option value="temperature" ${transition.sensorMetric === 'temperature' ? 'selected' : ''}>Temp (K)</option>
-            </select>
-            <select class="seq-op-select">
-              <option value=">=" ${transition.sensorOperator === '>=' ? 'selected' : ''}>&ge;</option>
-              <option value="<=" ${transition.sensorOperator === '<=' ? 'selected' : ''}>&le;</option>
-            </select>
-            <input type="number" class="seq-thresh-input" value="${transition.sensorThreshold !== undefined ? transition.sensorThreshold : 200}" step="10">
-          </div>
-          <div class="seq-trig-row seq-trig-timeout-row">
-            <span class="seq-param-label-sm">Timeout:</span>
-            <div class="seq-input-group">
-              <input type="number" min="0.5" max="60" step="0.5" class="seq-input-timeout" value="${transition.fallbackTimeout || 8.0}">
-              <span class="seq-input-lbl">s</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-    paramsHtml += '</div>';
-
-    const progressHtml = `
-      <div class="seq-transition-progress-track">
-        <div class="seq-transition-progress-fill" style="width: ${this.sequencer.isEnabled && this.sequencer.activeStepIndex === sIdx ? Math.round(this.sequencer.stepProgress * 100) : 0}%"></div>
-      </div>
-    `;
-
-    gate.innerHTML = gateHeader + paramsHtml + progressHtml;
-    this._bindTransitionEvents(gate, sIdx);
-
-    // Right connecting flow arrow
-    const rightArrow = document.createElement('div');
-    rightArrow.className = 'seq-flow-arrow';
-    rightArrow.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="13 6 19 12 13 18"/></svg>`;
-
-    container.appendChild(leftArrow);
-    container.appendChild(gate);
-    container.appendChild(rightArrow);
-
-    return container;
-  }
-
-  _bindStepCardEvents(card, sIdx) {
-    const step = this.sequencer.steps[sIdx];
-
-    // Name edit
-    const titleInput = card.querySelector('.seq-step-title-input');
-    titleInput?.addEventListener('input', (e) => {
-      step.name = e.target.value;
-    });
-
-    // Move left
-    card.querySelector('.seq-btn-left')?.addEventListener('click', () => {
-      if (sIdx > 0) {
-        this.sequencer.moveStep(sIdx, sIdx - 1);
-        this.render();
-      }
-    });
-
-    // Move right
-    card.querySelector('.seq-btn-right')?.addEventListener('click', () => {
-      if (sIdx < this.sequencer.steps.length - 1) {
-        this.sequencer.moveStep(sIdx, sIdx + 1);
-        this.render();
-      }
-    });
-
-    // Duplicate
-    card.querySelector('.seq-btn-dup')?.addEventListener('click', () => {
-      this.sequencer.duplicateStep(sIdx);
-      this.render();
-    });
-
-    // Delete
-    card.querySelector('.seq-btn-del')?.addEventListener('click', () => {
-      this.sequencer.removeStep(sIdx);
-      this.render();
-    });
-
-    // Add Action Dropdown
-    const addSelect = card.querySelector('.seq-select-add-type');
-    addSelect?.addEventListener('change', (e) => {
-      const type = e.target.value;
-      if (!type) return;
-
-      if (type === 'piston') {
-        const firstPiston = (this.engine.pistons || [])[0];
-        this.sequencer.addAction(sIdx, {
-          type: 'piston',
-          targetId: firstPiston ? firstPiston.id : null,
-          mode: 'drive_tdc',
-          invertTdcBdc: false
-        });
-      } else if (type === 'valve') {
-        const firstValve = (this.engine.throttleValves || [])[0];
-        this.sequencer.addAction(sIdx, {
-          type: 'valve',
-          targetId: firstValve ? firstValve.id : null,
-          state: 'open',
-          openRatio: 1.0
-        });
-      } else if (type === 'thermal') {
-        const firstThermal = [
-          ...(this.engine.thermalBlocks || []),
-          ...(this.engine.heatExchangers || []),
-          ...(this.engine.reservoirs || [])
-        ][0];
-        this.sequencer.addAction(sIdx, {
-          type: 'thermal',
-          targetId: firstThermal ? firstThermal.id : null,
-          state: 'active',
-          temperature: firstThermal ? Math.round(firstThermal.temperature) : 350
-        });
-      }
-      this.render();
-    });
-
-    // Action Items Event Listeners
-    const actionEls = card.querySelectorAll('.seq-action-item');
-    actionEls.forEach((el) => {
-      const aIdx = parseInt(el.dataset.actionIndex, 10);
-      const act = step.actions[aIdx];
-      if (!act) return;
-
-      // Target selection
-      el.querySelector('.seq-act-target-select')?.addEventListener('change', (e) => {
-        act.targetId = e.target.value;
-      });
-
-      // Remove action
-      el.querySelector('.seq-btn-remove-act')?.addEventListener('click', () => {
-        this.sequencer.removeAction(sIdx, aIdx);
-        this.render();
-      });
-
-      // Piston controls
-      if (act.type === 'piston') {
-        el.querySelector('.seq-piston-mode-select')?.addEventListener('change', (e) => {
-          act.mode = e.target.value;
-          this.render();
-        });
-
-        el.querySelector('.seq-btn-invert-tdc')?.addEventListener('click', () => {
-          act.invertTdcBdc = !act.invertTdcBdc;
-          this.render();
-        });
-
-        el.querySelector('.seq-input-piston-pos')?.addEventListener('change', (e) => {
-          act.targetPos = parseFloat(e.target.value) || 400;
-        });
-
-        el.querySelector('.seq-input-piston-speed')?.addEventListener('change', (e) => {
-          act.targetSpeed = Math.max(10, parseFloat(e.target.value) || 160);
-        });
-      }
-
-      // Valve controls
-      if (act.type === 'valve') {
-        el.querySelector('.seq-valve-state-select')?.addEventListener('change', (e) => {
-          act.state = e.target.value;
-          if (act.state === 'open') act.openRatio = 1.0;
-          else if (act.state === 'closed') act.openRatio = 0.0;
-          this.render();
-        });
-
-        el.querySelector('.seq-valve-slider')?.addEventListener('input', (e) => {
-          const val = parseInt(e.target.value, 10);
-          act.openRatio = val / 100.0;
-          const lbl = el.querySelector('.seq-valve-pct-lbl');
-          if (lbl) lbl.textContent = `${val}%`;
-        });
-      }
-
-      // Thermal controls
-      if (act.type === 'thermal') {
-        el.querySelector('.seq-thermal-state-select')?.addEventListener('change', (e) => {
-          act.state = e.target.value;
-          this.render();
-        });
-
-        el.querySelector('.seq-thermal-temp-input')?.addEventListener('change', (e) => {
-          act.temperature = Math.max(5, Math.min(3000, parseFloat(e.target.value) || 300));
-        });
-      }
-    });
-  }
-
-  _bindTransitionEvents(gate, sIdx) {
-    const step = this.sequencer.steps[sIdx];
-    const trans = step.transition || step.trigger;
-
-    // Transition type select
-    gate.querySelector('.seq-transition-type-select')?.addEventListener('change', (e) => {
-      trans.type = e.target.value;
-      if (trans.type === 'piston_target') {
-        trans.pistonTarget = trans.pistonTarget || 'tdc';
-        trans.fallbackTimeout = trans.fallbackTimeout || 6.0;
-      } else if (trans.type === 'sensor') {
-        trans.fallbackTimeout = trans.fallbackTimeout || 8.0;
-      }
-      this.render();
-    });
-
-    // Duration input
-    gate.querySelector('.seq-input-duration')?.addEventListener('change', (e) => {
-      trans.duration = Math.max(0.05, parseFloat(e.target.value) || 1.5);
-    });
-
-    // Piston target select
-    gate.querySelector('.seq-trig-piston-select')?.addEventListener('change', (e) => {
-      trans.pistonId = e.target.value || null;
-    });
-
-    gate.querySelector('.seq-trig-target-select')?.addEventListener('change', (e) => {
-      trans.pistonTarget = e.target.value;
-    });
-
-    // Fallback timeout
-    gate.querySelectorAll('.seq-input-timeout').forEach(input => {
-      input.addEventListener('change', (e) => {
-        trans.fallbackTimeout = Math.max(0.5, parseFloat(e.target.value) || 6.0);
-      });
-    });
-
-    // Sensor controls
-    gate.querySelector('.seq-sensor-select')?.addEventListener('change', (e) => {
-      trans.sensorId = e.target.value || null;
-    });
-
-    gate.querySelector('.seq-metric-select')?.addEventListener('change', (e) => {
-      trans.sensorMetric = e.target.value;
-    });
-
-    gate.querySelector('.seq-op-select')?.addEventListener('change', (e) => {
-      trans.sensorOperator = e.target.value;
-    });
-
-    gate.querySelector('.seq-thresh-input')?.addEventListener('change', (e) => {
-      trans.sensorThreshold = parseFloat(e.target.value) || 200;
-    });
+    return false;
   }
 }
 
@@ -6942,7 +8945,7 @@ window.engine = engine;
 window.renderer = renderer;
 const tempChart = new TempTimeChart(tempChartCanvas);
 const velChart = new VelHistChart(velChartCanvas);
-const sequencerUI = new SequencerUI(engine);
+const sequencerUI = new SequencerUI(engine, renderer);
 window.sequencerUI = sequencerUI;
 
 renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
@@ -8543,6 +10546,9 @@ function updateElementsList() {
       e.stopPropagation();
       const childIdx = parseInt(el.dataset.childindex, 10);
       const childItem = elements[childIdx];
+      if (childItem && window.sequencerUI && window.sequencerUI.handleItemPicked(childItem)) {
+        return;
+      }
       if (childItem) {
         selectedItems = [childItem];
         updateElementsList();
@@ -8609,6 +10615,9 @@ function updateElementsList() {
       const card = hdr.closest('.element-item-card');
       const idx = parseInt(card.dataset.elindex, 10);
       const item = elements[idx];
+      if (item && window.sequencerUI && window.sequencerUI.handleItemPicked(item)) {
+        return;
+      }
       if (item) {
         if (selectedItems.includes(item) && selectedItems.length === 1) {
           selectedItems = [];
@@ -9518,6 +11527,12 @@ canvas.addEventListener('mousedown', (e) => {
 
   const clickedItem = findItemAt(coords.worldX, coords.worldY);
 
+  // Sequencer Element Picking Interceptor
+  if (clickedItem && window.sequencerUI && window.sequencerUI.handleItemPicked(clickedItem)) {
+    isMouseDown = false;
+    return;
+  }
+
   // In Simulation Mode or Direct Click: Toggle interactive thermal/mechanical elements
   if (clickedItem && (isSimulating || (activeTool === 'select' && !e.shiftKey))) {
     if (
@@ -9686,6 +11701,15 @@ window.addEventListener('mousemove', (e) => {
     renderer.panX = panStartCamera.x + (coords.screenX - panStartScreen.x);
     renderer.panY = panStartCamera.y + (coords.screenY - panStartScreen.y);
     updatePopupPosition();
+    return;
+  }
+
+  // Sequencer Element Picking Hover Highlight
+  if (window.sequencerUI?.actionDialog?.isPicking) {
+    const hoveredItem = findItemAt(coords.worldX, coords.worldY);
+    const isValid = hoveredItem && window.sequencerUI.actionDialog.isPickable(hoveredItem);
+    renderer.highlightedSequencerItem = isValid ? hoveredItem : null;
+    canvas.style.cursor = isValid ? 'pointer' : 'crosshair';
     return;
   }
 

@@ -932,9 +932,13 @@ export class Engine {
 
     if (state.cycleSequencer && this.sequencer) {
       this.sequencer.importState(state.cycleSequencer);
+      if (this.sequencer.steps.length === 0) {
+        this.sequencer.addStep({ name: 'Step 1' });
+      }
     } else if (this.sequencer) {
       this.sequencer.reset();
       this.sequencer.steps = [];
+      this.sequencer.addStep({ name: 'Step 1' });
       this.sequencer.phases = this.sequencer.steps;
     }
 

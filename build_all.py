@@ -20,19 +20,45 @@ files_order = [
     'src/physics/ThrottleValve.js',
     'src/render/Colormap.js',
     'src/render/ParticleGLRenderer.js',
+    'src/control/SequencerConditions.js',
+    'src/control/SequencerExecutor.js',
     'src/control/CycleSequencer.js',
     'src/physics/Engine.js',
     'src/render/Renderer.js',
     'src/analytics/TempTimeChart.js',
     'src/analytics/VelHistChart.js',
     'src/analytics/ChamberChart.js',
+    'src/control/SequencerCatalogDefaults.js',
+    'src/control/SequencerFieldControls.js',
+    'src/control/SequencerActionFields.js',
+    'src/control/SequencerActionDialog.js',
+    'src/control/SequencerTransitionBuilder.js',
+    'src/control/SequencerTransitionDialog.js',
+    'src/control/SequencerSummary.js',
+    'src/control/SequencerTimeline.js',
+    'src/control/SequencerDock.js',
     'src/control/SequencerUI.js',
     'src/presets/index.js',
     'src/main.js'
 ]
 
+css_files_order = [
+    'css/variables.css',
+    'css/base.css',
+    'css/canvas.css',
+    'css/ribbon.css',
+    'css/sidebar-left.css',
+    'css/sidebar-right.css',
+    'css/playback.css',
+    'css/modals.css',
+    'css/splash.css',
+    'css/sequencer.css'
+]
+
 def build():
     base_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    
+    # 1. Bundle JavaScript Engine
     combined_js = "// ParticleLab Bundled Engine\n"
     for rel_path in files_order:
         path = os.path.join(base_dir, rel_path)
@@ -48,13 +74,18 @@ def build():
     with open(bundle_path, 'w', encoding='utf-8') as f:
         f.write(combined_js)
 
-    # Build Standalone HTML
+    # 2. Bundle Modular CSS
+    combined_css = "/* Thermo Sandbox Bundled Stylesheet */\n"
+    for rel_path in css_files_order:
+        path = os.path.join(base_dir, rel_path)
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        combined_css += f"\n/* --- {rel_path} --- */\n" + content + "\n"
+
+    # 3. Build Standalone HTML Bundle
     index_path = os.path.join(base_dir, 'index.html')
     with open(index_path, 'r', encoding='utf-8') as f:
         html = f.read()
-    css_path = os.path.join(base_dir, 'style.css')
-    with open(css_path, 'r', encoding='utf-8') as f:
-        css = f.read()
 
     import base64
     logo_path = os.path.join(base_dir, 'logo.png')
@@ -63,7 +94,9 @@ def build():
             logo_b64 = base64.b64encode(f.read()).decode('utf-8')
         html = html.replace('src="logo.png"', f'src="data:image/png;base64,{logo_b64}"')
 
-    standalone_html = re.sub(r'<link rel="stylesheet" href="style\.css(?:\?[^"]*)?">', '<style>\n' + css + '\n</style>', html)
+    # Replace modular CSS link tags (or legacy style.css) with inlined combined_css
+    css_link_pattern = r'(?:\s*<!--.*?-->\s*)?(?:\s*<link rel="stylesheet" href="(?:style\.css|css/[^"]+)(?:\?[^"]*)?">\s*)+'
+    standalone_html = re.sub(css_link_pattern, '\n  <style>\n' + combined_css + '  </style>\n', html)
     standalone_html = re.sub(r'<script src="bundle\.js(?:\?[^"]*)?"></script>', '<script>\n' + combined_js + '\n</script>', standalone_html)
 
     standalone_path = os.path.join(base_dir, 'ParticleLab_Standalone.html')
@@ -74,4 +107,3 @@ def build():
 
 if __name__ == '__main__':
     build()
-

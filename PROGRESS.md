@@ -78,10 +78,149 @@
   - Neutral dark slate palette (`#0c0e14`, `#11141c`, `#131620`, `#141720`) with 0 occurrences of bluish `#181d28` and `#121622`.
   - 100% English labels, badges, tooltips, dialogs, and states.
 
+### J. Modular CSS Architecture (Vibe-Coding Ready)
+- [x] **Decomposition of 3,473-Line CSS Monolith**:
+  - Extracted monolithic `style.css` into 10 domain-specific, concise modules in `css/`:
+    `variables.css`, `base.css`, `canvas.css`, `ribbon.css`, `sidebar-left.css`, `sidebar-right.css`, `playback.css`, `modals.css`, `splash.css`, and `sequencer.css`.
+  - 0 missing rules, 0 dropped properties, 100% bracket balance verified across all modules.
+- [x] **Fast Vibe-Coding Iteration Workflow**:
+  - `index.html` connects modular stylesheets directly, allowing instant hot reload on save without rebuilds.
+  - Browser DevTools directly map inspecting elements to component CSS files (e.g. `sequencer.css:42` instead of `style.css:3290`).
+- [x] **Build System Integration**:
+  - `build_all.py` updated with `css_files_order` to bundle all CSS modules into single standalone inlined `<style>` block for `ParticleLab_Standalone.html`.
+  - `style.css` converted into a clean master `@import` aggregator hub.
+
+### K. Clean Re-Implementation of Thermodynamic Cycle Sequencer
+- [x] **Stage 1: Floating Dock & Timeline Layout Shell**:
+  - Unified `#unifiedBottomDock` containing `#unifiedDockBar` with playback controls, time counter, speed slider, fluid model toggle, gravity toggle, divider, and clean `[⏱ Sequencer]` button (`#btnToggleSequencer`) with active LED dot and expand chevron.
+  - Smooth drawer expansion to `width: min(1240px, calc(100vw - 760px)); min-width: 540px; height: 310px;` with comfortable clearance to sidebars (336px left, 396px right).
+  - Dark glassmorphism, monochrome stroke SVGs, strictly 0 emojis.
+- [x] **Stage 2: Element Selection & Action Configuration Modal**:
+  - Interactive canvas & outline picking mode (`+ Add Element` in Step card with toast banner and ESC cancel).
+  - Action modal displaying exact inspector properties for Pistons, Valves (Manual, Check, Relief, Throttle), Thermals (Reservoir, Block, Heat Exchanger, Regenerator), Emitters, Sinks, and Regulators.
+  - Excludes Spawner (Gas) and Chamber (SensorZone); excludes thickness for walls and valves.
+  - Full parameter snapshot saving and compact action badges with Edit/Delete buttons.
+- [x] **Stage 3: Transition Gates & State Machine Execution Loop**:
+  - Compound transition configuration dialog with Duration, Piston target (TDC, BDC, px), and Sensor chamber (Pressure/Temp, >=, <=) conditions.
+  - Logical `AND` / `OR` combining gates with safety fallback timeout.
+  - Modularized `src/control/` into clean files strictly `< 350` lines each:
+    `CycleSequencer.js`, `SequencerConditions.js`, `SequencerExecutor.js`, `SequencerActionFields.js`, `SequencerFieldControls.js`, `SequencerActionDialog.js`, `SequencerTransitionDialog.js`, `SequencerTimeline.js`, `SequencerDock.js`, and `SequencerUI.js`.
+  - Zero regressions on existing features; verified with `tests/verify_all.py` and CDP headless Chrome test suite.
+
+### L. Object-Anchored Sequencer Action Dialog & TOOL_CATALOG Parameter Alignment
+- [x] **Object-Anchored Floating CAD Modal**:
+  - Replaced fixed center `.modal-overlay` with a floating CAD panel (`.seq-floating-action-dialog`) anchored directly next to the selected canvas object.
+  - Automatic viewport clamping against left sidebar (340px), right sidebar, top ribbon (115px), and bottom sequencer drawer (280px).
+  - Smooth flip to left side if object is near right screen boundary.
+  - Free header dragging (`#seqActHeader`) for manual repositioning by the user.
+- [x] **Dezenter Cyan-Glow Canvas Highlight**:
+  - Highlights the selected element on the 2D canvas with a subtle glowing cyan outline (`#38bdf8`, 15px shadow blur, 2.5px stroke) without resize handles.
+  - Automatically activates when configuring an action and clears to `null` on save, cancel, or close.
+- [x] **Smooth Camera Focusing**:
+  - Clicking an action card in the sequencer timeline automatically checks if the targeted element is in view; if obscured or offscreen, pans camera smoothly to center the element.
+- [x] **Full Parameter Alignment with `TOOL_CATALOG.md`**:
+  - **DualInput Synchronizers**: Gekoppelte Slider- und Zahlenfelder mit Live-Einheitenanzeige (`makeDualInput` / `attachDualInput`).
+  - **Pistons**: Stroke commands (`drive_tdc`, `drive_bdc`, `hold`, `free`), motion physical mode (`free`, `spring`, `motorized`, `damper`), drive speed, piston mass (0–150 kg), conductivity κ, dynamic mode-dependent inputs (`springK`, `frequency`/`phase`, `dampingCoeff`).
+  - **Valves**: Manual Valve (Open/Closed toggle, κ), Check Valve (5-button Forward → / Reverse ← toggle, κ), Relief Valve (1-Way/2-Way segmented toggle, Trigger Pressure 50–1000 Pa, Hysteresis Band 0–100 Pa, κ), Throttle Valve (Active/Bypassed, Opening Ratio 0–100%, κ).
+  - **Thermals**: Reservoir (Active/Insulated, Temp 0–1000 K, Conductance), Heat Exchanger (Active/Inactive, Temp, κ), Regenerator (Active/Inactive, Horizontal/Vertical toggle, Temp, Heat Capacity 50–1500 J/K, κ), Storage Block (Active/Inactive, Temp, Heat Capacity, κ).
+  - **Particles**: Emitter (Firing/Paused, 5-button direction toggle `[→] [←] [↓] [↑] [360°]`, Rate 1–50 /s, Temp 20–800 K, Mass 0.2–5.0, Capacity Limit), Sink (Active/Inactive, 5-direction toggle, 3-button thermal filter `[All] [Hot Only] [Cold Only]`, Threshold Temp, Absorption Efficiency 10%–100%, Capacity Limit), Regulator (Active/Inactive, Target Count 5–200, Hysteresis Band 1–15, Temp, Mass, Rate).
+  - **Walls**: Conductivity κ.
+  - Excluded thickness for walls and valves; excluded Spawner (Gas) and Chamber (SensorZone).
+### M. Sequencer UI Enhancements (Wider Drawer, Active/Loop Redesign, Accordions & Defaults)
+- [x] **1. Wider Sequencer Drawer Expansion**:
+  - Expanded `.unified-bottom-dock` on `body.sequencer-expanded` to span the entire gap between left and right sidebars (`left: 352px; right: 412px; width: auto; transform: none;`).
+  - Preserves exact 16px margins to both sidebars, providing maximum horizontal canvas visibility while maintaining dock ergonomics.
+- [x] **2. Centered Controls & Lifted Floating Panels**:
+  - Center-aligned playback and sequencer header controls in `.unified-dock-bar` (`justify-content: center;`).
+  - Lifted `.floating-zoom-panel` (`bottom: 350px;`) and `#floatingVelLegend` (`bottom: 494px;`) with smooth 0.28s cubic-bezier transitions when the sequencer drawer opens.
+- [x] **3. Active & Loop Mode Buttons Redesign**:
+  - Replaced checkbox switch toggles with consistent green status buttons (`#seqBtnActive`, `#seqBtnLoop`) featuring glowing indicator dots (`.seq-mode-dot`) matching `.model-toggle-btn.active`.
+  - Live two-way synchronization with `engine.sequencer.isEnabled` and `engine.sequencer.isLooping`.
+- [x] **4. Step Element Accordions & Smooth Camera Zoom**:
+  - Formatted step action cards as expandable accordions (`.seq-action-card`, `.seq-action-header`, `.seq-action-body`) modeled after the Canvas Elements Outline list.
+  - Clicking the accordion header expands the card to display configured parameter key-values (`SequencerSummary.formatActionPropsHTML`) and smoothly pans/zooms the camera onto the canvas object (`_focusCameraOnItem`) with a glowing cyan outline.
+  - **Does not trigger the action configuration modal popup** on accordion click; the modal only opens when explicitly clicking the Edit pen button (`.btn-edit-action`).
+- [x] **5. Canonical Default Indicators & Reset to Default Button**:
+  - Integrated `SequencerCatalogDefaults.js` referencing single-source-of-truth baseline defaults from `TOOL_CATALOG.md`.
+  - Added subtle default value tags (`.seq-def-indicator`) to each parameter row in the action configuration dialog.
+  - Live highlighting (`.field-row.is-modified`) triggers whenever a user changes a parameter away from its catalog default (highlighted label + amber indicator).
+  - Added `Reset to Default` button (`#seqActBtnReset`) in the action dialog footer to instantly restore standard catalog settings for the element.
+- [x] **Modular Architecture & Test Verification**:
+  - Created `SequencerCatalogDefaults.js` (101 lines) and `SequencerSummary.js` (141 lines).
+  - All 12 files in `src/control/*.js` strictly maintained under the 350-line limit (verified by `tests/verify_all.py`).
+  - Full end-to-end Chrome CDP automated test suite (`scratch/test_sequencer_modal_cdp.py`) passes 100% with 0 errors.
+
+### N. Sequencer UI Polish: Slider Default Notches, Header Reset Arrow, In-Line Accordion Sliders & Canvas Hover Highlighting
+- [x] **1. Slider Default Notch Markers**:
+  - Direct visual tick notches (`.slider-notch`) placed on the track of every dual-input slider indicating the canonical default value from `TOOL_CATALOG.md`.
+  - Positioned via dynamic percentage calculation `((defVal - min) / (max - min)) * 100%` within `.slider-track-wrap`.
+- [x] **2. Top-Left Modal Reset Arrow**:
+  - Replaced the bottom-left text button in `#seqActionDialog` with a compact circular reset button (`.btn-dialog-reset`) in the top-left of the modal header (`#seqActHeader`).
+  - Styled with a monochrome SVG reset arrow and amber hover glow; removed `#seqActBtnReset` from the modal footer.
+- [x] **3. In-Line Interactive Sliders in Step Accordions**:
+  - Rendered interactive dual sliders, numbers, and direction/state toggles directly inside the expanded step accordion body (`.seq-action-body`).
+  - Removed the edit button (`.btn-edit-action`) from the action card header.
+  - Live two-way synchronization: adjustments instantly update `step.actions[aIdx]` and notify the sequencer state without re-rendering the DOM or losing slider drag focus.
+- [x] **4. Canvas Hover Highlighting during Picking Mode**:
+  - When clicking `+ Add Element` (`isPicking === true`), hovering over any pickable canvas element immediately activates the glowing cyan outline (`renderer.highlightedSequencerItem`) and switches the canvas cursor to `pointer`.
+  - Automatically filters out unpickable objects (Spawners and Chambers); safely clears highlight when mouse moves away or picking mode terminates.
+- [x] **5. Step Accordion Vertical Fit & Drawer Elevation (420px)**:
+  - Increased bottom dock drawer height from 320px to 420px on `body.sequencer-expanded`, providing ample vertical space.
+  - Made `.seq-actions-list` smoothly scrollable (`flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;`) while keeping `+ Add Element` permanently pinned at the bottom (`flex-shrink: 0; margin-top: 6px;`).
+  - Applied compact CAD typography and margins to `.seq-action-body` (tighter margins, 10px fonts, 20-24px input heights) allowing 5+ parameter rows to be visible simultaneously at a glance.
+  - Lifted `.floating-zoom-panel` (`bottom: 450px;`) and `.floating-vel-legend` (`bottom: 594px;`) and updated camera centering offsets (`dockH = 420`) in `SequencerTimeline.js` and `SequencerActionDialog.js`.
+- [x] **Modular Architecture & Test Verification**:
+  - All 12 files in `src/control/*.js` strictly maintained under the 350-line limit (verified by `tests/verify_all.py`).
+  - Full end-to-end Chrome CDP automated test suite (`scratch/test_sequencer_modal_cdp.py`) passes 100% with 0 errors.
+
+### O. Sequencer UI Bugfixes: Splash Screen Dock, Guaranteed Default Step, Single Accordion & Step Overflow Scrolling
+- [x] **1. Splash Screen Dock Bar Visibility Fix**:
+  - Resolved leakage of the unified bottom dock (`#unifiedBottomDock`) on the welcome splash screen by adding `.unified-bottom-dock` and `#unifiedBottomDock` to `css/splash.css` under `body.splash-mode` with `display: none !important;`.
+- [x] **2. Guaranteed Default Step 1**:
+  - Ensured the sequencer always starts with at least one default step (`Step 1`) across all scenarios: initial load, `btnSplashNew` click, `engine.clear()`, `engine.sequencer.reset()`, and profile state export/import (`CycleSequencer.js`, `Engine.js`, `main.js`).
+- [x] **3. Single Open Accordion per Step Card**:
+  - Modified accordion expansion handling in `SequencerTimeline.js` (`this.expandedActions.clear()` before setting active key) so opening any element configuration accordion automatically collapses all other open accordions.
+- [x] **4. Step Card Vertical Overflow Scrolling**:
+  - Resolved card squishing and clipping bug by setting `flex-shrink: 0;` on `.seq-action-card` and `.seq-action-header` in `css/sequencer.css`.
+  - Step action cards maintain their natural height; when multiple elements are added or an item is expanded, `.seq-actions-list` enables clean vertical scrolling (`overflow-y: auto; scrollbar-width: thin;`) while keeping `+ Add Element` permanently pinned at the bottom inside `.seq-step-body`.
+  - Added `flex-shrink: 0;` to all child elements in `.unified-dock-bar` to guarantee that playback, fluid model, gravity, and sequencer buttons never wrap or distort when the drawer expands.
+
+### P. Arbitrary 2D Compound Transition Conditions Builder (Brackets & Logic Precedence)
+- [x] **1. Canonical 2D Data Model & Backwards Compatibility**:
+  - Transformed the sequencer step transition structure from a flat AND/OR list into an arbitrary 2D block grid `{ rows: [ { conditions: [...], operators: [...] } ], rowOperators: [...], fallbackTimeout: 10.0 }`.
+  - Added `SequencerConditions.normalizeTransition(trans)` to automatically migrate legacy single-condition and flat compound transition models into the 2D structure without data loss.
+- [x] **2. Mathematical Boolean Precedence Evaluation**:
+  - Implemented `SequencerConditions.evaluateSequence(evalResults, operators)` applying standard mathematical Boolean precedence (AND binds before OR: `a & b || c & d` $\rightarrow$ `(a & b) || (c & d)`).
+  - Evaluates each bracketed row and combines the rows via `rowOperators`.
+  - Progress bar calculation: OR branches evaluate to $\max(\text{progress})$, while AND branches evaluate to $\text{average}(\text{progress})$.
+- [x] **3. Interactive 2D Visual Builder (`SequencerTransitionBuilder.js`)**:
+  - Built modular 2D transition editor rendering bracketed rows `(` ... `)` with row action buttons (`[+ &]`, `[+ ||]`, and delete row).
+  - Compact Square Monochrome SVG Chips: When adding conditions or opening the editor, inactive conditions collapse into 42×42px square chips displaying clean CAD SVG icons (`⏱` Stopwatch, `🎯` Target/Piston, `📡` Dial Gauge – strictly no colorful emojis) with subtle value tags (`1.5s`, `TDC`, `200Pa`).
+  - Single Expanded Active Chip: Clicking any collapsed chip expands it into an interactive property card (Duration slider, Piston target selector, Sensor chamber metric selector) while automatically collapsing all other chips in the matrix.
+  - Interactive Operator Pills: Horizontal pills between chips and vertical pills between rows display `&` and `||` and toggle on click.
+  - Grid Row Creation: Added `[+ & Zeile]` and `[+ || Zeile]` buttons beneath the grid to easily spawn new bracketed logic rows.
+- [x] **4. Transition Dialog Modal Integration (`SequencerTransitionDialog.js`)**:
+  - Cleaned up the modal dialog, delegating 2D grid rendering to `SequencerTransitionBuilder` and reducing file length to 130 lines.
+  - Retained the safety fallback timeout slider (1.0–60.0s, default 10.0s).
+- [x] **5. Timeline Track Formula Preview (`SequencerSummary.js` & `SequencerTimeline.js`)**:
+  - Rendered a compact mathematical expression with clean monochrome symbols and bracketed groups on the timeline transition node (e.g. `(⏱ 1.5s & 🎯 TDC) || (📡 P>=200Pa)`).
+  - Updated node width (`min-width: 150px; max-width: 200px;`) and added full details in tooltip.
+- [x] **6. Modular Architecture & Test Verification**:
+  - Added `SequencerTransitionBuilder.js` (314 lines) and updated `build_all.py`.
+  - All 13 control files strictly verified under the 350-line limit by `tests/verify_all.py`.
+  - Automated CDP test suite (`scratch/test_transition_cdp.py`) passes 100% with verified modal and timeline screenshots.
+- [x] **7. Expanded Condition Chip Layout & Control Sizing Fix**:
+  - Resolved horizontal overflow where sensor controls (Metric select, Operator select, and Threshold input) protruded past the right border of `.seq-trans-chip.is-expanded`.
+  - Expanded chip dimensions increased from `min-width: 175px; max-width: 220px;` to `min-width: 220px; max-width: 260px;`.
+  - Added dedicated compact styling in `css/sequencer.css` for `.seq-trans-chip .styled-select` (`height: 24px; font-size: 10px; padding: 2px 5px;`) and removed native webkit spinner buttons from numeric threshold inputs.
+  - Styled `.btn-del-chip` with clean CAD button styling and hover feedback, eliminating unstyled native white button bevels.
+  - Initialized default fields (`pressure`, `>=`, `200`, `tdc`, `1.5s`) automatically upon switching type in `SequencerTransitionBuilder.js`.
+
 ---
 
 ## 3. Next Session Starting Tasks
 - [ ] Add CSV export for chamber and dashboard time-series telemetry data.
 - [ ] Add interactive particle inspector (click single particle to track trajectory and velocity history).
-- [ ] Extend Sequencer with additional output targets (Regulators, Emitters, Sinks) and compound conditions (AND/OR).
 - [ ] Phase 3 Performance: Migrate core SoA physics to dedicated Web Worker for 35,000+ particles.
+
+

@@ -42,6 +42,7 @@ export class Renderer {
     this.snapCursor = null; // { x, y } in world coordinates
 
     this.maxSpeedReference = 380;
+    this.highlightedSequencerItem = null;
   }
 
   setGLCanvas(glCanvas) {
@@ -245,6 +246,11 @@ export class Renderer {
       }
     }
 
+    // 9.5 Sequencer Action Selection Glow (Subtle Cyan Outline, No Handles)
+    if (this.highlightedSequencerItem) {
+      this.drawSequencerHighlight(this.highlightedSequencerItem);
+    }
+
     // 10. Draft Previews (Valves, Walls, Rectangles, Marquee Selection)
     if (this.draftInfo && this.draftInfo.isDrafting) {
       this.drawDraft(this.draftInfo);
@@ -255,6 +261,41 @@ export class Renderer {
       this.drawSnapIndicator(this.snapCursor.x, this.snapCursor.y, this.snapCursor.isVertex);
     }
 
+    ctx.restore();
+  }
+
+  drawSequencerHighlight(item) {
+    if (!item) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.shadowColor = '#38bdf8';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 2.5;
+
+    if (item.p1 && item.p2) {
+      ctx.lineWidth = Math.max(4, (item.thickness || 4) + 4);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(item.p1.x, item.p1.y);
+      ctx.lineTo(item.p2.x, item.p2.y);
+      ctx.stroke();
+    } else {
+      let b = null;
+      if (typeof item.getBounds === 'function') {
+        b = item.getBounds();
+      } else if (item.x !== undefined && item.y !== undefined) {
+        b = { left: item.x, top: item.y, width: item.width || 40, height: item.height || 40 };
+      }
+      if (b) {
+        const left = b.left !== undefined ? b.left : (b.x !== undefined ? b.x : 0);
+        const top = b.top !== undefined ? b.top : (b.y !== undefined ? b.y : 0);
+        const width = b.width !== undefined ? b.width : ((b.right !== undefined ? b.right : left + 40) - left);
+        const height = b.height !== undefined ? b.height : ((b.bottom !== undefined ? b.bottom : top + 40) - top);
+        const pad = 4;
+        ctx.strokeRect(left - pad, top - pad, width + pad * 2, height + pad * 2);
+      }
+    }
     ctx.restore();
   }
 
