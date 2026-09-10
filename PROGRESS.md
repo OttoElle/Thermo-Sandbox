@@ -208,7 +208,7 @@
 - [x] **6. Modular Architecture & Test Verification**:
   - Added `SequencerTransitionBuilder.js` (314 lines) and updated `build_all.py`.
   - All 13 control files strictly verified under the 350-line limit by `tests/verify_all.py`.
-  - Automated CDP test suite (`scratch/test_transition_cdp.py`) passes 100% with verified modal and timeline screenshots.
+  - Automated CDP test suite (`tests/test_transition_cdp.py`) passes 100% with verified modal and timeline screenshots.
 - [x] **7. Expanded Condition Chip Layout & Control Sizing Fix**:
   - Resolved horizontal overflow where sensor controls (Metric select, Operator select, and Threshold input) protruded past the right border of `.seq-trans-chip.is-expanded`.
   - Expanded chip dimensions increased from `min-width: 175px; max-width: 220px;` to `min-width: 220px; max-width: 260px;`.
@@ -216,11 +216,22 @@
   - Styled `.btn-del-chip` with clean CAD button styling and hover feedback, eliminating unstyled native white button bevels.
   - Initialized default fields (`pressure`, `>=`, `200`, `tdc`, `1.5s`) automatically upon switching type in `SequencerTransitionBuilder.js`.
 
+### Q. Repository Cleanup, GitHub Deployment & Comprehensive Documentation Overhaul
+- [x] **1. Repository Tree Cleanup**:
+  - Removed duplicate `assets/logo.png` binary, consolidating to single source of truth at root `logo.png`.
+  - Migrated automated headless CDP test suites from `scratch/` into dedicated `tests/` (`test_sequencer_modal_cdp.py`, `test_transition_cdp.py`).
+  - Added `scratch/` to `.gitignore` to keep public repository free of temporary scratch outputs.
+- [x] **2. Comprehensive README.md Overhaul**:
+  - Rewrote `README.md` with high-level conceptual overview (emergent thermodynamics from microscopic kinetics, CAD design philosophy, GRAFCET state machine automation, live analytics, built-in experiment presets, and zero-dependency standalone distribution).
+- [x] **3. GitHub Remote Sync**:
+  - Initialized git tracking and pushed all modular CSS, 2D sequencer architecture, tests, and documentation to `https://github.com/OttoElle/Thermo-Sandbox` on branch `main`.
+
 ---
 
 ## 3. Next Session Starting Tasks
 - [ ] Add CSV export for chamber and dashboard time-series telemetry data.
 - [ ] Add interactive particle inspector (click single particle to track trajectory and velocity history).
 - [ ] Phase 3 Performance: Migrate core SoA physics to dedicated Web Worker for 35,000+ particles.
+
 
 
