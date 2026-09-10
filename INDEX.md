@@ -76,3 +76,8 @@
 
 ## src/
 - **main.js**: Application orchestrator, dual-canvas synchronization, ribbon toolbar events, inspector synchronization, tool previews, splash screen management, and animation loop.
+
+## tests/ (Automated Verification & CDP Test Suites)
+- **verify_all.py**: Master test suite running file size audits (< 350 lines), CSS syntax checks, build verification, and headless browser runtime test.
+- **test_sequencer_modal_cdp.py**: Chrome DevTools Protocol end-to-end test verifying sequencer UI, dialogs, exclusive accordions, and scrolling.
+- **test_transition_cdp.py**: CDP test suite verifying 2D compound transition builder, Boolean precedence, square chip collapse, and cycle execution.

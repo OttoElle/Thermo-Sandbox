@@ -16,7 +16,6 @@ __pycache__/
 .vscode/
 .idea/
 
-# Scratch temp outputs
-scratch/*.png
-scratch/*.txt
+# Scratch & temporary directories
+scratch/
 
