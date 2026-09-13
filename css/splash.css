@@ -19,6 +19,7 @@ body.splash-mode .modal-overlay:not(#splashOverlay) {
   display: none !important;
 }
 
+body.splash-mode #bgCanvas,
 body.splash-mode #gpuCanvas,
 body.splash-mode #glCanvas,
 body.splash-mode #simCanvas {
@@ -26,7 +27,7 @@ body.splash-mode #simCanvas {
   transition: filter 0.4s ease;
 }
 
-#gpuCanvas, #glCanvas, #simCanvas {
+#bgCanvas, #gpuCanvas, #glCanvas, #simCanvas {
   transition: filter 0.4s ease;
 }
 

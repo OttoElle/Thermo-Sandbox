@@ -19,9 +19,11 @@ import { Regulator } from './physics/Regulator.js';
 import { ThrottleValve } from './physics/ThrottleValve.js';
 import { Presets } from './presets/index.js';
 import { SequencerUI } from './control/SequencerUI.js';
+import { ParticleGPUCompute } from './physics/ParticleGPUCompute.js';
 
 // Canvas DOM Elements
 const canvas = document.getElementById('simCanvas');
+const bgCanvas = document.getElementById('bgCanvas');
 const gpuCanvas = document.getElementById('gpuCanvas') || document.getElementById('glCanvas');
 const tempChartCanvas = document.getElementById('tempChartCanvas');
 const velChartCanvas = document.getElementById('velChartCanvas');
@@ -141,6 +143,10 @@ const btnInfoClose = document.getElementById('btnInfoClose');
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  if (bgCanvas) {
+    bgCanvas.width = window.innerWidth;
+    bgCanvas.height = window.innerHeight;
+  }
   if (gpuCanvas) {
     gpuCanvas.width = window.innerWidth;
     gpuCanvas.height = window.innerHeight;
@@ -154,16 +160,23 @@ resizeCanvas();
 
 // Master Physics Engine, Renderer & Analytics
 const engine = new Engine(2500, 2500);
-const renderer = new Renderer(canvas);
+const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;
 
-// Asynchronously initialize WebGPU
+// Asynchronously initialize WebGPU & GPU Compute
 if (gpuCanvas) {
   renderer.initGPU(gpuCanvas).then(isSupported => {
     if (!isSupported) {
       const errOverlay = document.getElementById('webgpuErrorOverlay');
       if (errOverlay) errOverlay.style.display = 'flex';
+    } else if (renderer.gpuRenderer && renderer.gpuRenderer.device) {
+      const gpuCompute = new ParticleGPUCompute(renderer.gpuRenderer.device);
+      engine.gpuCompute = gpuCompute;
+      window.gpuCompute = gpuCompute;
+      if (engine.particles && engine.particles.length > 0) {
+        gpuCompute.uploadParticles(engine.particles);
+      }
     }
   }).catch(err => {
     console.error('WebGPU Init Error:', err);

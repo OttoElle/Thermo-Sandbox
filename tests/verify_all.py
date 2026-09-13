@@ -103,6 +103,15 @@ def test_webgpu_runtime():
         raise AssertionError("WebGPU runtime test failed!")
     print("WebGPU runtime verification PASSED.")
 
+def test_gpu_compute():
+    print("\n--- 6. WebGPU Compute Shaders & Zero-Copy 50,000 Particles Verification ---")
+    res = subprocess.run([sys.executable, 'tests/test_gpu_compute_cdp.py'], capture_output=True, text=True)
+    print(res.stdout.strip())
+    if res.returncode != 0:
+        print(res.stderr.strip())
+        raise AssertionError("GPU Compute 50,000 particle test failed!")
+    print("WebGPU Compute Shaders & Zero-Copy verification PASSED.")
+
 def main():
     print("==================================================")
     print("  Thermo Sandbox Verification Test Suite          ")
@@ -112,6 +121,7 @@ def main():
     test_build()
     test_browser_cdp()
     test_webgpu_runtime()
+    test_gpu_compute()
     print("\n==================================================")
     print("  ALL VERIFICATION TESTS COMPLETED SUCCESSFULLY!  ")
     print("==================================================")

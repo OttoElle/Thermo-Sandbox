@@ -27,9 +27,11 @@
   <input type="file" id="fileImportInput" accept=".json" style="display: none;">
 
   <div class="app-viewport">
-    <!-- Hardware Accelerated WebGPU Particle Canvas -->
+    <!-- Background & Dot Grid Canvas (Layer 0, behind WebGPU particles) -->
+    <canvas id="bgCanvas"></canvas>
+    <!-- Hardware Accelerated WebGPU Particle Canvas (Layer 1) -->
     <canvas id="gpuCanvas"></canvas>
-    <!-- Fullscreen Infinite UI & Geometry Canvas -->
+    <!-- Fullscreen Infinite UI & Geometry Canvas (Layer 2, transparent overlay) -->
     <canvas id="simCanvas"></canvas>
 
     <!-- WebGPU Modern Browser Requirement Overlay (Shown only if WebGPU is unavailable) -->

@@ -1,8 +1,19 @@
 /* Thermo Sandbox - Canvases, Floating Overlays & Context Menus */
 
 /* ==========================================================================
-   1. Fullscreen Canvases (Dual-Layer: WebGPU Particles + 2D Geometry Overlay)
+   1. Fullscreen Canvases (Triple-Layer: 2D Grid Background + WebGPU Particles + 2D Geometry Overlay)
    ========================================================================== */
+#bgCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  z-index: 0;
+}
+
 #gpuCanvas, #glCanvas {
   position: absolute;
   top: 0;

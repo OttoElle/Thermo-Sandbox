@@ -15,9 +15,11 @@ import { ThrottleValve } from '../physics/ThrottleValve.js';
 import { ParticleGPURenderer } from './ParticleGPURenderer.js';
 
 export class Renderer {
-  constructor(canvas, gpuCanvas = null) {
+  constructor(canvas, gpuCanvas = null, bgCanvas = null) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    this.bgCanvas = bgCanvas;
+    this.bgCtx = bgCanvas ? bgCanvas.getContext('2d') : null;
     this.gpuCanvas = null;
     this.gpuRenderer = null;
     this.useWebGPU = false;
@@ -94,13 +96,18 @@ export class Renderer {
     // Clear 2D overlay canvas to transparent
     ctx.clearRect(0, 0, w, h);
 
-    if (this.showGrid) {
-      this.drawDotGrid();
+    if (this.bgCtx) {
+      this.bgCtx.clearRect(0, 0, w, h);
+      if (this.showGrid) {
+        this.drawDotGrid(this.bgCtx);
+      }
+    } else if (this.showGrid) {
+      this.drawDotGrid(ctx);
     }
   }
 
-  drawDotGrid() {
-    const ctx = this.ctx;
+  drawDotGrid(targetCtx = this.ctx) {
+    const ctx = targetCtx;
     const w = this.canvas.width;
     const h = this.canvas.height;
     const step = this.gridSize;
@@ -199,12 +206,17 @@ export class Renderer {
 
     // 2. Particles (Rendered on GPU with 2D overlay for selection/vectors)
     if (this.useWebGPU && this.gpuRenderer) {
-      this.gpuRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
-      const pCount = engine.particles.length;
-      for (let i = 0; i < pCount; i++) {
-        const p = engine.particles[i];
-        if (p.selected || this.showVectors) {
-          this.drawParticleOverlay(p);
+      if (engine.gpuCompute && engine.gpuCompute.count > 0 && engine.useGPUCompute) {
+        const outputBuffer = engine.gpuCompute.getOutputBuffer();
+        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+      } else {
+        this.gpuRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+        const pCount = engine.particles ? engine.particles.length : 0;
+        for (let i = 0; i < pCount; i++) {
+          const p = engine.particles[i];
+          if (p.selected || this.showVectors) {
+            this.drawParticleOverlay(p);
+          }
         }
       }
     }

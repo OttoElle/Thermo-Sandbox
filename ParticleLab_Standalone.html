@@ -92,8 +92,19 @@ body {
 /* Thermo Sandbox - Canvases, Floating Overlays & Context Menus */
 
 /* ==========================================================================
-   1. Fullscreen Canvases (Dual-Layer: WebGPU Particles + 2D Geometry Overlay)
+   1. Fullscreen Canvases (Triple-Layer: 2D Grid Background + WebGPU Particles + 2D Geometry Overlay)
    ========================================================================== */
+#bgCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  z-index: 0;
+}
+
 #gpuCanvas, #glCanvas {
   position: absolute;
   top: 0;
@@ -2464,6 +2475,7 @@ body.splash-mode .modal-overlay:not(#splashOverlay) {
   display: none !important;
 }
 
+body.splash-mode #bgCanvas,
 body.splash-mode #gpuCanvas,
 body.splash-mode #glCanvas,
 body.splash-mode #simCanvas {
@@ -2471,7 +2483,7 @@ body.splash-mode #simCanvas {
   transition: filter 0.4s ease;
 }
 
-#gpuCanvas, #glCanvas, #simCanvas {
+#bgCanvas, #gpuCanvas, #glCanvas, #simCanvas {
   transition: filter 0.4s ease;
 }
 
@@ -4096,9 +4108,11 @@ body.seq-picking-active #simCanvas {
   <input type="file" id="fileImportInput" accept=".json" style="display: none;">
 
   <div class="app-viewport">
-    <!-- Hardware Accelerated WebGPU Particle Canvas -->
+    <!-- Background & Dot Grid Canvas (Layer 0, behind WebGPU particles) -->
+    <canvas id="bgCanvas"></canvas>
+    <!-- Hardware Accelerated WebGPU Particle Canvas (Layer 1) -->
     <canvas id="gpuCanvas"></canvas>
-    <!-- Fullscreen Infinite UI & Geometry Canvas -->
+    <!-- Fullscreen Infinite UI & Geometry Canvas (Layer 2, transparent overlay) -->
     <canvas id="simCanvas"></canvas>
 
     <!-- WebGPU Modern Browser Requirement Overlay (Shown only if WebGPU is unavailable) -->
@@ -7261,6 +7275,59 @@ class ParticleGPURenderer {
       }
     });
 
+    this.computePipeline = device.createRenderPipeline({
+      label: 'ParticleGPUComputeRenderPipeline',
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_main',
+        buffers: [
+          // Buffer 0: Quad Geometry
+          {
+            arrayStride: 2 * 4,
+            stepMode: 'vertex',
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x2' }
+            ]
+          },
+          // Buffer 1: Instance Attributes from Storage Buffer (32 bytes per particle)
+          {
+            arrayStride: 8 * 4,
+            stepMode: 'instance',
+            attributes: [
+              { shaderLocation: 1, offset: 0, format: 'float32x2' },     // aPos
+              { shaderLocation: 2, offset: 4 * 4, format: 'float32' },   // aRadius
+              { shaderLocation: 3, offset: 6 * 4, format: 'float32' }    // aSpeedNorm
+            ]
+          }
+        ]
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_main',
+        targets: [
+          {
+            format: this.format,
+            blend: {
+              color: {
+                srcFactor: 'src-alpha',
+                dstFactor: 'one-minus-src-alpha',
+                operation: 'add'
+              },
+              alpha: {
+                srcFactor: 'one',
+                dstFactor: 'one-minus-src-alpha',
+                operation: 'add'
+              }
+            }
+          }
+        ]
+      },
+      primitive: {
+        topology: 'triangle-strip'
+      }
+    });
+
     this.bindGroup = device.createBindGroup({
       label: 'ParticleGPUBindGroup',
       layout: bindGroupLayout,
@@ -7298,8 +7365,63 @@ class ParticleGPURenderer {
     this.device.queue.submit([commandEncoder.finish()]);
   }
 
-  render(particles, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+    if (!this.isSupported || !this.device || !this.context || !buffer || count === 0) {
+      this.clear();
+      return;
+    }
+
+    this.uniformFloats[0] = this.canvas.width;
+    this.uniformFloats[1] = this.canvas.height;
+    this.uniformFloats[2] = panX;
+    this.uniformFloats[3] = panY;
+    this.uniformFloats[4] = zoom;
+    this.uniformU32[5] = colorByVelocity ? 1 : 0;
+    this.uniformFloats[6] = 0.0;
+    this.uniformFloats[7] = 0.0;
+    this.uniformFloats[8] = 56 / 255;
+    this.uniformFloats[9] = 189 / 255;
+    this.uniformFloats[10] = 248 / 255;
+    this.uniformFloats[11] = 0.0;
+
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
+
+    const currentTexture = this.context.getCurrentTexture();
+    const commandEncoder = this.device.createCommandEncoder({
+      label: 'ParticleGPURenderCommandsZeroCopy'
+    });
+
+    const renderPass = commandEncoder.beginRenderPass({
+      label: 'ParticleGPURenderPassZeroCopy',
+      colorAttachments: [
+        {
+          view: currentTexture.createView(),
+          loadOp: 'clear',
+          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+          storeOp: 'store'
+        }
+      ]
+    });
+
+    renderPass.setPipeline(this.computePipeline);
+    renderPass.setBindGroup(0, this.bindGroup);
+    renderPass.setVertexBuffer(0, this.quadBuffer);
+    renderPass.setVertexBuffer(1, buffer);
+    renderPass.draw(4, count, 0, 0);
+    renderPass.end();
+
+    this.device.queue.submit([commandEncoder.finish()]);
+  }
+
+  render(particles, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true, bufferCount = 0) {
     if (!this.isSupported || !this.device || !this.context) return;
+
+    if (particles && (particles instanceof GPUBuffer || (particles.buffer && particles.buffer instanceof GPUBuffer))) {
+      const buf = (particles instanceof GPUBuffer) ? particles : particles.buffer;
+      const count = bufferCount || particles.count || this.capacity;
+      this.renderGPUBuffer(buf, count, panX, panY, zoom, maxSpeedReference, colorByVelocity);
+      return;
+    }
 
     const count = particles ? particles.length : 0;
     if (count === 0) {
@@ -8137,6 +8259,274 @@ class CycleSequencer {
 }
 
 
+// --- src/physics/ParticleGPUCompute.js ---
+class ParticleGPUCompute {
+  constructor(device) {
+    this.device = device;
+    this.isSupported = !!device;
+
+    this.capacity = 100000;
+    this.count = 0;
+    this.pingPong = 0; // 0: A is in, B is out; 1: B is in, A is out
+
+    this.bufferA = null;
+    this.bufferB = null;
+    this.uniformBuffer = null;
+
+    this.uniformData = new ArrayBuffer(32);
+    this.uniformFloats = new Float32Array(this.uniformData);
+    this.uniformU32 = new Uint32Array(this.uniformData);
+
+    this.pipeline = null;
+    this.bindGroupAB = null;
+    this.bindGroupBA = null;
+
+    if (this.isSupported) {
+      this._initBuffers();
+      this._initPipeline();
+    }
+  }
+
+  _initBuffers() {
+    const device = this.device;
+    // 32 bytes per particle: pos(8), vel(8), radius(4), mass(4), speedNorm(4), pad(4)
+    const bufferSize = this.capacity * 32;
+
+    this.bufferA = device.createBuffer({
+      label: 'ParticleComputeBufferA',
+      size: bufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+    });
+
+    this.bufferB = device.createBuffer({
+      label: 'ParticleComputeBufferB',
+      size: bufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+    });
+
+    this.uniformBuffer = device.createBuffer({
+      label: 'ParticleComputeUniforms',
+      size: 32,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+  }
+
+  _initPipeline() {
+    const device = this.device;
+
+    const wgslSource = `
+      struct SimParams {
+        dt: f32,
+        gravity: f32,
+        gravityEnabled: u32,
+        damping: f32,
+        worldWidth: f32,
+        worldHeight: f32,
+        particleCount: u32,
+        maxSpeedReference: f32,
+      };
+
+      struct Particle {
+        pos: vec2f,
+        vel: vec2f,
+        radius: f32,
+        mass: f32,
+        speedNorm: f32,
+        pad: f32,
+      };
+
+      @group(0) @binding(0) var<uniform> params: SimParams;
+      @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
+      @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
+
+      @compute @workgroup_size(64)
+      fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
+        let idx = global_id.x;
+        if (idx >= params.particleCount) {
+          return;
+        }
+
+        var p = particlesIn[idx];
+
+        // 1. Gravity acceleration
+        if (params.gravityEnabled != 0u) {
+          p.vel.y += params.gravity * params.dt;
+        }
+
+        // 2. Position numerical integration
+        p.pos += p.vel * params.dt;
+
+        // 3. World boundary reflections (0..worldWidth, 0..worldHeight)
+        let r = p.radius;
+        if (p.pos.x - r < 0.0) {
+          p.pos.x = r;
+          p.vel.x = -p.vel.x * params.damping;
+        } else if (p.pos.x + r > params.worldWidth) {
+          p.pos.x = params.worldWidth - r;
+          p.vel.x = -p.vel.x * params.damping;
+        }
+
+        if (p.pos.y - r < 0.0) {
+          p.pos.y = r;
+          p.vel.y = -p.vel.y * params.damping;
+        } else if (p.pos.y + r > params.worldHeight) {
+          p.pos.y = params.worldHeight - r;
+          p.vel.y = -p.vel.y * params.damping;
+        }
+
+        // 4. Normalized speed for colormap sampling
+        let speed = length(p.vel);
+        let maxRef = max(1.0, params.maxSpeedReference);
+        p.speedNorm = clamp(speed / maxRef, 0.0, 1.0);
+
+        particlesOut[idx] = p;
+      }
+    `;
+
+    const shaderModule = device.createShaderModule({
+      label: 'ParticleComputeShader',
+      code: wgslSource
+    });
+
+    const bindGroupLayout = device.createBindGroupLayout({
+      label: 'ParticleComputeBindGroupLayout',
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: 'uniform' }
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: 'read-only-storage' }
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: 'storage' }
+        }
+      ]
+    });
+
+    const pipelineLayout = device.createPipelineLayout({
+      label: 'ParticleComputePipelineLayout',
+      bindGroupLayouts: [bindGroupLayout]
+    });
+
+    this.pipeline = device.createComputePipeline({
+      label: 'ParticleComputePipeline',
+      layout: pipelineLayout,
+      compute: {
+        module: shaderModule,
+        entryPoint: 'cs_integrate'
+      }
+    });
+
+    // Ping-Pong BindGroups: A->B and B->A
+    this.bindGroupAB = device.createBindGroup({
+      label: 'ParticleComputeBindGroupAB',
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: { buffer: this.bufferA } },
+        { binding: 2, resource: { buffer: this.bufferB } }
+      ]
+    });
+
+    this.bindGroupBA = device.createBindGroup({
+      label: 'ParticleComputeBindGroupBA',
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: { buffer: this.bufferB } },
+        { binding: 2, resource: { buffer: this.bufferA } }
+      ]
+    });
+  }
+
+  uploadParticles(particles) {
+    if (!this.isSupported || !particles) return;
+    this.count = Math.min(particles.length, this.capacity);
+    if (this.count === 0) return;
+
+    // Pack particles into 8 floats per particle (32 bytes)
+    const packedData = new Float32Array(this.count * 8);
+    let ptr = 0;
+    for (let i = 0; i < this.count; i++) {
+      const p = particles[i];
+      packedData[ptr++] = p.pos ? p.pos.x : 0;
+      packedData[ptr++] = p.pos ? p.pos.y : 0;
+      packedData[ptr++] = p.vel ? p.vel.x : 0;
+      packedData[ptr++] = p.vel ? p.vel.y : 0;
+      packedData[ptr++] = p.radius || 3.5;
+      packedData[ptr++] = p.mass || 1.0;
+      packedData[ptr++] = 0.0; // speedNorm
+      packedData[ptr++] = 0.0; // pad
+    }
+
+    // Write to both buffers to guarantee synchronized initial state
+    const byteLength = this.count * 32;
+    this.device.queue.writeBuffer(this.bufferA, 0, packedData.buffer, 0, byteLength);
+    this.device.queue.writeBuffer(this.bufferB, 0, packedData.buffer, 0, byteLength);
+    this.pingPong = 0;
+  }
+
+  step(dt, gravityEnabled, gravity = 350, damping = 0.98, worldWidth = 2500, worldHeight = 2500, maxSpeedReference = 380) {
+    if (!this.isSupported || this.count === 0) return null;
+
+    // Update uniform buffer
+    this.uniformFloats[0] = dt;
+    this.uniformFloats[1] = gravity;
+    this.uniformU32[2] = gravityEnabled ? 1 : 0;
+    this.uniformFloats[3] = damping;
+    this.uniformFloats[4] = worldWidth;
+    this.uniformFloats[5] = worldHeight;
+    this.uniformU32[6] = this.count;
+    this.uniformFloats[7] = maxSpeedReference;
+
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
+
+    const commandEncoder = this.device.createCommandEncoder({
+      label: 'ParticleComputeEncoder'
+    });
+
+    const pass = commandEncoder.beginComputePass({
+      label: 'ParticleComputePass'
+    });
+    pass.setPipeline(this.pipeline);
+
+    // Select active ping-pong bind group
+    const activeBindGroup = (this.pingPong === 0) ? this.bindGroupAB : this.bindGroupBA;
+    pass.setBindGroup(0, activeBindGroup);
+
+    const workgroupCount = Math.ceil(this.count / 64);
+    pass.dispatchWorkgroups(workgroupCount);
+    pass.end();
+
+    this.device.queue.submit([commandEncoder.finish()]);
+
+    // Current output buffer is the one written to:
+    // If pingPong was 0 (A->B), output is B. If pingPong was 1 (B->A), output is A.
+    const outputBuffer = (this.pingPong === 0) ? this.bufferB : this.bufferA;
+
+    // Advance ping-pong state for next step
+    this.pingPong = 1 - this.pingPong;
+
+    return outputBuffer;
+  }
+
+  getOutputBuffer() {
+    // Current available valid particle state
+    return (this.pingPong === 0) ? this.bufferA : this.bufferB;
+  }
+
+  getCount() {
+    return this.count;
+  }
+}
+
+
 // --- src/physics/Engine.js ---
 
 class Engine {
@@ -8169,6 +8559,8 @@ class Engine {
     this.simModel = 'hard_sphere'; // 'hard_sphere' or 'lennard_jones'
     this.gravityEnabled = false;
     this.gravity = 350; // px/s^2 (+y downward)
+    this.gpuCompute = null;
+    this.useGPUCompute = false;
     
     this.totalTime = 0;
     this.nextParticleId = 1;
@@ -8207,6 +8599,9 @@ class Engine {
     this.particleGroups = [];
     this.elements = [];
     this.grid.clear();
+    if (this.gpuCompute) {
+      this.gpuCompute.count = 0;
+    }
     this.totalTime = 0;
     this.historyTime = [];
     this.historyTemp = [];
@@ -8467,10 +8862,38 @@ class Engine {
     this.resetToLoadedProfile();
   }
 
+  enableGPUCompute(gpuCompute) {
+    this.gpuCompute = gpuCompute;
+    this.useGPUCompute = true;
+    if (this.particles.length > 0) {
+      this.gpuCompute.uploadParticles(this.particles);
+    }
+  }
+
+  disableGPUCompute() {
+    this.useGPUCompute = false;
+  }
+
   step(dt) {
     if (this.isPaused || dt <= 0) return;
 
     const effectiveDt = dt * this.timeScale;
+
+    // GPU Compute Simulation Branch (Phase 2 Zero-Copy)
+    if (this.gpuCompute && this.useGPUCompute && this.gpuCompute.count > 0) {
+      if (this.sequencer && this.sequencer.isEnabled) {
+        this.sequencer.step(effectiveDt, this);
+      }
+      this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.width, this.height, 380);
+      this.totalTime += effectiveDt;
+      for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
+      for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
+      for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
+      for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+      this.stats.particleCount = this.gpuCompute.count;
+      return;
+    }
+
     const subDt = effectiveDt / this.subSteps;
 
     // 0. Precision Cycle Sequencer (Coordinates valves, pistons & thermals per phase)
@@ -9160,9 +9583,11 @@ class Engine {
 // --- src/render/Renderer.js ---
 
 class Renderer {
-  constructor(canvas, gpuCanvas = null) {
+  constructor(canvas, gpuCanvas = null, bgCanvas = null) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    this.bgCanvas = bgCanvas;
+    this.bgCtx = bgCanvas ? bgCanvas.getContext('2d') : null;
     this.gpuCanvas = null;
     this.gpuRenderer = null;
     this.useWebGPU = false;
@@ -9239,13 +9664,18 @@ class Renderer {
     // Clear 2D overlay canvas to transparent
     ctx.clearRect(0, 0, w, h);
 
-    if (this.showGrid) {
-      this.drawDotGrid();
+    if (this.bgCtx) {
+      this.bgCtx.clearRect(0, 0, w, h);
+      if (this.showGrid) {
+        this.drawDotGrid(this.bgCtx);
+      }
+    } else if (this.showGrid) {
+      this.drawDotGrid(ctx);
     }
   }
 
-  drawDotGrid() {
-    const ctx = this.ctx;
+  drawDotGrid(targetCtx = this.ctx) {
+    const ctx = targetCtx;
     const w = this.canvas.width;
     const h = this.canvas.height;
     const step = this.gridSize;
@@ -9344,12 +9774,17 @@ class Renderer {
 
     // 2. Particles (Rendered on GPU with 2D overlay for selection/vectors)
     if (this.useWebGPU && this.gpuRenderer) {
-      this.gpuRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
-      const pCount = engine.particles.length;
-      for (let i = 0; i < pCount; i++) {
-        const p = engine.particles[i];
-        if (p.selected || this.showVectors) {
-          this.drawParticleOverlay(p);
+      if (engine.gpuCompute && engine.gpuCompute.count > 0 && engine.useGPUCompute) {
+        const outputBuffer = engine.gpuCompute.getOutputBuffer();
+        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+      } else {
+        this.gpuRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+        const pCount = engine.particles ? engine.particles.length : 0;
+        for (let i = 0; i < pCount; i++) {
+          const p = engine.particles[i];
+          if (p.selected || this.showVectors) {
+            this.drawParticleOverlay(p);
+          }
         }
       }
     }
@@ -13830,6 +14265,7 @@ if (typeof window !== 'undefined') {
 
 // Canvas DOM Elements
 const canvas = document.getElementById('simCanvas');
+const bgCanvas = document.getElementById('bgCanvas');
 const gpuCanvas = document.getElementById('gpuCanvas') || document.getElementById('glCanvas');
 const tempChartCanvas = document.getElementById('tempChartCanvas');
 const velChartCanvas = document.getElementById('velChartCanvas');
@@ -13949,6 +14385,10 @@ const btnInfoClose = document.getElementById('btnInfoClose');
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  if (bgCanvas) {
+    bgCanvas.width = window.innerWidth;
+    bgCanvas.height = window.innerHeight;
+  }
   if (gpuCanvas) {
     gpuCanvas.width = window.innerWidth;
     gpuCanvas.height = window.innerHeight;
@@ -13962,16 +14402,23 @@ resizeCanvas();
 
 // Master Physics Engine, Renderer & Analytics
 const engine = new Engine(2500, 2500);
-const renderer = new Renderer(canvas);
+const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;
 
-// Asynchronously initialize WebGPU
+// Asynchronously initialize WebGPU & GPU Compute
 if (gpuCanvas) {
   renderer.initGPU(gpuCanvas).then(isSupported => {
     if (!isSupported) {
       const errOverlay = document.getElementById('webgpuErrorOverlay');
       if (errOverlay) errOverlay.style.display = 'flex';
+    } else if (renderer.gpuRenderer && renderer.gpuRenderer.device) {
+      const gpuCompute = new ParticleGPUCompute(renderer.gpuRenderer.device);
+      engine.gpuCompute = gpuCompute;
+      window.gpuCompute = gpuCompute;
+      if (engine.particles && engine.particles.length > 0) {
+        gpuCompute.uploadParticles(engine.particles);
+      }
     }
   }).catch(err => {
     console.error('WebGPU Init Error:', err);

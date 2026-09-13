@@ -23,6 +23,7 @@ files_order = [
     'src/control/SequencerConditions.js',
     'src/control/SequencerExecutor.js',
     'src/control/CycleSequencer.js',
+    'src/physics/ParticleGPUCompute.js',
     'src/physics/Engine.js',
     'src/render/Renderer.js',
     'src/analytics/TempTimeChart.js',

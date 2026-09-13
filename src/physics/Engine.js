@@ -46,6 +46,8 @@ export class Engine {
     this.simModel = 'hard_sphere'; // 'hard_sphere' or 'lennard_jones'
     this.gravityEnabled = false;
     this.gravity = 350; // px/s^2 (+y downward)
+    this.gpuCompute = null;
+    this.useGPUCompute = false;
     
     this.totalTime = 0;
     this.nextParticleId = 1;
@@ -84,6 +86,9 @@ export class Engine {
     this.particleGroups = [];
     this.elements = [];
     this.grid.clear();
+    if (this.gpuCompute) {
+      this.gpuCompute.count = 0;
+    }
     this.totalTime = 0;
     this.historyTime = [];
     this.historyTemp = [];
@@ -344,10 +349,38 @@ export class Engine {
     this.resetToLoadedProfile();
   }
 
+  enableGPUCompute(gpuCompute) {
+    this.gpuCompute = gpuCompute;
+    this.useGPUCompute = true;
+    if (this.particles.length > 0) {
+      this.gpuCompute.uploadParticles(this.particles);
+    }
+  }
+
+  disableGPUCompute() {
+    this.useGPUCompute = false;
+  }
+
   step(dt) {
     if (this.isPaused || dt <= 0) return;
 
     const effectiveDt = dt * this.timeScale;
+
+    // GPU Compute Simulation Branch (Phase 2 Zero-Copy)
+    if (this.gpuCompute && this.useGPUCompute && this.gpuCompute.count > 0) {
+      if (this.sequencer && this.sequencer.isEnabled) {
+        this.sequencer.step(effectiveDt, this);
+      }
+      this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.width, this.height, 380);
+      this.totalTime += effectiveDt;
+      for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
+      for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
+      for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
+      for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+      this.stats.particleCount = this.gpuCompute.count;
+      return;
+    }
+
     const subDt = effectiveDt / this.subSteps;
 
     // 0. Precision Cycle Sequencer (Coordinates valves, pistons & thermals per phase)

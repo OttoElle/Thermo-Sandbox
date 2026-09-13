@@ -285,6 +285,59 @@ export class ParticleGPURenderer {
       }
     });
 
+    this.computePipeline = device.createRenderPipeline({
+      label: 'ParticleGPUComputeRenderPipeline',
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_main',
+        buffers: [
+          // Buffer 0: Quad Geometry
+          {
+            arrayStride: 2 * 4,
+            stepMode: 'vertex',
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x2' }
+            ]
+          },
+          // Buffer 1: Instance Attributes from Storage Buffer (32 bytes per particle)
+          {
+            arrayStride: 8 * 4,
+            stepMode: 'instance',
+            attributes: [
+              { shaderLocation: 1, offset: 0, format: 'float32x2' },     // aPos
+              { shaderLocation: 2, offset: 4 * 4, format: 'float32' },   // aRadius
+              { shaderLocation: 3, offset: 6 * 4, format: 'float32' }    // aSpeedNorm
+            ]
+          }
+        ]
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_main',
+        targets: [
+          {
+            format: this.format,
+            blend: {
+              color: {
+                srcFactor: 'src-alpha',
+                dstFactor: 'one-minus-src-alpha',
+                operation: 'add'
+              },
+              alpha: {
+                srcFactor: 'one',
+                dstFactor: 'one-minus-src-alpha',
+                operation: 'add'
+              }
+            }
+          }
+        ]
+      },
+      primitive: {
+        topology: 'triangle-strip'
+      }
+    });
+
     this.bindGroup = device.createBindGroup({
       label: 'ParticleGPUBindGroup',
       layout: bindGroupLayout,
@@ -322,8 +375,63 @@ export class ParticleGPURenderer {
     this.device.queue.submit([commandEncoder.finish()]);
   }
 
-  render(particles, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+    if (!this.isSupported || !this.device || !this.context || !buffer || count === 0) {
+      this.clear();
+      return;
+    }
+
+    this.uniformFloats[0] = this.canvas.width;
+    this.uniformFloats[1] = this.canvas.height;
+    this.uniformFloats[2] = panX;
+    this.uniformFloats[3] = panY;
+    this.uniformFloats[4] = zoom;
+    this.uniformU32[5] = colorByVelocity ? 1 : 0;
+    this.uniformFloats[6] = 0.0;
+    this.uniformFloats[7] = 0.0;
+    this.uniformFloats[8] = 56 / 255;
+    this.uniformFloats[9] = 189 / 255;
+    this.uniformFloats[10] = 248 / 255;
+    this.uniformFloats[11] = 0.0;
+
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
+
+    const currentTexture = this.context.getCurrentTexture();
+    const commandEncoder = this.device.createCommandEncoder({
+      label: 'ParticleGPURenderCommandsZeroCopy'
+    });
+
+    const renderPass = commandEncoder.beginRenderPass({
+      label: 'ParticleGPURenderPassZeroCopy',
+      colorAttachments: [
+        {
+          view: currentTexture.createView(),
+          loadOp: 'clear',
+          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+          storeOp: 'store'
+        }
+      ]
+    });
+
+    renderPass.setPipeline(this.computePipeline);
+    renderPass.setBindGroup(0, this.bindGroup);
+    renderPass.setVertexBuffer(0, this.quadBuffer);
+    renderPass.setVertexBuffer(1, buffer);
+    renderPass.draw(4, count, 0, 0);
+    renderPass.end();
+
+    this.device.queue.submit([commandEncoder.finish()]);
+  }
+
+  render(particles, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true, bufferCount = 0) {
     if (!this.isSupported || !this.device || !this.context) return;
+
+    if (particles && (particles instanceof GPUBuffer || (particles.buffer && particles.buffer instanceof GPUBuffer))) {
+      const buf = (particles instanceof GPUBuffer) ? particles : particles.buffer;
+      const count = bufferCount || particles.count || this.capacity;
+      this.renderGPUBuffer(buf, count, panX, panY, zoom, maxSpeedReference, colorByVelocity);
+      return;
+    }
 
     const count = particles ? particles.length : 0;
     if (count === 0) {

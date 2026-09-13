@@ -44,6 +44,7 @@
 ## src/physics/ (Physics Engine & Geometry)
 - **Vector2.js**: 2D vector mathematics utility (dot, cross, norm, rot, dist).
 - **Particle.js**: Hard-sphere and Lennard-Jones particle model with position, velocity, mass, radius, and thermal coloring.
+- **ParticleGPUCompute.js**: WebGPU GPGPU compute shader coordinator managing Ping-Pong storage buffers, numerical particle integration, gravity, boundary reflections, and zero-copy rendering output.
 - **ParticleGroup.js**: Represents grouped clusters of particles for collective tracking in canvas elements outline.
 - **SpatialGrid.js**: Spatial partitioning hash grid for optimized O(N) particle-particle collision detection.
 - **Wall.js**: Static and conductive line segments, manual valves, check valves, and pressure relief valves with zero-allocation scalar projection.
