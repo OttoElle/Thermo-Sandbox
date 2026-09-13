@@ -1,0 +1,15 @@
+/* ==========================================================================
+   Thermo Sandbox – Master Modular Stylesheet
+   For individual component styles, see /css/*.css
+   ========================================================================== */
+
+@import "css/variables.css";
+@import "css/base.css";
+@import "css/canvas.css";
+@import "css/ribbon.css";
+@import "css/sidebar-left.css";
+@import "css/sidebar-right.css";
+@import "css/playback.css";
+@import "css/modals.css";
+@import "css/splash.css";
+@import "css/sequencer.css";

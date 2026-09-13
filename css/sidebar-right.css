@@ -1,0 +1,367 @@
+/* Thermo Sandbox - Right Sidebar, Analytics Telemetry & Chamber Cards */
+
+.floating-right {
+  right: 16px;
+  width: 380px;
+}
+
+.floating-sidebar.disabled-tools {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+
+.sidebar-block {
+  padding: 12px 14px;
+}
+
+.section-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.sidebar-divider {
+  height: 1px;
+  background-color: var(--border-subtle);
+  margin: 4px 14px;
+}
+
+/* General Tools Grid Tiles */
+.general-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.gen-tool-tile {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  border-radius: 8px;
+  height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.gen-tool-tile span {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.gen-tool-tile:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-main);
+  border-color: #374151;
+}
+
+.gen-tool-tile.active {
+  background-color: var(--accent-green-dim);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+/* Accordion Component List */
+.accordion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.accordion-item {
+  border: 1px solid var(--border-subtle);
+  background-color: var(--bg-input);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.15s ease;
+}
+
+.accordion-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.accordion-header .tool-title {
+  flex: 1;
+  margin-left: 8px;
+}
+
+.accordion-arrow {
+  font-size: 10px;
+  color: var(--text-dim);
+  transition: transform 0.2s ease;
+}
+
+.accordion-item.open .accordion-arrow {
+  transform: rotate(180deg);
+}
+
+.accordion-header.active {
+  color: var(--accent-green);
+}
+
+.accordion-panel {
+  display: none;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background-color: rgba(0, 0, 0, 0.25);
+  flex-direction: column;
+  gap: 8px;
+}
+
+.accordion-panel.active {
+  display: flex;
+}
+
+.tool-svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+
+.btn-toggle-group {
+  display: flex;
+  gap: 3px;
+  background-color: var(--bg-card);
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+}
+
+.sub-toggle-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sub-toggle-btn.active {
+  background-color: var(--accent-green-dim);
+  color: var(--accent-green);
+}
+
+.field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.field-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.styled-slider {
+  width: 100%;
+  accent-color: var(--accent-green);
+  cursor: pointer;
+}
+
+.styled-select {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  outline: none;
+}
+
+.styled-select:focus {
+  border-color: var(--accent-green);
+}
+
+/* ==========================================================================
+   7. Right Sidebar (System Overview & Collapsible Chamber Cards)
+   ========================================================================== */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.stat-card {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* Chamber Cards Accordion */
+.chamber-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chamber-card-item {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.chamber-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chamber-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chamber-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.chamber-card-body {
+  display: none;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+  flex-direction: column;
+  gap: 6px;
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.chamber-card-item.open .chamber-card-body {
+  display: flex;
+}
+
+.chamber-inline-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-muted);
+}
+
+.chamber-inline-metrics span b {
+  color: var(--text-main);
+}
+
+.chamber-chart-canvas {
+  width: 100%;
+  height: 60px;
+  border-radius: 4px;
+  background-color: #101216;
+}
+
+.dot-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.dot-indicator.blue { background-color: var(--accent-blue); }
+.dot-indicator.red { background-color: var(--accent-red); }
+.dot-indicator.green { background-color: var(--accent-green); }
+.dot-indicator.amber { background-color: var(--accent-amber); }
+
+.chart-card {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px;
+  margin: 6px 14px;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.chart-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.chart-tabs {
+  display: flex;
+  gap: 3px;
+}
+
+.tab-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 9px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  background-color: var(--accent-green-dim);
+  color: var(--accent-green);
+  border-color: var(--accent-green);
+}
+
+canvas#tempChartCanvas, canvas#velChartCanvas {
+  display: block;
+  width: 100%;
+  border-radius: 6px;
+}
+

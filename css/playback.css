@@ -1,0 +1,338 @@
+/* Thermo Sandbox - Floating Playback Dock, Toggles & Zoom Controls */
+
+/* ==========================================================================
+   Playback Bar Model Toggle & Gravity Toggle
+   ========================================================================== */
+.model-toggle-group {
+  display: flex;
+  align-items: center;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 2px;
+  gap: 2px;
+}
+
+.model-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.12s ease;
+}
+
+.model-toggle-btn.active {
+  background-color: var(--accent-green-dim);
+  color: var(--accent-green);
+  font-weight: 700;
+}
+
+.gravity-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.gravity-toggle-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-main);
+  border-color: var(--border-card);
+}
+
+.gravity-toggle-btn.active {
+  background-color: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+}
+
+.gravity-toggle-btn svg {
+  transition: transform 0.2s ease;
+}
+
+.gravity-toggle-btn.active svg {
+  transform: translateY(1px);
+}
+
+/* ==========================================================================
+   Integrated Sequencer Toggle Button in Control Bar
+   ========================================================================== */
+.sequencer-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.sequencer-toggle-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-main);
+  border-color: var(--border-card);
+}
+
+.sequencer-toggle-btn.active {
+  background-color: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+}
+
+.seq-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.seq-status-dot.active {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.8);
+}
+
+.seq-chevron-icon {
+  transition: transform 0.25s ease;
+}
+
+body.sequencer-expanded .seq-chevron-icon {
+  transform: rotate(180deg);
+}
+
+/* ==========================================================================
+   8. Unified Bottom Dock (Control Bar + Expanding Sequencer Drawer)
+   ========================================================================== */
+.unified-bottom-dock {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 52px;
+  width: fit-content;
+  min-width: 540px;
+  background: rgba(16, 18, 22, 0.94);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-card);
+  border-radius: 14px;
+  box-shadow: var(--shadow-floating);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 30;
+  transition: height 0.28s cubic-bezier(0.16, 1, 0.3, 1), left 0.28s cubic-bezier(0.16, 1, 0.3, 1), right 0.28s cubic-bezier(0.16, 1, 0.3, 1), transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), width 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+body.sequencer-expanded .unified-bottom-dock {
+  height: 420px;
+  left: 352px;
+  right: 412px;
+  width: auto;
+  transform: none;
+}
+
+.unified-dock-bar {
+  height: 52px;
+  min-height: 52px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  border-bottom: 1px solid transparent;
+  transition: border-bottom-color 0.25s ease, justify-content 0.25s ease;
+}
+
+body.sequencer-expanded .unified-dock-bar {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+  justify-content: center;
+}
+
+.unified-dock-bar > * {
+  flex-shrink: 0;
+}
+
+/* Backward compatibility for .floating-playback-bar */
+.floating-playback-bar {
+  display: contents;
+}
+
+.playback-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.playback-btn {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.playback-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-main);
+}
+
+.playback-btn.btn-play {
+  background-color: var(--accent-green);
+  color: #0c1c11;
+  border-color: var(--accent-green);
+}
+
+.playback-btn.btn-play:hover {
+  background-color: #16a34a;
+}
+
+#playIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+#playIcon svg {
+  display: block;
+}
+
+#playIcon.is-play svg {
+  margin-left: 2px;
+}
+
+.playback-btn.btn-stop:hover {
+  color: #f87171;
+  background-color: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.playback-divider {
+  width: 1px;
+  height: 22px;
+  background-color: var(--border-subtle);
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.speed-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 36px;
+}
+
+.time-counter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.time-label {
+  color: var(--text-dim);
+}
+
+.time-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--text-main);
+}
+
+/* ==========================================================================
+   9. Floating Zoom Controls
+   ========================================================================== */
+.floating-zoom-panel {
+  position: absolute;
+  bottom: 20px;
+  right: 410px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px;
+  gap: 4px;
+  box-shadow: var(--shadow-floating);
+  z-index: 25;
+  transition: bottom 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+body.sequencer-expanded .floating-zoom-panel {
+  bottom: 450px;
+}
+
+.zoom-btn {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-btn:hover {
+  background-color: var(--bg-hover);
+  color: #ffffff;
+}
+
+.zoom-text {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-dim);
+  padding: 2px 0;
+}

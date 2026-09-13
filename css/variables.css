@@ -1,0 +1,26 @@
+/* Thermo Sandbox - Design Tokens & Theme Variables */
+
+:root {
+  --bg-app: #101216;
+  --bg-card: #181b22;
+  --bg-input: #12141a;
+  --bg-hover: #222733;
+  
+  --border-subtle: #242935;
+  --border-card: #2d3342;
+  --border-active: #22c55e;
+  
+  --text-main: #f3f4f6;
+  --text-muted: #9ca3af;
+  --text-dim: #64748b;
+  
+  --accent-green: #22c55e;
+  --accent-green-dim: rgba(34, 197, 94, 0.14);
+  --accent-blue: #38bdf8;
+  --accent-blue-dim: rgba(56, 189, 248, 0.14);
+  --accent-amber: #f59e0b;
+  --accent-red: #ef4444;
+  
+  --shadow-floating: 0 12px 36px rgba(0, 0, 0, 0.55), 0 3px 10px rgba(0, 0, 0, 0.35);
+}
+
