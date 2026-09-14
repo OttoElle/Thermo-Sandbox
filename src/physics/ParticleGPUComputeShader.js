@@ -4,12 +4,17 @@ struct SimParams {
   gravity: f32,
   gravityEnabled: u32,
   damping: f32,
-  worldWidth: f32,
-  worldHeight: f32,
   particleCount: u32,
   maxSpeedReference: f32,
   wallCount: u32,
   subSteps: u32,
+  boundsEnabled: u32,
+  cellSize: f32,
+  gridCols: u32,
+  gridRows: u32,
+  gridOrigin: vec2f,
+  boundMin: vec2f,
+  boundMax: vec2f,
   pad1: u32,
   pad2: u32,
 };
@@ -39,6 +44,35 @@ struct WallData {
 @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
 @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
 @group(0) @binding(3) var<storage, read> walls: array<WallData>;
+@group(0) @binding(4) var<storage, read_write> cellHeads: array<atomic<i32>>;
+@group(0) @binding(5) var<storage, read_write> particleNext: array<i32>;
+
+@compute @workgroup_size(64)
+fn cs_clear_grid(@builtin(global_invocation_id) global_id: vec3u) {
+  let idx = global_id.x;
+  let totalCells = params.gridCols * params.gridRows;
+  if (idx < totalCells) {
+    atomicStore(&cellHeads[idx], -1);
+  }
+}
+
+@compute @workgroup_size(64)
+fn cs_build_grid(@builtin(global_invocation_id) global_id: vec3u) {
+  let idx = global_id.x;
+  if (idx >= params.particleCount) {
+    return;
+  }
+  let p = particlesIn[idx];
+  let rawX = i32(floor((p.pos.x - params.gridOrigin.x) / params.cellSize));
+  let rawY = i32(floor((p.pos.y - params.gridOrigin.y) / params.cellSize));
+  if (rawX >= 0 && rawX < i32(params.gridCols) && rawY >= 0 && rawY < i32(params.gridRows)) {
+    let cellIdx = u32(rawY * i32(params.gridCols) + rawX);
+    let prevHead = atomicExchange(&cellHeads[cellIdx], i32(idx));
+    particleNext[idx] = prevHead;
+  } else {
+    particleNext[idx] = -1;
+  }
+}
 
 @compute @workgroup_size(64)
 fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
@@ -54,7 +88,57 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     p.vel.y += params.gravity * params.dt;
   }
 
-  // 2. Continuous Collision Detection (CCD) Ray-vs-Segment swept test
+  // 2. Particle-Particle Collisions (Spatial Hash Grid)
+  let cellX = i32(floor((p.pos.x - params.gridOrigin.x) / params.cellSize));
+  let cellY = i32(floor((p.pos.y - params.gridOrigin.y) / params.cellSize));
+
+  if (cellX >= 0 && cellX < i32(params.gridCols) && cellY >= 0 && cellY < i32(params.gridRows)) {
+    for (var dy = -1; dy <= 1; dy++) {
+      let ny = cellY + dy;
+      if (ny < 0 || ny >= i32(params.gridRows)) {
+        continue;
+      }
+      for (var dx = -1; dx <= 1; dx++) {
+        let nx = cellX + dx;
+        if (nx < 0 || nx >= i32(params.gridCols)) {
+          continue;
+        }
+        let nCellIdx = u32(ny * i32(params.gridCols) + nx);
+      var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
+      var loopSteps = 0;
+      while (otherIdx >= 0 && loopSteps < 24) {
+        if (otherIdx != i32(idx)) {
+          let pOther = particlesIn[u32(otherIdx)];
+          let diff = p.pos - pOther.pos;
+          let distSq = dot(diff, diff);
+          let minDist = p.radius + pOther.radius;
+
+          if (distSq < minDist * minDist && distSq > 1e-4) {
+            let dist = sqrt(distSq);
+            let n = diff / dist;
+            let overlap = minDist - dist;
+            let mTotal = p.mass + pOther.mass;
+
+            // Position soft relaxation to prevent interpenetration
+            p.pos += n * (overlap * (pOther.mass / mTotal) * 0.5);
+
+            // Elastic velocity impulse
+            let relVel = p.vel - pOther.vel;
+            let vRelN = dot(relVel, n);
+            if (vRelN < 0.0) {
+              let impulse = 2.0 * vRelN / mTotal;
+              p.vel -= impulse * pOther.mass * n * params.damping;
+            }
+          }
+        }
+        otherIdx = particleNext[u32(otherIdx)];
+        loopSteps++;
+      }
+    }
+  }
+  }
+
+  // 3. Continuous Collision Detection (CCD) Ray-vs-Segment swept test against CAD walls
   let oldPos = p.pos;
   let moveVec = p.vel * params.dt;
   var candidatePos = oldPos + moveVec;
@@ -128,7 +212,7 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
 
   p.pos = candidatePos;
 
-  // 3. Proximity / resting contact fallback
+  // 4. Proximity / resting contact fallback for walls
   for (var i = 0u; i < params.wallCount; i++) {
     let w = walls[i];
     if (w.wallType == 1u && w.isOpen != 0u) {
@@ -155,25 +239,27 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     }
   }
 
-  // 4. World boundary reflections (0..worldWidth, 0..worldHeight)
-  let r = p.radius;
-  if (p.pos.x - r < 0.0) {
-    p.pos.x = r;
-    p.vel.x = -p.vel.x * params.damping;
-  } else if (p.pos.x + r > params.worldWidth) {
-    p.pos.x = params.worldWidth - r;
-    p.vel.x = -p.vel.x * params.damping;
+  // 5. Optional Screen Boundaries (ONLY when boundsEnabled != 0u, e.g. in splash mode)
+  if (params.boundsEnabled != 0u) {
+    let r = p.radius;
+    if (p.pos.x - r < params.boundMin.x) {
+      p.pos.x = params.boundMin.x + r;
+      p.vel.x = abs(p.vel.x) * params.damping;
+    } else if (p.pos.x + r > params.boundMax.x) {
+      p.pos.x = params.boundMax.x - r;
+      p.vel.x = -abs(p.vel.x) * params.damping;
+    }
+
+    if (p.pos.y - r < params.boundMin.y) {
+      p.pos.y = params.boundMin.y + r;
+      p.vel.y = abs(p.vel.y) * params.damping;
+    } else if (p.pos.y + r > params.boundMax.y) {
+      p.pos.y = params.boundMax.y - r;
+      p.vel.y = -abs(p.vel.y) * params.damping;
+    }
   }
 
-  if (p.pos.y - r < 0.0) {
-    p.pos.y = r;
-    p.vel.y = -p.vel.y * params.damping;
-  } else if (p.pos.y + r > params.worldHeight) {
-    p.pos.y = params.worldHeight - r;
-    p.vel.y = -p.vel.y * params.damping;
-  }
-
-  // 5. Normalized speed for colormap sampling
+  // 6. Normalized speed for colormap sampling
   let speed = length(p.vel);
   let maxRef = max(1.0, params.maxSpeedReference);
   p.speedNorm = clamp(speed / maxRef, 0.0, 1.0);

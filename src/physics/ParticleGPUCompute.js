@@ -16,11 +16,21 @@ export class ParticleGPUCompute {
     this.uniformBuffer = null;
     this.wallsBuffer = null;
 
-    this.uniformData = new ArrayBuffer(48);
+    this.gridCols = 128;
+    this.gridRows = 128;
+    this.totalCells = this.gridCols * this.gridRows;
+    this.cellSize = 32.0;
+
+    this.cellHeadsBuffer = null;
+    this.particleNextBuffer = null;
+
+    this.uniformData = new ArrayBuffer(80);
     this.uniformFloats = new Float32Array(this.uniformData);
     this.uniformU32 = new Uint32Array(this.uniformData);
 
-    this.pipeline = null;
+    this.pipelineClearGrid = null;
+    this.pipelineBuildGrid = null;
+    this.pipelineIntegrate = null;
     this.bindGroupAB = null;
     this.bindGroupBA = null;
 
@@ -48,7 +58,7 @@ export class ParticleGPUCompute {
 
     this.uniformBuffer = device.createBuffer({
       label: 'ParticleComputeUniforms',
-      size: 48,
+      size: 80,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
 
@@ -56,6 +66,18 @@ export class ParticleGPUCompute {
       label: 'ParticleComputeWalls',
       size: this.maxWalls * 48,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    });
+
+    this.cellHeadsBuffer = device.createBuffer({
+      label: 'ParticleComputeCellHeads',
+      size: this.totalCells * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    });
+
+    this.particleNextBuffer = device.createBuffer({
+      label: 'ParticleComputeParticleNext',
+      size: this.capacity * 4,
+      usage: GPUBufferUsage.STORAGE
     });
   }
 
@@ -73,7 +95,9 @@ export class ParticleGPUCompute {
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
         { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
         { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
       ]
     });
 
@@ -82,13 +106,22 @@ export class ParticleGPUCompute {
       bindGroupLayouts: [bindGroupLayout]
     });
 
-    this.pipeline = device.createComputePipeline({
-      label: 'ParticleComputePipeline',
+    this.pipelineClearGrid = device.createComputePipeline({
+      label: 'ParticleComputePipelineClearGrid',
       layout: pipelineLayout,
-      compute: {
-        module: shaderModule,
-        entryPoint: 'cs_integrate'
-      }
+      compute: { module: shaderModule, entryPoint: 'cs_clear_grid' }
+    });
+
+    this.pipelineBuildGrid = device.createComputePipeline({
+      label: 'ParticleComputePipelineBuildGrid',
+      layout: pipelineLayout,
+      compute: { module: shaderModule, entryPoint: 'cs_build_grid' }
+    });
+
+    this.pipelineIntegrate = device.createComputePipeline({
+      label: 'ParticleComputePipelineIntegrate',
+      layout: pipelineLayout,
+      compute: { module: shaderModule, entryPoint: 'cs_integrate' }
     });
 
     this.bindGroupAB = device.createBindGroup({
@@ -98,7 +131,9 @@ export class ParticleGPUCompute {
         { binding: 0, resource: { buffer: this.uniformBuffer } },
         { binding: 1, resource: { buffer: this.bufferA } },
         { binding: 2, resource: { buffer: this.bufferB } },
-        { binding: 3, resource: { buffer: this.wallsBuffer } }
+        { binding: 3, resource: { buffer: this.wallsBuffer } },
+        { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
+        { binding: 5, resource: { buffer: this.particleNextBuffer } }
       ]
     });
 
@@ -109,7 +144,9 @@ export class ParticleGPUCompute {
         { binding: 0, resource: { buffer: this.uniformBuffer } },
         { binding: 1, resource: { buffer: this.bufferB } },
         { binding: 2, resource: { buffer: this.bufferA } },
-        { binding: 3, resource: { buffer: this.wallsBuffer } }
+        { binding: 3, resource: { buffer: this.wallsBuffer } },
+        { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
+        { binding: 5, resource: { buffer: this.particleNextBuffer } }
       ]
     });
   }
@@ -172,31 +209,41 @@ export class ParticleGPUCompute {
       packedData[ptr++] = 0.0; // pad
     }
 
-    // Write to both buffers to guarantee synchronized initial state
     const byteLength = this.count * 32;
     this.device.queue.writeBuffer(this.bufferA, 0, packedData.buffer, 0, byteLength);
     this.device.queue.writeBuffer(this.bufferB, 0, packedData.buffer, 0, byteLength);
     this.pingPong = 0;
   }
 
-  step(dt, gravityEnabled, gravity = 350, damping = 0.98, worldWidth = 2500, worldHeight = 2500, maxSpeedReference = 380, subSteps = 4) {
+  step(dt, gravityEnabled, gravity = 350, damping = 0.98, bounds = null, maxSpeedReference = 380, subSteps = 4) {
     if (!this.isSupported || this.count === 0) return null;
 
-    const effectiveSubSteps = Math.max(1, subSteps || 1);
+    const effectiveSubSteps = Math.max(1, Math.min(16, subSteps || 4));
     const subDt = dt / effectiveSubSteps;
 
+    const hasBounds = !!(bounds && typeof bounds.minX === 'number' && typeof bounds.maxX === 'number');
+
+    // 80 bytes uniform layout conforming to SimParams
     this.uniformFloats[0] = subDt;
     this.uniformFloats[1] = gravity;
     this.uniformU32[2] = gravityEnabled ? 1 : 0;
     this.uniformFloats[3] = damping;
-    this.uniformFloats[4] = worldWidth;
-    this.uniformFloats[5] = worldHeight;
-    this.uniformU32[6] = this.count;
-    this.uniformFloats[7] = maxSpeedReference;
-    this.uniformU32[8] = this.wallCount;
-    this.uniformU32[9] = effectiveSubSteps;
-    this.uniformU32[10] = 0;
-    this.uniformU32[11] = 0;
+    this.uniformU32[4] = this.count;
+    this.uniformFloats[5] = maxSpeedReference;
+    this.uniformU32[6] = this.wallCount;
+    this.uniformU32[7] = effectiveSubSteps;
+    this.uniformU32[8] = hasBounds ? 1 : 0;
+    this.uniformFloats[9] = this.cellSize;
+    this.uniformU32[10] = this.gridCols;
+    this.uniformU32[11] = this.gridRows;
+    this.uniformFloats[12] = hasBounds ? bounds.minX - 100 : -1000.0;
+    this.uniformFloats[13] = hasBounds ? bounds.minY - 100 : -1000.0;
+    this.uniformFloats[14] = hasBounds ? bounds.minX : 0;
+    this.uniformFloats[15] = hasBounds ? bounds.minY : 0;
+    this.uniformFloats[16] = hasBounds ? bounds.maxX : 2500;
+    this.uniformFloats[17] = hasBounds ? bounds.maxY : 2500;
+    this.uniformU32[18] = 0;
+    this.uniformU32[19] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
 
@@ -204,17 +251,32 @@ export class ParticleGPUCompute {
       label: 'ParticleComputeEncoder'
     });
 
-    const workgroupCount = Math.ceil(this.count / 64);
+    const clearGridWorkgroups = Math.ceil(this.totalCells / 64);
+    const particleWorkgroups = Math.ceil(this.count / 64);
 
     for (let s = 0; s < effectiveSubSteps; s++) {
-      const pass = commandEncoder.beginComputePass({
-        label: `ParticleComputePass_${s}`
-      });
-      pass.setPipeline(this.pipeline);
       const activeBindGroup = (this.pingPong === 0) ? this.bindGroupAB : this.bindGroupBA;
-      pass.setBindGroup(0, activeBindGroup);
-      pass.dispatchWorkgroups(workgroupCount);
-      pass.end();
+
+      // Pass 1: Clear Spatial Hash Grid
+      const passClear = commandEncoder.beginComputePass({ label: `ClearGrid_${s}` });
+      passClear.setPipeline(this.pipelineClearGrid);
+      passClear.setBindGroup(0, activeBindGroup);
+      passClear.dispatchWorkgroups(clearGridWorkgroups);
+      passClear.end();
+
+      // Pass 2: Populate Spatial Hash Grid
+      const passBuild = commandEncoder.beginComputePass({ label: `BuildGrid_${s}` });
+      passBuild.setPipeline(this.pipelineBuildGrid);
+      passBuild.setBindGroup(0, activeBindGroup);
+      passBuild.dispatchWorkgroups(particleWorkgroups);
+      passBuild.end();
+
+      // Pass 3: Particle-Particle & Wall-CCD Collision + Integration
+      const passIntegrate = commandEncoder.beginComputePass({ label: `Integrate_${s}` });
+      passIntegrate.setPipeline(this.pipelineIntegrate);
+      passIntegrate.setBindGroup(0, activeBindGroup);
+      passIntegrate.dispatchWorkgroups(particleWorkgroups);
+      passIntegrate.end();
 
       this.pingPong = 1 - this.pingPong;
     }

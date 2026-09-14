@@ -48,6 +48,7 @@ export class Engine {
     this.gravity = 350; // px/s^2 (+y downward)
     this.gpuCompute = null;
     this.useGPUCompute = false;
+    this.ambientBounds = null;
     
     this.totalTime = 0;
     this.nextParticleId = 1;
@@ -386,23 +387,28 @@ export class Engine {
     const effectiveDt = dt * this.timeScale;
 
     // GPU Compute Simulation Branch (Phase 2 Zero-Copy)
-    if (this.gpuCompute && this.useGPUCompute && this.gpuCompute.count > 0) {
-      if (this.sequencer && this.sequencer.isEnabled) {
-        this.sequencer.step(effectiveDt, this);
+    if (this.gpuCompute && this.useGPUCompute) {
+      if (this.gpuCompute.count !== this.particles.length) {
+        this.syncParticlesToGPU();
       }
-      for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
-      for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
-      for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
-      for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+      if (this.gpuCompute.count > 0) {
+        if (this.sequencer && this.sequencer.isEnabled) {
+          this.sequencer.step(effectiveDt, this);
+        }
+        for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
+        for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
+        for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
+        for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
 
-      if (this.walls.length > 0) {
-        this.gpuCompute.uploadWalls(this.walls);
+        if (this.walls.length > 0) {
+          this.gpuCompute.uploadWalls(this.walls);
+        }
+
+        this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.ambientBounds, 380, this.subSteps);
+        this.totalTime += effectiveDt;
+        this.stats.particleCount = this.gpuCompute.count;
+        return;
       }
-
-      this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.width, this.height, 380, this.subSteps);
-      this.totalTime += effectiveDt;
-      this.stats.particleCount = this.gpuCompute.count;
-      return;
     }
 
     const subDt = effectiveDt / this.subSteps;

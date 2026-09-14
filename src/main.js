@@ -248,9 +248,10 @@ const MAX_HISTORY = 120;
 
 function pushHistoryFrame() {
   if (historyBuffer.length >= MAX_HISTORY) historyBuffer.shift();
+  const shouldSaveParticles = engine.particles.length <= 2000;
   historyBuffer.push({
     time: engine.totalTime,
-    particles: engine.particles.map(p => ({ x: p.pos.x, y: p.pos.y, vx: p.vel.x, vy: p.vel.y })),
+    particles: shouldSaveParticles ? engine.particles.map(p => ({ x: p.pos.x, y: p.pos.y, vx: p.vel.x, vy: p.vel.y })) : [],
     pistons: engine.pistons.map(p => ({ x: p.x, y: p.y, v: p.velocity, temp: p.temperature })),
     walls: engine.walls.map(w => ({ temp: w.temperature, isOpen: w.isOpen })),
     thermalBlocks: engine.thermalBlocks.map(b => ({ temp: b.temperature }))
@@ -281,6 +282,8 @@ function popHistoryFrame() {
   for (let i = 0; i < Math.min(engine.thermalBlocks.length, frame.thermalBlocks.length); i++) {
     engine.thermalBlocks[i].temperature = frame.thermalBlocks[i].temp;
   }
+  engine.syncParticlesToGPU();
+  engine.syncWallsToGPU();
 }
 
 // Mouse & Drag State
@@ -3741,12 +3744,27 @@ tabPV.addEventListener('click', () => {
 });
 
 // System Stats
+const gpuStatusBadge = document.getElementById('gpuStatusBadge');
 function updateSystemStats() {
   const stats = engine.stats;
   if (statN) statN.textContent = stats.particleCount;
   if (statT) statT.textContent = `${Math.round(stats.systemTemperature)} K`;
   if (statE) statE.textContent = `${(stats.totalKineticEnergy / 1000).toFixed(1)} kJ`;
   if (statV) statV.textContent = `${Math.round(stats.meanSpeed)} px/s`;
+
+  if (gpuStatusBadge) {
+    if (engine.useGPUCompute && engine.gpuCompute && engine.gpuCompute.count > 0) {
+      gpuStatusBadge.textContent = `WebGPU Active (${engine.gpuCompute.count.toLocaleString()})`;
+      gpuStatusBadge.style.background = 'rgba(34,197,94,0.15)';
+      gpuStatusBadge.style.color = '#22c55e';
+      gpuStatusBadge.style.borderColor = 'rgba(34,197,94,0.3)';
+    } else {
+      gpuStatusBadge.textContent = 'CPU Simulation';
+      gpuStatusBadge.style.background = 'rgba(245,158,11,0.15)';
+      gpuStatusBadge.style.color = '#f59e0b';
+      gpuStatusBadge.style.borderColor = 'rgba(245,158,11,0.3)';
+    }
+  }
 }
 
 // Chamber Cards (DOM Reuse / Zero-Thrashing)
@@ -4282,40 +4300,25 @@ function animate(now) {
 
   if ((!engine.isPaused && isSimulating) || (isSplashActive && isAmbientSim)) {
     if (isSimulating) {
+      engine.ambientBounds = null;
       historyTimer += dt;
       if (historyTimer >= 0.05) {
         pushHistoryFrame();
         historyTimer = 0;
       }
-    }
-    engine.step(dt);
-
-    if (isSplashActive && isAmbientSim) {
-      // Keep ambient particles floating seamlessly within visible screen area without needing walls
+    } else if (isSplashActive && isAmbientSim) {
+      // Keep ambient particles floating seamlessly across whole visible window
       const tl = renderer.screenToWorld(0, 0);
       const br = renderer.screenToWorld(canvas.width, canvas.height);
-      const pad = 50;
-      const minX = tl.x - pad, maxX = br.x + pad;
-      const minY = tl.y - pad, maxY = br.y + pad;
-
-      for (let i = 0; i < engine.particles.length; i++) {
-        const p = engine.particles[i];
-        if (p.pos.x < minX) {
-          p.pos.x = minX;
-          p.vel.x = Math.abs(p.vel.x);
-        } else if (p.pos.x > maxX) {
-          p.pos.x = maxX;
-          p.vel.x = -Math.abs(p.vel.x);
-        }
-        if (p.pos.y < minY) {
-          p.pos.y = minY;
-          p.vel.y = Math.abs(p.vel.y);
-        } else if (p.pos.y > maxY) {
-          p.pos.y = maxY;
-          p.vel.y = -Math.abs(p.vel.y);
-        }
-      }
+      const pad = 20;
+      engine.ambientBounds = {
+        minX: tl.x - pad,
+        minY: tl.y - pad,
+        maxX: br.x + pad,
+        maxY: br.y + pad
+      };
     }
+    engine.step(dt);
   }
 
   renderer.render(engine, selectedItems);
