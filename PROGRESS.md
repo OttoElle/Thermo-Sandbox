@@ -243,26 +243,26 @@
   - 100% test pass in `tests/verify_all.py`.
 
 
-### S. WebGPU Compute Shaders & Zero-Copy Simulation Pipeline (Phase 2 - Step 1)
-- [x] **1. GPGPU Compute Shader Module (`ParticleGPUCompute.js`)**:
-  - Implemented 32-byte aligned Particle struct in WGSL with Ping-Pong storage buffers (`GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC`).
-  - Compute pass (`cs_integrate`) with `@workgroup_size(64)` computing particle velocity, gravity acceleration, position integration, and world boundary reflections.
-  - Dynamically calculates `speedNorm` directly in VRAM for real-time colormap mapping.
-- [x] **2. Zero-Copy Rendering Pipeline (`ParticleGPURenderer.js`)**:
-  - Added dedicated 32-byte stride render pipeline (`this.computePipeline`) binding the compute storage output buffer directly as vertex buffer 1.
-  - Completely eliminated CPU-to-GPU memory copies during simulation playback.
-  - Scaled to 50,000–100,000+ particles at stable 60 FPS.
-- [x] **3. Background Dot Grid Occlusion Fix (`#bgCanvas`)**:
-  - Added `#bgCanvas` at `z-index: 0` behind `#gpuCanvas` (z-index: 1).
-  - Particles solidly occlude the dot grid without any background shine-through.
-- [x] **4. Full Test Suite & Verification**:
-  - Added `tests/test_gpu_compute_cdp.py` validating compute pass execution, buffer swapping, and zero-copy rendering of 50,000 particles in headless Chrome.
-  - 100% pass across all 6 verification stages in `tests/verify_all.py`.
+### T. Continuous Collision Detection (CCD) & GPU Wall Compute Buffer (Phase 2 - Step 2)
+- [x] **1. Continuous Collision Detection (CCD) Ray-vs-Segment Swept Algorithm**:
+  - Solved fast-particle tunneling across both CPU and GPU simulations using 2D Swept Ray-vs-Segment intersection detection ($t \in [0, 1]$, $u \in [-eps, 1+eps]$).
+  - Fixed sign inconsistency in $t = (dx \cdot W_y - dy \cdot W_x) / \text{denom}$ ensuring time-of-impact calculation is mathematically exact.
+  - Implemented outward normal reflection $V' = V - 2(V \cdot N)N$, damping, thermal conduction exchange, and residual time integration $P' = P_\text{hit} + N(r_\text{eff} + 0.05) + V' (1 - t) \Delta t$.
+  - Added proximity / resting contact fallback preventing particles from penetrating wall corners or drifting at resting contact.
+- [x] **2. GPU Wall Storage Buffer & WGSL Modularization (`ParticleGPUComputeShader.js`)**:
+  - Implemented 48-byte `WallData` struct (`p1: vec2f, p2: vec2f, normal: vec2f, thickness: f32, isOpen: u32, wallType: u32, allowedDir: f32, temperature: f32, conductivity: f32`) supporting up to 512 CAD walls in `GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST`.
+  - Decoupled WGSL compute shader source into dedicated module `ParticleGPUComputeShader.js` (183 lines) and kept `ParticleGPUCompute.js` (273 lines), strictly under the 350-line modularity limit.
+  - Added multi-substep execution per frame (`subSteps = 4`), submitting 4 synchronized ping-pong compute passes per frame in a single command buffer submission.
+  - Added `readbackParticles` async method using a `MAP_READ` staging buffer for verification and telemetry inspection.
+- [x] **3. Automated Chrome CDP Anti-Tunneling Verification (`test_gpu_compute_cdp.py`)**:
+  - Tested 100 particles at extreme speed ($3000\text{ px/s}$, $\Delta t = 0.016\text{ s}$, displacement $48\text{ px}$) flying directly into a $4\text{ px}$ thin wall.
+  - Verified 100% bounced particles ($vx < 0$, $x \le 500$) and strictly 0 tunneled particles ($x > 500$) on both GPU and CPU.
+  - Verified 50,000 particle Zero-Copy simulation at stable 60 FPS.
+  - All 6 stages in `tests/verify_all.py` pass 100%.
 
 ---
 
 ## 3. Next Session Starting Tasks
-- [ ] Phase 2 Step 2: CAD geometry (walls, pistons, valves) collision buffers in Compute Shader.
 - [ ] Phase 2 Step 3: GPU Spatial Hashing / Uniform Grid for particle-particle collisions.
 - [ ] Add CSV export for chamber and dashboard time-series telemetry data.
 - [ ] Add interactive particle inspector (click single particle to track trajectory and velocity history).

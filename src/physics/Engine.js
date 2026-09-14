@@ -300,6 +300,8 @@ export class Engine {
     this.totalTime = 0;
     this.isPaused = true;
     this._updateStats();
+    this.syncParticlesToGPU();
+    this.syncWallsToGPU();
   }
 
   saveSimStartSnapshot() {
@@ -324,6 +326,8 @@ export class Engine {
     this.totalTime = 0;
     this.isPaused = true;
     this._updateStats();
+    this.syncParticlesToGPU();
+    this.syncWallsToGPU();
   }
 
   saveInitialSnapshot(profileName = null) {
@@ -355,10 +359,25 @@ export class Engine {
     if (this.particles.length > 0) {
       this.gpuCompute.uploadParticles(this.particles);
     }
+    if (this.walls.length > 0) {
+      this.gpuCompute.uploadWalls(this.walls);
+    }
   }
 
   disableGPUCompute() {
     this.useGPUCompute = false;
+  }
+
+  syncParticlesToGPU() {
+    if (this.gpuCompute && this.useGPUCompute && this.particles) {
+      this.gpuCompute.uploadParticles(this.particles);
+    }
+  }
+
+  syncWallsToGPU() {
+    if (this.gpuCompute && this.useGPUCompute && this.walls) {
+      this.gpuCompute.uploadWalls(this.walls);
+    }
   }
 
   step(dt) {
@@ -371,12 +390,17 @@ export class Engine {
       if (this.sequencer && this.sequencer.isEnabled) {
         this.sequencer.step(effectiveDt, this);
       }
-      this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.width, this.height, 380);
-      this.totalTime += effectiveDt;
       for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
       for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
       for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
       for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+
+      if (this.walls.length > 0) {
+        this.gpuCompute.uploadWalls(this.walls);
+      }
+
+      this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.width, this.height, 380, this.subSteps);
+      this.totalTime += effectiveDt;
       this.stats.particleCount = this.gpuCompute.count;
       return;
     }
@@ -613,12 +637,80 @@ export class Engine {
     if (wall.type === 'manual_valve' && wall.isOpen) return;
     if (wall.type === 'relief_valve' && wall.isOpen && wall.reliefMode === 'bidirectional') return;
 
+    const effRad = p.radius + wall.thickness * 0.5;
+
+    // 1. Continuous Collision Detection (CCD): Check path segment from P_old to P_new
+    const oldX = p.pos.x - p.vel.x * dt;
+    const oldY = p.pos.y - p.vel.y * dt;
+    const vx = p.pos.x - oldX;
+    const vy = p.pos.y - oldY;
+
+    const wx = wall.p2.x - wall.p1.x;
+    const wy = wall.p2.y - wall.p1.y;
+
+    const denom = vx * wy - vy * wx;
+
+    if (Math.abs(denom) > 1e-6) {
+      const dx13 = wall.p1.x - oldX;
+      const dy13 = wall.p1.y - oldY;
+
+      const t = (dx13 * wy - dy13 * wx) / denom;
+      const u = (dx13 * vy - dy13 * vx) / denom;
+
+      const wallLen = Math.hypot(wx, wy);
+      const eps = wallLen > 0 ? (effRad / wallLen) : 0;
+
+      if (t >= 0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps) {
+        const vDotN = p.vel.x * wall.normal.x + p.vel.y * wall.normal.y;
+
+        if (wall.type === 'check_valve' || (wall.type === 'relief_valve' && wall.isOpen && wall.reliefMode === 'oneway')) {
+          if (vDotN * wall.allowedDirection > 0) return;
+        }
+
+        const nx = vDotN < 0 ? wall.normal.x : -wall.normal.x;
+        const ny = vDotN < 0 ? wall.normal.y : -wall.normal.y;
+
+        const hitX = oldX + vx * t;
+        const hitY = oldY + vy * t;
+
+        const velAlongNormal = p.vel.x * nx + p.vel.y * ny;
+        if (velAlongNormal < 0) {
+          let newVx = p.vel.x - 2 * velAlongNormal * nx;
+          let newVy = p.vel.y - 2 * velAlongNormal * ny;
+
+          if (wall.conductivity > 0) {
+            const kB = 35.0;
+            const targetSpeedSq = (2 * kB * wall.temperature) / p.mass;
+            const curSpeedSq = newVx * newVx + newVy * newVy;
+            const alpha = wall.conductivity * 0.8;
+            const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+            const factor = curSpeedSq > 0.001 ? Math.sqrt(blendSq / curSpeedSq) : 1;
+
+            const eBefore = 0.5 * p.mass * curSpeedSq;
+            newVx *= factor;
+            newVy *= factor;
+            const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
+            wall.addHeat(-(eAfter - eBefore));
+          }
+
+          p.vel.x = newVx;
+          p.vel.y = newVy;
+          wall.recordImpulse(2 * p.mass * Math.abs(velAlongNormal));
+        }
+
+        const remainT = (1.0 - t) * dt;
+        p.pos.x = hitX + nx * (effRad + 0.05) + p.vel.x * remainT;
+        p.pos.y = hitY + ny * (effRad + 0.05) + p.vel.y * remainT;
+        return;
+      }
+    }
+
+    // 2. Discrete Fallback (for resting contact or proximity overlap)
     if (!this._wallClosestHelper) this._wallClosestHelper = { x: 0, y: 0 };
     wall.getClosestPointCoords(p.pos.x, p.pos.y, this._wallClosestHelper);
     const dx = p.pos.x - this._wallClosestHelper.x;
     const dy = p.pos.y - this._wallClosestHelper.y;
     const distSq = dx * dx + dy * dy;
-    const effRad = p.radius + wall.thickness * 0.5;
 
     if (distSq < effRad * effRad) {
       const dist = Math.sqrt(distSq) || 0.0001;

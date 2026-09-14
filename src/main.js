@@ -172,11 +172,8 @@ if (gpuCanvas) {
       if (errOverlay) errOverlay.style.display = 'flex';
     } else if (renderer.gpuRenderer && renderer.gpuRenderer.device) {
       const gpuCompute = new ParticleGPUCompute(renderer.gpuRenderer.device);
-      engine.gpuCompute = gpuCompute;
       window.gpuCompute = gpuCompute;
-      if (engine.particles && engine.particles.length > 0) {
-        gpuCompute.uploadParticles(engine.particles);
-      }
+      engine.enableGPUCompute(gpuCompute);
     }
   }).catch(err => {
     console.error('WebGPU Init Error:', err);
@@ -2256,6 +2253,8 @@ btnPlayPause.addEventListener('click', () => {
   if (!isSimulating) {
     engine.saveSimStartSnapshot();
     isSimulating = true;
+    engine.syncParticlesToGPU();
+    engine.syncWallsToGPU();
     document.querySelector('.ribbon-row-construction')?.classList.add('simulating-locked');
     document.getElementById('btnToolbarClear')?.setAttribute('disabled', 'true');
     activeTool = 'select';
@@ -2283,6 +2282,8 @@ btnStep.addEventListener('click', () => {
   if (!isSimulating) {
     engine.saveSimStartSnapshot();
     isSimulating = true;
+    engine.syncParticlesToGPU();
+    engine.syncWallsToGPU();
     document.querySelector('.ribbon-row-construction')?.classList.add('simulating-locked');
     document.getElementById('btnToolbarClear')?.setAttribute('disabled', 'true');
     activeTool = 'select';

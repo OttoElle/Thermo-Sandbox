@@ -44,7 +44,8 @@
 ## src/physics/ (Physics Engine & Geometry)
 - **Vector2.js**: 2D vector mathematics utility (dot, cross, norm, rot, dist).
 - **Particle.js**: Hard-sphere and Lennard-Jones particle model with position, velocity, mass, radius, and thermal coloring.
-- **ParticleGPUCompute.js**: WebGPU GPGPU compute shader coordinator managing Ping-Pong storage buffers, numerical particle integration, gravity, boundary reflections, and zero-copy rendering output.
+- **ParticleGPUComputeShader.js**: WGSL compute shader kernel source code implementing numerical particle integration, gravity, world bounds, and Continuous Collision Detection (CCD) Ray-vs-Segment swept tests.
+- **ParticleGPUCompute.js**: WebGPU GPGPU compute shader coordinator managing Ping-Pong storage buffers, wall storage buffer, multi-substep dispatch, zero-copy rendering output, and async particle readbacks.
 - **ParticleGroup.js**: Represents grouped clusters of particles for collective tracking in canvas elements outline.
 - **SpatialGrid.js**: Spatial partitioning hash grid for optimized O(N) particle-particle collision detection.
 - **Wall.js**: Static and conductive line segments, manual valves, check valves, and pressure relief valves with zero-allocation scalar projection.
@@ -61,7 +62,7 @@
 - **Sink.js**: Vacuum particle removal absorber with absorption efficiency.
 - **SensorZone.js**: Spatial measurement chamber computing real-time T, P, V, N, and filtered drift velocity with single-pass variance.
 - **TextLabel.js**: Canvas text annotations and formula labels.
-- **Engine.js**: Core simulation coordinator running numerical integration, zero-allocation in-place compaction, analytical Lennard-Jones, gravity, cycle sequencer execution, and state save/restore.
+- **Engine.js**: Core simulation coordinator running numerical integration, zero-allocation in-place compaction, analytical Lennard-Jones, gravity, cycle sequencer execution, GPU compute coordination, Continuous Collision Detection (CCD), and state save/restore.
 
 ## src/render/ (Canvas & WebGPU Rendering)
 - **Colormap.js**: Thermal temperature-to-RGB gradient interpolator (Cold Blue -> Cyan -> Orange -> Hot Magenta).
@@ -79,6 +80,8 @@
 - **main.js**: Application orchestrator, dual-canvas synchronization, ribbon toolbar events, inspector synchronization, tool previews, splash screen management, and animation loop.
 
 ## tests/ (Automated Verification & CDP Test Suites)
-- **verify_all.py**: Master test suite running file size audits (< 350 lines), CSS syntax checks, build verification, and headless browser runtime test.
+- **verify_all.py**: Master test suite running file size audits (< 350 lines), CSS syntax checks, build verification, headless browser runtime test, WebGPU runtime test, and 50,000 particle Zero-Copy compute verification.
+- **test_webgpu_runtime.py**: Headless Chrome CDP test verifying WebGPU adapter, device, WGSL pipeline, and render pass.
+- **test_gpu_compute_cdp.py**: Headless Chrome CDP test verifying 50,000 particle Zero-Copy GPU compute simulation and Continuous Collision Detection (CCD) anti-tunneling on GPU and CPU.
 - **test_sequencer_modal_cdp.py**: Chrome DevTools Protocol end-to-end test verifying sequencer UI, dialogs, exclusive accordions, and scrolling.
 - **test_transition_cdp.py**: CDP test suite verifying 2D compound transition builder, Boolean precedence, square chip collapse, and cycle execution.

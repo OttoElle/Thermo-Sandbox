@@ -3285,7 +3285,194 @@ class CycleSequencer {
 }
 
 
+// --- src/physics/ParticleGPUComputeShader.js ---
+const particleComputeWGSL = `
+struct SimParams {
+  dt: f32,
+  gravity: f32,
+  gravityEnabled: u32,
+  damping: f32,
+  worldWidth: f32,
+  worldHeight: f32,
+  particleCount: u32,
+  maxSpeedReference: f32,
+  wallCount: u32,
+  subSteps: u32,
+  pad1: u32,
+  pad2: u32,
+};
+
+struct Particle {
+  pos: vec2f,
+  vel: vec2f,
+  radius: f32,
+  mass: f32,
+  speedNorm: f32,
+  pad: f32,
+};
+
+struct WallData {
+  p1: vec2f,
+  p2: vec2f,
+  normal: vec2f,
+  thickness: f32,
+  isOpen: u32,
+  wallType: u32,
+  allowedDir: f32,
+  temperature: f32,
+  conductivity: f32,
+};
+
+@group(0) @binding(0) var<uniform> params: SimParams;
+@group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
+@group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
+@group(0) @binding(3) var<storage, read> walls: array<WallData>;
+
+@compute @workgroup_size(64)
+fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
+  let idx = global_id.x;
+  if (idx >= params.particleCount) {
+    return;
+  }
+
+  var p = particlesIn[idx];
+
+  // 1. Gravity acceleration
+  if (params.gravityEnabled != 0u) {
+    p.vel.y += params.gravity * params.dt;
+  }
+
+  // 2. Continuous Collision Detection (CCD) Ray-vs-Segment swept test
+  let oldPos = p.pos;
+  let moveVec = p.vel * params.dt;
+  var candidatePos = oldPos + moveVec;
+
+  var earliestT = 2.0;
+  var hitWallIdx = -1;
+  var hitNormal = vec2f(0.0, 0.0);
+  var hitEffRad = 0.0;
+
+  for (var i = 0u; i < params.wallCount; i++) {
+    let w = walls[i];
+    if (w.wallType == 1u && w.isOpen != 0u) {
+      continue;
+    }
+    if (w.wallType == 3u && w.isOpen != 0u && abs(w.allowedDir) < 0.01) {
+      continue;
+    }
+
+    let effRad = p.radius + w.thickness * 0.5;
+    let seg = w.p2 - w.p1;
+    let denom = moveVec.x * seg.y - moveVec.y * seg.x;
+
+    if (abs(denom) > 1e-6) {
+      let dx = w.p1.x - oldPos.x;
+      let dy = w.p1.y - oldPos.y;
+      let t = (dx * seg.y - dy * seg.x) / denom;
+      let u = (dx * moveVec.y - dy * moveVec.x) / denom;
+
+      let wallLen = length(seg);
+      let eps = select(0.0, effRad / wallLen, wallLen > 0.0);
+
+      if (t >= 0.0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps) {
+        let vDotN = dot(p.vel, w.normal);
+        let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
+        if (isOneWay && (vDotN * w.allowedDir > 0.0)) {
+          // Free passage
+        } else if (t < earliestT) {
+          earliestT = t;
+          hitWallIdx = i32(i);
+          hitNormal = select(-w.normal, w.normal, vDotN < 0.0);
+          hitEffRad = effRad;
+        }
+      }
+    }
+  }
+
+  if (hitWallIdx >= 0) {
+    let w = walls[u32(hitWallIdx)];
+    let hitPos = oldPos + moveVec * earliestT;
+    let velAlongNormal = dot(p.vel, hitNormal);
+
+    if (velAlongNormal < 0.0) {
+      p.vel = p.vel - 2.0 * velAlongNormal * hitNormal;
+
+      if (w.conductivity > 0.0) {
+        let kB = 35.0;
+        let targetSpeedSq = (2.0 * kB * w.temperature) / p.mass;
+        let curSpeedSq = dot(p.vel, p.vel);
+        let alpha = w.conductivity * 0.8;
+        let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+        let factor = select(1.0, sqrt(blendSq / curSpeedSq), curSpeedSq > 0.001);
+        p.vel *= factor;
+      }
+
+      p.vel *= params.damping;
+    }
+
+    let remainT = (1.0 - earliestT) * params.dt;
+    candidatePos = hitPos + hitNormal * (hitEffRad + 0.05) + p.vel * remainT;
+  }
+
+  p.pos = candidatePos;
+
+  // 3. Proximity / resting contact fallback
+  for (var i = 0u; i < params.wallCount; i++) {
+    let w = walls[i];
+    if (w.wallType == 1u && w.isOpen != 0u) {
+      continue;
+    }
+    let effRad = p.radius + w.thickness * 0.5;
+    let seg = w.p2 - w.p1;
+    let segLenSq = dot(seg, seg);
+    var u_proj = 0.0;
+    if (segLenSq > 1e-6) {
+      u_proj = clamp(dot(p.pos - w.p1, seg) / segLenSq, 0.0, 1.0);
+    }
+    let closest = w.p1 + seg * u_proj;
+    let diff = p.pos - closest;
+    let distSq = dot(diff, diff);
+    if (distSq < effRad * effRad && distSq > 1e-8) {
+      let dist = sqrt(distSq);
+      let norm = diff / dist;
+      p.pos = closest + norm * (effRad + 0.05);
+      let vn = dot(p.vel, norm);
+      if (vn < 0.0) {
+        p.vel = p.vel - 2.0 * vn * norm * params.damping;
+      }
+    }
+  }
+
+  // 4. World boundary reflections (0..worldWidth, 0..worldHeight)
+  let r = p.radius;
+  if (p.pos.x - r < 0.0) {
+    p.pos.x = r;
+    p.vel.x = -p.vel.x * params.damping;
+  } else if (p.pos.x + r > params.worldWidth) {
+    p.pos.x = params.worldWidth - r;
+    p.vel.x = -p.vel.x * params.damping;
+  }
+
+  if (p.pos.y - r < 0.0) {
+    p.pos.y = r;
+    p.vel.y = -p.vel.y * params.damping;
+  } else if (p.pos.y + r > params.worldHeight) {
+    p.pos.y = params.worldHeight - r;
+    p.vel.y = -p.vel.y * params.damping;
+  }
+
+  // 5. Normalized speed for colormap sampling
+  let speed = length(p.vel);
+  let maxRef = max(1.0, params.maxSpeedReference);
+  p.speedNorm = clamp(speed / maxRef, 0.0, 1.0);
+
+  particlesOut[idx] = p;
+}
+`;
+
+
 // --- src/physics/ParticleGPUCompute.js ---
+
 class ParticleGPUCompute {
   constructor(device) {
     this.device = device;
@@ -3293,13 +3480,16 @@ class ParticleGPUCompute {
 
     this.capacity = 100000;
     this.count = 0;
+    this.maxWalls = 512;
+    this.wallCount = 0;
     this.pingPong = 0; // 0: A is in, B is out; 1: B is in, A is out
 
     this.bufferA = null;
     this.bufferB = null;
     this.uniformBuffer = null;
+    this.wallsBuffer = null;
 
-    this.uniformData = new ArrayBuffer(32);
+    this.uniformData = new ArrayBuffer(48);
     this.uniformFloats = new Float32Array(this.uniformData);
     this.uniformU32 = new Uint32Array(this.uniformData);
 
@@ -3315,7 +3505,6 @@ class ParticleGPUCompute {
 
   _initBuffers() {
     const device = this.device;
-    // 32 bytes per particle: pos(8), vel(8), radius(4), mass(4), speedNorm(4), pad(4)
     const bufferSize = this.capacity * 32;
 
     this.bufferA = device.createBuffer({
@@ -3332,106 +3521,32 @@ class ParticleGPUCompute {
 
     this.uniformBuffer = device.createBuffer({
       label: 'ParticleComputeUniforms',
-      size: 32,
+      size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+
+    this.wallsBuffer = device.createBuffer({
+      label: 'ParticleComputeWalls',
+      size: this.maxWalls * 48,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
     });
   }
 
   _initPipeline() {
     const device = this.device;
 
-    const wgslSource = `
-      struct SimParams {
-        dt: f32,
-        gravity: f32,
-        gravityEnabled: u32,
-        damping: f32,
-        worldWidth: f32,
-        worldHeight: f32,
-        particleCount: u32,
-        maxSpeedReference: f32,
-      };
-
-      struct Particle {
-        pos: vec2f,
-        vel: vec2f,
-        radius: f32,
-        mass: f32,
-        speedNorm: f32,
-        pad: f32,
-      };
-
-      @group(0) @binding(0) var<uniform> params: SimParams;
-      @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
-      @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
-
-      @compute @workgroup_size(64)
-      fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
-        let idx = global_id.x;
-        if (idx >= params.particleCount) {
-          return;
-        }
-
-        var p = particlesIn[idx];
-
-        // 1. Gravity acceleration
-        if (params.gravityEnabled != 0u) {
-          p.vel.y += params.gravity * params.dt;
-        }
-
-        // 2. Position numerical integration
-        p.pos += p.vel * params.dt;
-
-        // 3. World boundary reflections (0..worldWidth, 0..worldHeight)
-        let r = p.radius;
-        if (p.pos.x - r < 0.0) {
-          p.pos.x = r;
-          p.vel.x = -p.vel.x * params.damping;
-        } else if (p.pos.x + r > params.worldWidth) {
-          p.pos.x = params.worldWidth - r;
-          p.vel.x = -p.vel.x * params.damping;
-        }
-
-        if (p.pos.y - r < 0.0) {
-          p.pos.y = r;
-          p.vel.y = -p.vel.y * params.damping;
-        } else if (p.pos.y + r > params.worldHeight) {
-          p.pos.y = params.worldHeight - r;
-          p.vel.y = -p.vel.y * params.damping;
-        }
-
-        // 4. Normalized speed for colormap sampling
-        let speed = length(p.vel);
-        let maxRef = max(1.0, params.maxSpeedReference);
-        p.speedNorm = clamp(speed / maxRef, 0.0, 1.0);
-
-        particlesOut[idx] = p;
-      }
-    `;
-
     const shaderModule = device.createShaderModule({
       label: 'ParticleComputeShader',
-      code: wgslSource
+      code: particleComputeWGSL
     });
 
     const bindGroupLayout = device.createBindGroupLayout({
       label: 'ParticleComputeBindGroupLayout',
       entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: 'uniform' }
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: 'read-only-storage' }
-        },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: 'storage' }
-        }
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }
       ]
     });
 
@@ -3449,14 +3564,14 @@ class ParticleGPUCompute {
       }
     });
 
-    // Ping-Pong BindGroups: A->B and B->A
     this.bindGroupAB = device.createBindGroup({
       label: 'ParticleComputeBindGroupAB',
       layout: bindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
         { binding: 1, resource: { buffer: this.bufferA } },
-        { binding: 2, resource: { buffer: this.bufferB } }
+        { binding: 2, resource: { buffer: this.bufferB } },
+        { binding: 3, resource: { buffer: this.wallsBuffer } }
       ]
     });
 
@@ -3466,9 +3581,48 @@ class ParticleGPUCompute {
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
         { binding: 1, resource: { buffer: this.bufferB } },
-        { binding: 2, resource: { buffer: this.bufferA } }
+        { binding: 2, resource: { buffer: this.bufferA } },
+        { binding: 3, resource: { buffer: this.wallsBuffer } }
       ]
     });
+  }
+
+  uploadWalls(walls) {
+    if (!this.isSupported || !walls) return;
+    const count = Math.min(walls.length, this.maxWalls);
+    this.wallCount = count;
+    if (count === 0) return;
+
+    const data = new ArrayBuffer(count * 48);
+    const f32 = new Float32Array(data);
+    const u32 = new Uint32Array(data);
+
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const w = walls[i];
+      f32[ptr + 0] = w.p1 ? w.p1.x : 0;
+      f32[ptr + 1] = w.p1 ? w.p1.y : 0;
+      f32[ptr + 2] = w.p2 ? w.p2.x : 0;
+      f32[ptr + 3] = w.p2 ? w.p2.y : 0;
+      f32[ptr + 4] = w.normal ? w.normal.x : 0;
+      f32[ptr + 5] = w.normal ? w.normal.y : 0;
+      f32[ptr + 6] = w.thickness || 4;
+      u32[ptr + 7] = w.isOpen ? 1 : 0;
+
+      let typeCode = 0;
+      if (w.type === 'manual_valve') typeCode = 1;
+      else if (w.type === 'check_valve') typeCode = 2;
+      else if (w.type === 'relief_valve') typeCode = 3;
+      u32[ptr + 8] = typeCode;
+
+      f32[ptr + 9] = w.allowedDirection !== undefined ? w.allowedDirection : 1.0;
+      f32[ptr + 10] = w.temperature !== undefined ? w.temperature : 300.0;
+      f32[ptr + 11] = w.conductivity !== undefined ? w.conductivity : 0.0;
+
+      ptr += 12;
+    }
+
+    this.device.queue.writeBuffer(this.wallsBuffer, 0, data, 0, count * 48);
   }
 
   uploadParticles(particles) {
@@ -3498,11 +3652,13 @@ class ParticleGPUCompute {
     this.pingPong = 0;
   }
 
-  step(dt, gravityEnabled, gravity = 350, damping = 0.98, worldWidth = 2500, worldHeight = 2500, maxSpeedReference = 380) {
+  step(dt, gravityEnabled, gravity = 350, damping = 0.98, worldWidth = 2500, worldHeight = 2500, maxSpeedReference = 380, subSteps = 4) {
     if (!this.isSupported || this.count === 0) return null;
 
-    // Update uniform buffer
-    this.uniformFloats[0] = dt;
+    const effectiveSubSteps = Math.max(1, subSteps || 1);
+    const subDt = dt / effectiveSubSteps;
+
+    this.uniformFloats[0] = subDt;
     this.uniformFloats[1] = gravity;
     this.uniformU32[2] = gravityEnabled ? 1 : 0;
     this.uniformFloats[3] = damping;
@@ -3510,6 +3666,10 @@ class ParticleGPUCompute {
     this.uniformFloats[5] = worldHeight;
     this.uniformU32[6] = this.count;
     this.uniformFloats[7] = maxSpeedReference;
+    this.uniformU32[8] = this.wallCount;
+    this.uniformU32[9] = effectiveSubSteps;
+    this.uniformU32[10] = 0;
+    this.uniformU32[11] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
 
@@ -3517,38 +3677,71 @@ class ParticleGPUCompute {
       label: 'ParticleComputeEncoder'
     });
 
-    const pass = commandEncoder.beginComputePass({
-      label: 'ParticleComputePass'
-    });
-    pass.setPipeline(this.pipeline);
-
-    // Select active ping-pong bind group
-    const activeBindGroup = (this.pingPong === 0) ? this.bindGroupAB : this.bindGroupBA;
-    pass.setBindGroup(0, activeBindGroup);
-
     const workgroupCount = Math.ceil(this.count / 64);
-    pass.dispatchWorkgroups(workgroupCount);
-    pass.end();
+
+    for (let s = 0; s < effectiveSubSteps; s++) {
+      const pass = commandEncoder.beginComputePass({
+        label: `ParticleComputePass_${s}`
+      });
+      pass.setPipeline(this.pipeline);
+      const activeBindGroup = (this.pingPong === 0) ? this.bindGroupAB : this.bindGroupBA;
+      pass.setBindGroup(0, activeBindGroup);
+      pass.dispatchWorkgroups(workgroupCount);
+      pass.end();
+
+      this.pingPong = 1 - this.pingPong;
+    }
 
     this.device.queue.submit([commandEncoder.finish()]);
 
-    // Current output buffer is the one written to:
-    // If pingPong was 0 (A->B), output is B. If pingPong was 1 (B->A), output is A.
-    const outputBuffer = (this.pingPong === 0) ? this.bufferB : this.bufferA;
-
-    // Advance ping-pong state for next step
-    this.pingPong = 1 - this.pingPong;
-
-    return outputBuffer;
+    return this.getOutputBuffer();
   }
 
   getOutputBuffer() {
-    // Current available valid particle state
     return (this.pingPong === 0) ? this.bufferA : this.bufferB;
   }
 
   getCount() {
     return this.count;
+  }
+
+  async readbackParticles(maxCount = this.count) {
+    if (!this.isSupported || this.count === 0) return [];
+    const readCount = Math.min(this.count, maxCount);
+    const byteSize = readCount * 32;
+
+    const stagingBuffer = this.device.createBuffer({
+      label: 'ParticleReadbackStaging',
+      size: byteSize,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+    });
+
+    const commandEncoder = this.device.createCommandEncoder({
+      label: 'ParticleReadbackEncoder'
+    });
+    const srcBuffer = this.getOutputBuffer();
+    commandEncoder.copyBufferToBuffer(srcBuffer, 0, stagingBuffer, 0, byteSize);
+    this.device.queue.submit([commandEncoder.finish()]);
+
+    await stagingBuffer.mapAsync(GPUMapMode.READ);
+    const floats = new Float32Array(stagingBuffer.getMappedRange());
+
+    const result = [];
+    let ptr = 0;
+    for (let i = 0; i < readCount; i++) {
+      result.push({
+        pos: { x: floats[ptr], y: floats[ptr + 1] },
+        vel: { x: floats[ptr + 2], y: floats[ptr + 3] },
+        radius: floats[ptr + 4],
+        mass: floats[ptr + 5],
+        speedNorm: floats[ptr + 6]
+      });
+      ptr += 8;
+    }
+
+    stagingBuffer.unmap();
+    stagingBuffer.destroy();
+    return result;
   }
 }
 
@@ -3839,6 +4032,8 @@ class Engine {
     this.totalTime = 0;
     this.isPaused = true;
     this._updateStats();
+    this.syncParticlesToGPU();
+    this.syncWallsToGPU();
   }
 
   saveSimStartSnapshot() {
@@ -3863,6 +4058,8 @@ class Engine {
     this.totalTime = 0;
     this.isPaused = true;
     this._updateStats();
+    this.syncParticlesToGPU();
+    this.syncWallsToGPU();
   }
 
   saveInitialSnapshot(profileName = null) {
@@ -3894,10 +4091,25 @@ class Engine {
     if (this.particles.length > 0) {
       this.gpuCompute.uploadParticles(this.particles);
     }
+    if (this.walls.length > 0) {
+      this.gpuCompute.uploadWalls(this.walls);
+    }
   }
 
   disableGPUCompute() {
     this.useGPUCompute = false;
+  }
+
+  syncParticlesToGPU() {
+    if (this.gpuCompute && this.useGPUCompute && this.particles) {
+      this.gpuCompute.uploadParticles(this.particles);
+    }
+  }
+
+  syncWallsToGPU() {
+    if (this.gpuCompute && this.useGPUCompute && this.walls) {
+      this.gpuCompute.uploadWalls(this.walls);
+    }
   }
 
   step(dt) {
@@ -3910,12 +4122,17 @@ class Engine {
       if (this.sequencer && this.sequencer.isEnabled) {
         this.sequencer.step(effectiveDt, this);
       }
-      this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.width, this.height, 380);
-      this.totalTime += effectiveDt;
       for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
       for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
       for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
       for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+
+      if (this.walls.length > 0) {
+        this.gpuCompute.uploadWalls(this.walls);
+      }
+
+      this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.width, this.height, 380, this.subSteps);
+      this.totalTime += effectiveDt;
       this.stats.particleCount = this.gpuCompute.count;
       return;
     }
@@ -4152,12 +4369,80 @@ class Engine {
     if (wall.type === 'manual_valve' && wall.isOpen) return;
     if (wall.type === 'relief_valve' && wall.isOpen && wall.reliefMode === 'bidirectional') return;
 
+    const effRad = p.radius + wall.thickness * 0.5;
+
+    // 1. Continuous Collision Detection (CCD): Check path segment from P_old to P_new
+    const oldX = p.pos.x - p.vel.x * dt;
+    const oldY = p.pos.y - p.vel.y * dt;
+    const vx = p.pos.x - oldX;
+    const vy = p.pos.y - oldY;
+
+    const wx = wall.p2.x - wall.p1.x;
+    const wy = wall.p2.y - wall.p1.y;
+
+    const denom = vx * wy - vy * wx;
+
+    if (Math.abs(denom) > 1e-6) {
+      const dx13 = wall.p1.x - oldX;
+      const dy13 = wall.p1.y - oldY;
+
+      const t = (dx13 * wy - dy13 * wx) / denom;
+      const u = (dx13 * vy - dy13 * vx) / denom;
+
+      const wallLen = Math.hypot(wx, wy);
+      const eps = wallLen > 0 ? (effRad / wallLen) : 0;
+
+      if (t >= 0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps) {
+        const vDotN = p.vel.x * wall.normal.x + p.vel.y * wall.normal.y;
+
+        if (wall.type === 'check_valve' || (wall.type === 'relief_valve' && wall.isOpen && wall.reliefMode === 'oneway')) {
+          if (vDotN * wall.allowedDirection > 0) return;
+        }
+
+        const nx = vDotN < 0 ? wall.normal.x : -wall.normal.x;
+        const ny = vDotN < 0 ? wall.normal.y : -wall.normal.y;
+
+        const hitX = oldX + vx * t;
+        const hitY = oldY + vy * t;
+
+        const velAlongNormal = p.vel.x * nx + p.vel.y * ny;
+        if (velAlongNormal < 0) {
+          let newVx = p.vel.x - 2 * velAlongNormal * nx;
+          let newVy = p.vel.y - 2 * velAlongNormal * ny;
+
+          if (wall.conductivity > 0) {
+            const kB = 35.0;
+            const targetSpeedSq = (2 * kB * wall.temperature) / p.mass;
+            const curSpeedSq = newVx * newVx + newVy * newVy;
+            const alpha = wall.conductivity * 0.8;
+            const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+            const factor = curSpeedSq > 0.001 ? Math.sqrt(blendSq / curSpeedSq) : 1;
+
+            const eBefore = 0.5 * p.mass * curSpeedSq;
+            newVx *= factor;
+            newVy *= factor;
+            const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
+            wall.addHeat(-(eAfter - eBefore));
+          }
+
+          p.vel.x = newVx;
+          p.vel.y = newVy;
+          wall.recordImpulse(2 * p.mass * Math.abs(velAlongNormal));
+        }
+
+        const remainT = (1.0 - t) * dt;
+        p.pos.x = hitX + nx * (effRad + 0.05) + p.vel.x * remainT;
+        p.pos.y = hitY + ny * (effRad + 0.05) + p.vel.y * remainT;
+        return;
+      }
+    }
+
+    // 2. Discrete Fallback (for resting contact or proximity overlap)
     if (!this._wallClosestHelper) this._wallClosestHelper = { x: 0, y: 0 };
     wall.getClosestPointCoords(p.pos.x, p.pos.y, this._wallClosestHelper);
     const dx = p.pos.x - this._wallClosestHelper.x;
     const dy = p.pos.y - this._wallClosestHelper.y;
     const distSq = dx * dx + dy * dy;
-    const effRad = p.radius + wall.thickness * 0.5;
 
     if (distSq < effRad * effRad) {
       const dist = Math.sqrt(distSq) || 0.0001;
@@ -9440,11 +9725,8 @@ if (gpuCanvas) {
       if (errOverlay) errOverlay.style.display = 'flex';
     } else if (renderer.gpuRenderer && renderer.gpuRenderer.device) {
       const gpuCompute = new ParticleGPUCompute(renderer.gpuRenderer.device);
-      engine.gpuCompute = gpuCompute;
       window.gpuCompute = gpuCompute;
-      if (engine.particles && engine.particles.length > 0) {
-        gpuCompute.uploadParticles(engine.particles);
-      }
+      engine.enableGPUCompute(gpuCompute);
     }
   }).catch(err => {
     console.error('WebGPU Init Error:', err);
@@ -11524,6 +11806,8 @@ btnPlayPause.addEventListener('click', () => {
   if (!isSimulating) {
     engine.saveSimStartSnapshot();
     isSimulating = true;
+    engine.syncParticlesToGPU();
+    engine.syncWallsToGPU();
     document.querySelector('.ribbon-row-construction')?.classList.add('simulating-locked');
     document.getElementById('btnToolbarClear')?.setAttribute('disabled', 'true');
     activeTool = 'select';
@@ -11551,6 +11835,8 @@ btnStep.addEventListener('click', () => {
   if (!isSimulating) {
     engine.saveSimStartSnapshot();
     isSimulating = true;
+    engine.syncParticlesToGPU();
+    engine.syncWallsToGPU();
     document.querySelector('.ribbon-row-construction')?.classList.add('simulating-locked');
     document.getElementById('btnToolbarClear')?.setAttribute('disabled', 'true');
     activeTool = 'select';
