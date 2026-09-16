@@ -15,7 +15,7 @@ struct SimParams {
   gridOrigin: vec2f,
   boundMin: vec2f,
   boundMax: vec2f,
-  pad1: u32,
+  simModel: u32,
   pad2: u32,
 };
 
@@ -93,6 +93,10 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   let cellY = i32(floor((p.pos.y - params.gridOrigin.y) / params.cellSize));
 
   if (cellX >= 0 && cellX < i32(params.gridCols) && cellY >= 0 && cellY < i32(params.gridRows)) {
+    var totalPosShift = vec2f(0.0, 0.0);
+    var totalVelDelta = vec2f(0.0, 0.0);
+    var collisionCount = 0.0;
+
     for (var dy = -1; dy <= 1; dy++) {
       let ny = cellY + dy;
       if (ny < 0 || ny >= i32(params.gridRows)) {
@@ -104,38 +108,71 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
           continue;
         }
         let nCellIdx = u32(ny * i32(params.gridCols) + nx);
-      var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
-      var loopSteps = 0;
-      while (otherIdx >= 0 && loopSteps < 24) {
-        if (otherIdx != i32(idx)) {
-          let pOther = particlesIn[u32(otherIdx)];
-          let diff = p.pos - pOther.pos;
-          let distSq = dot(diff, diff);
-          let minDist = p.radius + pOther.radius;
+        var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
+        var loopSteps = 0;
+        while (otherIdx >= 0 && loopSteps < 32) {
+          if (otherIdx != i32(idx)) {
+            let pOther = particlesIn[u32(otherIdx)];
+            let diff = p.pos - pOther.pos;
+            let distSq = dot(diff, diff);
 
-          if (distSq < minDist * minDist && distSq > 1e-4) {
-            let dist = sqrt(distSq);
-            let n = diff / dist;
-            let overlap = minDist - dist;
-            let mTotal = p.mass + pOther.mass;
+            if (params.simModel == 1u) {
+              // Real Gas Model: Lennard-Jones 6-12 Potential
+              let sigma = (p.radius + pOther.radius) * 0.9;
+              let sigmaSq = sigma * sigma;
+              let rCutSq = sigmaSq * 6.25;
+              if (distSq < rCutSq && distSq > 1e-4) {
+                let invDistSq = 1.0 / distSq;
+                let s_r2 = sigmaSq * invDistSq;
+                let s_r6 = s_r2 * s_r2 * s_r2;
+                let s_r12 = s_r6 * s_r6;
+                let epsilon = 30.0;
+                var forceOverDist = 24.0 * epsilon * (2.0 * s_r12 - s_r6) * invDistSq;
+                let fSq = forceOverDist * forceOverDist * distSq;
+                if (fSq > 1000000.0) {
+                  let dist = sqrt(distSq);
+                  forceOverDist = select(-1000.0, 1000.0, forceOverDist > 0.0) / dist;
+                }
+                totalVelDelta += (diff * (forceOverDist / p.mass)) * params.dt;
+              }
+            } else {
+              // Ideal Gas Model: 100% Elastic Momentum Conservation (Restitution = 1.0)
+              let minDist = p.radius + pOther.radius;
+              if (distSq < minDist * minDist && distSq > 1e-4) {
+                let dist = sqrt(distSq);
+                let n = diff / dist;
+                let overlap = minDist - dist;
+                let mTotal = p.mass + pOther.mass;
 
-            // Position soft relaxation to prevent interpenetration
-            p.pos += n * (overlap * (pOther.mass / mTotal) * 0.5);
+                totalPosShift += n * (overlap * (pOther.mass / mTotal) * 0.5);
+                collisionCount += 1.0;
 
-            // Elastic velocity impulse
-            let relVel = p.vel - pOther.vel;
-            let vRelN = dot(relVel, n);
-            if (vRelN < 0.0) {
-              let impulse = 2.0 * vRelN / mTotal;
-              p.vel -= impulse * pOther.mass * n * params.damping;
+                let relVel = p.vel - pOther.vel;
+                let vRelN = dot(relVel, n);
+                if (vRelN < 0.0) {
+                  let impulse = 2.0 * vRelN / mTotal;
+                  totalVelDelta -= impulse * pOther.mass * n;
+                }
+              }
             }
           }
+          otherIdx = particleNext[u32(otherIdx)];
+          loopSteps++;
         }
-        otherIdx = particleNext[u32(otherIdx)];
-        loopSteps++;
       }
     }
-  }
+
+    if (collisionCount > 1.0) {
+      totalVelDelta = totalVelDelta / collisionCount;
+    }
+    if (params.simModel == 0u && collisionCount > 0.0) {
+      let shiftLen = length(totalPosShift);
+      if (shiftLen > 1.5) {
+        totalPosShift = (totalPosShift / shiftLen) * 1.5;
+      }
+      p.pos += totalPosShift;
+    }
+    p.vel += totalVelDelta;
   }
 
   // 3. Continuous Collision Detection (CCD) Ray-vs-Segment swept test against CAD walls
@@ -159,26 +196,37 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
 
     let effRad = p.radius + w.thickness * 0.5;
     let seg = w.p2 - w.p1;
-    let denom = moveVec.x * seg.y - moveVec.y * seg.x;
+    let segLenSq = dot(seg, seg);
+    if (segLenSq < 1e-6) {
+      continue;
+    }
 
-    if (abs(denom) > 1e-6) {
-      let dx = w.p1.x - oldPos.x;
-      let dy = w.p1.y - oldPos.y;
-      let t = (dx * seg.y - dy * seg.x) / denom;
-      let u = (dx * moveVec.y - dy * moveVec.x) / denom;
+    let vDotN = dot(p.vel, w.normal);
+    let h0 = dot(oldPos - w.p1, w.normal);
+    let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
+    if (isOneWay && (vDotN * w.allowedDir > 0.0)) {
+      continue;
+    }
 
-      let wallLen = length(seg);
-      let eps = select(0.0, effRad / wallLen, wallLen > 0.0);
+    let vNormDt = vDotN * params.dt;
+    let isMovingIn = (h0 * vDotN <= 0.0);
+    let targetDist = select(-effRad, effRad, h0 >= 0.0);
 
-      if (t >= 0.0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps) {
-        let vDotN = dot(p.vel, w.normal);
-        let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
-        if (isOneWay && (vDotN * w.allowedDir > 0.0)) {
-          // Free passage
-        } else if (t < earliestT) {
+    if (abs(vNormDt) > 1e-5 && isMovingIn) {
+      var t = (targetDist - h0) / vNormDt;
+      if (abs(h0) <= effRad) {
+        t = 0.0;
+      }
+      if (t >= 0.0 && t <= 1.0) {
+        let hitPos = oldPos + moveVec * t;
+        let u = dot(hitPos - w.p1, seg) / segLenSq;
+        let wallLen = sqrt(segLenSq);
+        let eps = effRad / wallLen;
+
+        if (u >= -eps && u <= 1.0 + eps && t < earliestT) {
           earliestT = t;
           hitWallIdx = i32(i);
-          hitNormal = select(-w.normal, w.normal, vDotN < 0.0);
+          hitNormal = select(-w.normal, w.normal, h0 >= 0.0);
           hitEffRad = effRad;
         }
       }
@@ -202,12 +250,12 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
         let factor = select(1.0, sqrt(blendSq / curSpeedSq), curSpeedSq > 0.001);
         p.vel *= factor;
       }
-
-      p.vel *= params.damping;
     }
 
+    let h0 = dot(oldPos - w.p1, hitNormal);
+    let pushDist = select(0.05, hitEffRad - h0 + 0.05, h0 < hitEffRad);
     let remainT = (1.0 - earliestT) * params.dt;
-    candidatePos = hitPos + hitNormal * (hitEffRad + 0.05) + p.vel * remainT;
+    candidatePos = hitPos + hitNormal * pushDist + p.vel * remainT;
   }
 
   p.pos = candidatePos;
@@ -230,13 +278,24 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     let distSq = dot(diff, diff);
     if (distSq < effRad * effRad && distSq > 1e-8) {
       let dist = sqrt(distSq);
-      let norm = diff / dist;
+      var norm = diff / dist;
+      let vDotN = dot(p.vel, w.normal);
+      let targetNorm = select(-w.normal, w.normal, vDotN < 0.0);
+      if (dot(norm, targetNorm) < 0.0) {
+        norm = targetNorm;
+      }
       p.pos = closest + norm * (effRad + 0.05);
       let vn = dot(p.vel, norm);
       if (vn < 0.0) {
-        p.vel = p.vel - 2.0 * vn * norm * params.damping;
+        p.vel = p.vel - 2.0 * vn * norm;
       }
     }
+  }
+
+  // Speed safety clamp to prevent extreme acceleration and corner tunneling
+  let curSpeed = length(p.vel);
+  if (curSpeed > 3500.0) {
+    p.vel = (p.vel / curSpeed) * 3500.0;
   }
 
   // 5. Optional Screen Boundaries (ONLY when boundsEnabled != 0u, e.g. in splash mode)

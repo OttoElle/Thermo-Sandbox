@@ -3303,7 +3303,7 @@ struct SimParams {
   gridOrigin: vec2f,
   boundMin: vec2f,
   boundMax: vec2f,
-  pad1: u32,
+  simModel: u32,
   pad2: u32,
 };
 
@@ -3381,6 +3381,10 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   let cellY = i32(floor((p.pos.y - params.gridOrigin.y) / params.cellSize));
 
   if (cellX >= 0 && cellX < i32(params.gridCols) && cellY >= 0 && cellY < i32(params.gridRows)) {
+    var totalPosShift = vec2f(0.0, 0.0);
+    var totalVelDelta = vec2f(0.0, 0.0);
+    var collisionCount = 0.0;
+
     for (var dy = -1; dy <= 1; dy++) {
       let ny = cellY + dy;
       if (ny < 0 || ny >= i32(params.gridRows)) {
@@ -3392,38 +3396,71 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
           continue;
         }
         let nCellIdx = u32(ny * i32(params.gridCols) + nx);
-      var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
-      var loopSteps = 0;
-      while (otherIdx >= 0 && loopSteps < 24) {
-        if (otherIdx != i32(idx)) {
-          let pOther = particlesIn[u32(otherIdx)];
-          let diff = p.pos - pOther.pos;
-          let distSq = dot(diff, diff);
-          let minDist = p.radius + pOther.radius;
+        var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
+        var loopSteps = 0;
+        while (otherIdx >= 0 && loopSteps < 32) {
+          if (otherIdx != i32(idx)) {
+            let pOther = particlesIn[u32(otherIdx)];
+            let diff = p.pos - pOther.pos;
+            let distSq = dot(diff, diff);
 
-          if (distSq < minDist * minDist && distSq > 1e-4) {
-            let dist = sqrt(distSq);
-            let n = diff / dist;
-            let overlap = minDist - dist;
-            let mTotal = p.mass + pOther.mass;
+            if (params.simModel == 1u) {
+              // Real Gas Model: Lennard-Jones 6-12 Potential
+              let sigma = (p.radius + pOther.radius) * 0.9;
+              let sigmaSq = sigma * sigma;
+              let rCutSq = sigmaSq * 6.25;
+              if (distSq < rCutSq && distSq > 1e-4) {
+                let invDistSq = 1.0 / distSq;
+                let s_r2 = sigmaSq * invDistSq;
+                let s_r6 = s_r2 * s_r2 * s_r2;
+                let s_r12 = s_r6 * s_r6;
+                let epsilon = 30.0;
+                var forceOverDist = 24.0 * epsilon * (2.0 * s_r12 - s_r6) * invDistSq;
+                let fSq = forceOverDist * forceOverDist * distSq;
+                if (fSq > 1000000.0) {
+                  let dist = sqrt(distSq);
+                  forceOverDist = select(-1000.0, 1000.0, forceOverDist > 0.0) / dist;
+                }
+                totalVelDelta += (diff * (forceOverDist / p.mass)) * params.dt;
+              }
+            } else {
+              // Ideal Gas Model: 100% Elastic Momentum Conservation (Restitution = 1.0)
+              let minDist = p.radius + pOther.radius;
+              if (distSq < minDist * minDist && distSq > 1e-4) {
+                let dist = sqrt(distSq);
+                let n = diff / dist;
+                let overlap = minDist - dist;
+                let mTotal = p.mass + pOther.mass;
 
-            // Position soft relaxation to prevent interpenetration
-            p.pos += n * (overlap * (pOther.mass / mTotal) * 0.5);
+                totalPosShift += n * (overlap * (pOther.mass / mTotal) * 0.5);
+                collisionCount += 1.0;
 
-            // Elastic velocity impulse
-            let relVel = p.vel - pOther.vel;
-            let vRelN = dot(relVel, n);
-            if (vRelN < 0.0) {
-              let impulse = 2.0 * vRelN / mTotal;
-              p.vel -= impulse * pOther.mass * n * params.damping;
+                let relVel = p.vel - pOther.vel;
+                let vRelN = dot(relVel, n);
+                if (vRelN < 0.0) {
+                  let impulse = 2.0 * vRelN / mTotal;
+                  totalVelDelta -= impulse * pOther.mass * n;
+                }
+              }
             }
           }
+          otherIdx = particleNext[u32(otherIdx)];
+          loopSteps++;
         }
-        otherIdx = particleNext[u32(otherIdx)];
-        loopSteps++;
       }
     }
-  }
+
+    if (collisionCount > 1.0) {
+      totalVelDelta = totalVelDelta / collisionCount;
+    }
+    if (params.simModel == 0u && collisionCount > 0.0) {
+      let shiftLen = length(totalPosShift);
+      if (shiftLen > 1.5) {
+        totalPosShift = (totalPosShift / shiftLen) * 1.5;
+      }
+      p.pos += totalPosShift;
+    }
+    p.vel += totalVelDelta;
   }
 
   // 3. Continuous Collision Detection (CCD) Ray-vs-Segment swept test against CAD walls
@@ -3447,26 +3484,37 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
 
     let effRad = p.radius + w.thickness * 0.5;
     let seg = w.p2 - w.p1;
-    let denom = moveVec.x * seg.y - moveVec.y * seg.x;
+    let segLenSq = dot(seg, seg);
+    if (segLenSq < 1e-6) {
+      continue;
+    }
 
-    if (abs(denom) > 1e-6) {
-      let dx = w.p1.x - oldPos.x;
-      let dy = w.p1.y - oldPos.y;
-      let t = (dx * seg.y - dy * seg.x) / denom;
-      let u = (dx * moveVec.y - dy * moveVec.x) / denom;
+    let vDotN = dot(p.vel, w.normal);
+    let h0 = dot(oldPos - w.p1, w.normal);
+    let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
+    if (isOneWay && (vDotN * w.allowedDir > 0.0)) {
+      continue;
+    }
 
-      let wallLen = length(seg);
-      let eps = select(0.0, effRad / wallLen, wallLen > 0.0);
+    let vNormDt = vDotN * params.dt;
+    let isMovingIn = (h0 * vDotN <= 0.0);
+    let targetDist = select(-effRad, effRad, h0 >= 0.0);
 
-      if (t >= 0.0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps) {
-        let vDotN = dot(p.vel, w.normal);
-        let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
-        if (isOneWay && (vDotN * w.allowedDir > 0.0)) {
-          // Free passage
-        } else if (t < earliestT) {
+    if (abs(vNormDt) > 1e-5 && isMovingIn) {
+      var t = (targetDist - h0) / vNormDt;
+      if (abs(h0) <= effRad) {
+        t = 0.0;
+      }
+      if (t >= 0.0 && t <= 1.0) {
+        let hitPos = oldPos + moveVec * t;
+        let u = dot(hitPos - w.p1, seg) / segLenSq;
+        let wallLen = sqrt(segLenSq);
+        let eps = effRad / wallLen;
+
+        if (u >= -eps && u <= 1.0 + eps && t < earliestT) {
           earliestT = t;
           hitWallIdx = i32(i);
-          hitNormal = select(-w.normal, w.normal, vDotN < 0.0);
+          hitNormal = select(-w.normal, w.normal, h0 >= 0.0);
           hitEffRad = effRad;
         }
       }
@@ -3490,12 +3538,12 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
         let factor = select(1.0, sqrt(blendSq / curSpeedSq), curSpeedSq > 0.001);
         p.vel *= factor;
       }
-
-      p.vel *= params.damping;
     }
 
+    let h0 = dot(oldPos - w.p1, hitNormal);
+    let pushDist = select(0.05, hitEffRad - h0 + 0.05, h0 < hitEffRad);
     let remainT = (1.0 - earliestT) * params.dt;
-    candidatePos = hitPos + hitNormal * (hitEffRad + 0.05) + p.vel * remainT;
+    candidatePos = hitPos + hitNormal * pushDist + p.vel * remainT;
   }
 
   p.pos = candidatePos;
@@ -3518,13 +3566,24 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     let distSq = dot(diff, diff);
     if (distSq < effRad * effRad && distSq > 1e-8) {
       let dist = sqrt(distSq);
-      let norm = diff / dist;
+      var norm = diff / dist;
+      let vDotN = dot(p.vel, w.normal);
+      let targetNorm = select(-w.normal, w.normal, vDotN < 0.0);
+      if (dot(norm, targetNorm) < 0.0) {
+        norm = targetNorm;
+      }
       p.pos = closest + norm * (effRad + 0.05);
       let vn = dot(p.vel, norm);
       if (vn < 0.0) {
-        p.vel = p.vel - 2.0 * vn * norm * params.damping;
+        p.vel = p.vel - 2.0 * vn * norm;
       }
     }
+  }
+
+  // Speed safety clamp to prevent extreme acceleration and corner tunneling
+  let curSpeed = length(p.vel);
+  if (curSpeed > 3500.0) {
+    p.vel = (p.vel / curSpeed) * 3500.0;
   }
 
   // 5. Optional Screen Boundaries (ONLY when boundsEnabled != 0u, e.g. in splash mode)
@@ -3575,10 +3634,10 @@ class ParticleGPUCompute {
     this.uniformBuffer = null;
     this.wallsBuffer = null;
 
-    this.gridCols = 128;
-    this.gridRows = 128;
+    this.gridCols = 256;
+    this.gridRows = 256;
     this.totalCells = this.gridCols * this.gridRows;
-    this.cellSize = 32.0;
+    this.cellSize = 14.0;
 
     this.cellHeadsBuffer = null;
     this.particleNextBuffer = null;
@@ -3683,31 +3742,19 @@ class ParticleGPUCompute {
       compute: { module: shaderModule, entryPoint: 'cs_integrate' }
     });
 
-    this.bindGroupAB = device.createBindGroup({
-      label: 'ParticleComputeBindGroupAB',
-      layout: bindGroupLayout,
+    const makeBG = (inBuf, outBuf, label) => device.createBindGroup({
+      label, layout: bindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.bufferA } },
-        { binding: 2, resource: { buffer: this.bufferB } },
+        { binding: 1, resource: { buffer: inBuf } },
+        { binding: 2, resource: { buffer: outBuf } },
         { binding: 3, resource: { buffer: this.wallsBuffer } },
         { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
         { binding: 5, resource: { buffer: this.particleNextBuffer } }
       ]
     });
-
-    this.bindGroupBA = device.createBindGroup({
-      label: 'ParticleComputeBindGroupBA',
-      layout: bindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.bufferB } },
-        { binding: 2, resource: { buffer: this.bufferA } },
-        { binding: 3, resource: { buffer: this.wallsBuffer } },
-        { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
-        { binding: 5, resource: { buffer: this.particleNextBuffer } }
-      ]
-    });
+    this.bindGroupAB = makeBG(this.bufferA, this.bufferB, 'ParticleComputeBindGroupAB');
+    this.bindGroupBA = makeBG(this.bufferB, this.bufferA, 'ParticleComputeBindGroupBA');
   }
 
   uploadWalls(walls) {
@@ -3748,33 +3795,49 @@ class ParticleGPUCompute {
     this.device.queue.writeBuffer(this.wallsBuffer, 0, data, 0, count * 48);
   }
 
+  _packParticles(particles, startIdx, count) {
+    const packed = new Float32Array(count * 8);
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const p = particles[startIdx + i];
+      packed[ptr++] = p.pos ? p.pos.x : 0;
+      packed[ptr++] = p.pos ? p.pos.y : 0;
+      packed[ptr++] = p.vel ? p.vel.x : 0;
+      packed[ptr++] = p.vel ? p.vel.y : 0;
+      packed[ptr++] = p.radius || 3.5;
+      packed[ptr++] = p.mass || 1.0;
+      packed[ptr++] = 0.0;
+      packed[ptr++] = 0.0;
+    }
+    return packed;
+  }
+
   uploadParticles(particles) {
     if (!this.isSupported || !particles) return;
     this.count = Math.min(particles.length, this.capacity);
     if (this.count === 0) return;
 
-    // Pack particles into 8 floats per particle (32 bytes)
-    const packedData = new Float32Array(this.count * 8);
-    let ptr = 0;
-    for (let i = 0; i < this.count; i++) {
-      const p = particles[i];
-      packedData[ptr++] = p.pos ? p.pos.x : 0;
-      packedData[ptr++] = p.pos ? p.pos.y : 0;
-      packedData[ptr++] = p.vel ? p.vel.x : 0;
-      packedData[ptr++] = p.vel ? p.vel.y : 0;
-      packedData[ptr++] = p.radius || 3.5;
-      packedData[ptr++] = p.mass || 1.0;
-      packedData[ptr++] = 0.0; // speedNorm
-      packedData[ptr++] = 0.0; // pad
-    }
-
+    const packed = this._packParticles(particles, 0, this.count);
     const byteLength = this.count * 32;
-    this.device.queue.writeBuffer(this.bufferA, 0, packedData.buffer, 0, byteLength);
-    this.device.queue.writeBuffer(this.bufferB, 0, packedData.buffer, 0, byteLength);
+    this.device.queue.writeBuffer(this.bufferA, 0, packed.buffer, 0, byteLength);
+    this.device.queue.writeBuffer(this.bufferB, 0, packed.buffer, 0, byteLength);
     this.pingPong = 0;
   }
 
-  step(dt, gravityEnabled, gravity = 350, damping = 0.98, bounds = null, maxSpeedReference = 380, subSteps = 4) {
+  appendParticles(newParticles) {
+    if (!this.isSupported || !newParticles || newParticles.length === 0) return;
+    const addCount = Math.min(newParticles.length, this.capacity - this.count);
+    if (addCount <= 0) return;
+
+    const packed = this._packParticles(newParticles, 0, addCount);
+    const byteOffset = this.count * 32;
+    const byteLength = addCount * 32;
+    this.device.queue.writeBuffer(this.bufferA, byteOffset, packed.buffer, 0, byteLength);
+    this.device.queue.writeBuffer(this.bufferB, byteOffset, packed.buffer, 0, byteLength);
+    this.count += addCount;
+  }
+
+  step(dt, gravityEnabled, gravity = 350, damping = 1.0, bounds = null, maxSpeedReference = 380, subSteps = 4, simModel = 0) {
     if (!this.isSupported || this.count === 0) return null;
 
     const effectiveSubSteps = Math.max(1, Math.min(16, subSteps || 4));
@@ -3795,13 +3858,13 @@ class ParticleGPUCompute {
     this.uniformFloats[9] = this.cellSize;
     this.uniformU32[10] = this.gridCols;
     this.uniformU32[11] = this.gridRows;
-    this.uniformFloats[12] = hasBounds ? bounds.minX - 100 : -1000.0;
-    this.uniformFloats[13] = hasBounds ? bounds.minY - 100 : -1000.0;
+    this.uniformFloats[12] = hasBounds ? bounds.minX - 50.0 : -500.0;
+    this.uniformFloats[13] = hasBounds ? bounds.minY - 50.0 : -500.0;
     this.uniformFloats[14] = hasBounds ? bounds.minX : 0;
     this.uniformFloats[15] = hasBounds ? bounds.minY : 0;
     this.uniformFloats[16] = hasBounds ? bounds.maxX : 2500;
     this.uniformFloats[17] = hasBounds ? bounds.maxY : 2500;
-    this.uniformU32[18] = 0;
+    this.uniformU32[18] = simModel ? 1 : 0;
     this.uniformU32[19] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
@@ -4105,8 +4168,10 @@ class Engine {
     let spawned = 0;
     for (let r = 0; r < rows && spawned < count; r++) {
       for (let c = 0; c < cols && spawned < count; c++) {
-        const px = x + pad + (cols > 1 ? c * stepX : effW * 0.5);
-        const py = y + pad + (rows > 1 ? r * stepY : effH * 0.5);
+        const jx = (Math.random() - 0.5) * Math.min(stepX * 0.25, 2.0);
+        const jy = (Math.random() - 0.5) * Math.min(stepY * 0.25, 2.0);
+        const px = x + pad + (cols > 1 ? c * stepX : effW * 0.5) + jx;
+        const py = y + pad + (rows > 1 ? r * stepY : effH * 0.5) + jy;
 
         let vx = 0, vy = 0;
         if (velocityMode === 'uniform_speed') {
@@ -4266,39 +4331,12 @@ class Engine {
 
     const effectiveDt = dt * this.timeScale;
 
-    // GPU Compute Simulation Branch (Phase 2 Zero-Copy)
-    if (this.gpuCompute && this.useGPUCompute) {
-      if (this.gpuCompute.count !== this.particles.length) {
-        this.syncParticlesToGPU();
-      }
-      if (this.gpuCompute.count > 0) {
-        if (this.sequencer && this.sequencer.isEnabled) {
-          this.sequencer.step(effectiveDt, this);
-        }
-        for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
-        for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
-        for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
-        for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
-
-        if (this.walls.length > 0) {
-          this.gpuCompute.uploadWalls(this.walls);
-        }
-
-        this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.ambientBounds, 380, this.subSteps);
-        this.totalTime += effectiveDt;
-        this.stats.particleCount = this.gpuCompute.count;
-        return;
-      }
-    }
-
-    const subDt = effectiveDt / this.subSteps;
-
     // 0. Precision Cycle Sequencer (Coordinates valves, pistons & thermals per phase)
     if (this.sequencer && this.sequencer.isEnabled) {
       this.sequencer.step(effectiveDt, this);
     }
 
-    // 1. Particle Emitters & Regulators & Throttle Valves
+    // 1. Particle Emitters & Regulators & Throttle Valves (Active in both GPU and CPU modes)
     for (let i = 0; i < this.emitters.length; i++) {
       this.emitters[i].update(effectiveDt, this);
     }
@@ -4308,6 +4346,34 @@ class Engine {
     for (let i = 0; i < (this.throttleValves || []).length; i++) {
       this.throttleValves[i].update(effectiveDt);
     }
+
+    // GPU Compute Simulation Branch (Phase 2 Zero-Copy)
+    if (this.gpuCompute && this.useGPUCompute) {
+      if (this.particles.length > this.gpuCompute.count) {
+        const newPts = this.particles.slice(this.gpuCompute.count);
+        this.gpuCompute.appendParticles(newPts);
+      } else if (this.particles.length < this.gpuCompute.count) {
+        this.syncParticlesToGPU();
+      }
+      if (this.gpuCompute.count > 0) {
+        for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
+        for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
+        for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
+        for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+
+        if (this.walls.length > 0) {
+          this.gpuCompute.uploadWalls(this.walls);
+        }
+
+        const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
+        this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this.subSteps, modelType);
+        this.totalTime += effectiveDt;
+        this.stats.particleCount = this.gpuCompute.count;
+        return;
+      }
+    }
+
+    const subDt = effectiveDt / this.subSteps;
 
     // 2. Sub-step Physics
     for (let step = 0; step < this.subSteps; step++) {

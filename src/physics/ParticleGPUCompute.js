@@ -16,10 +16,10 @@ export class ParticleGPUCompute {
     this.uniformBuffer = null;
     this.wallsBuffer = null;
 
-    this.gridCols = 128;
-    this.gridRows = 128;
+    this.gridCols = 256;
+    this.gridRows = 256;
     this.totalCells = this.gridCols * this.gridRows;
-    this.cellSize = 32.0;
+    this.cellSize = 14.0;
 
     this.cellHeadsBuffer = null;
     this.particleNextBuffer = null;
@@ -124,31 +124,19 @@ export class ParticleGPUCompute {
       compute: { module: shaderModule, entryPoint: 'cs_integrate' }
     });
 
-    this.bindGroupAB = device.createBindGroup({
-      label: 'ParticleComputeBindGroupAB',
-      layout: bindGroupLayout,
+    const makeBG = (inBuf, outBuf, label) => device.createBindGroup({
+      label, layout: bindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.bufferA } },
-        { binding: 2, resource: { buffer: this.bufferB } },
+        { binding: 1, resource: { buffer: inBuf } },
+        { binding: 2, resource: { buffer: outBuf } },
         { binding: 3, resource: { buffer: this.wallsBuffer } },
         { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
         { binding: 5, resource: { buffer: this.particleNextBuffer } }
       ]
     });
-
-    this.bindGroupBA = device.createBindGroup({
-      label: 'ParticleComputeBindGroupBA',
-      layout: bindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.bufferB } },
-        { binding: 2, resource: { buffer: this.bufferA } },
-        { binding: 3, resource: { buffer: this.wallsBuffer } },
-        { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
-        { binding: 5, resource: { buffer: this.particleNextBuffer } }
-      ]
-    });
+    this.bindGroupAB = makeBG(this.bufferA, this.bufferB, 'ParticleComputeBindGroupAB');
+    this.bindGroupBA = makeBG(this.bufferB, this.bufferA, 'ParticleComputeBindGroupBA');
   }
 
   uploadWalls(walls) {
@@ -189,33 +177,49 @@ export class ParticleGPUCompute {
     this.device.queue.writeBuffer(this.wallsBuffer, 0, data, 0, count * 48);
   }
 
+  _packParticles(particles, startIdx, count) {
+    const packed = new Float32Array(count * 8);
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const p = particles[startIdx + i];
+      packed[ptr++] = p.pos ? p.pos.x : 0;
+      packed[ptr++] = p.pos ? p.pos.y : 0;
+      packed[ptr++] = p.vel ? p.vel.x : 0;
+      packed[ptr++] = p.vel ? p.vel.y : 0;
+      packed[ptr++] = p.radius || 3.5;
+      packed[ptr++] = p.mass || 1.0;
+      packed[ptr++] = 0.0;
+      packed[ptr++] = 0.0;
+    }
+    return packed;
+  }
+
   uploadParticles(particles) {
     if (!this.isSupported || !particles) return;
     this.count = Math.min(particles.length, this.capacity);
     if (this.count === 0) return;
 
-    // Pack particles into 8 floats per particle (32 bytes)
-    const packedData = new Float32Array(this.count * 8);
-    let ptr = 0;
-    for (let i = 0; i < this.count; i++) {
-      const p = particles[i];
-      packedData[ptr++] = p.pos ? p.pos.x : 0;
-      packedData[ptr++] = p.pos ? p.pos.y : 0;
-      packedData[ptr++] = p.vel ? p.vel.x : 0;
-      packedData[ptr++] = p.vel ? p.vel.y : 0;
-      packedData[ptr++] = p.radius || 3.5;
-      packedData[ptr++] = p.mass || 1.0;
-      packedData[ptr++] = 0.0; // speedNorm
-      packedData[ptr++] = 0.0; // pad
-    }
-
+    const packed = this._packParticles(particles, 0, this.count);
     const byteLength = this.count * 32;
-    this.device.queue.writeBuffer(this.bufferA, 0, packedData.buffer, 0, byteLength);
-    this.device.queue.writeBuffer(this.bufferB, 0, packedData.buffer, 0, byteLength);
+    this.device.queue.writeBuffer(this.bufferA, 0, packed.buffer, 0, byteLength);
+    this.device.queue.writeBuffer(this.bufferB, 0, packed.buffer, 0, byteLength);
     this.pingPong = 0;
   }
 
-  step(dt, gravityEnabled, gravity = 350, damping = 0.98, bounds = null, maxSpeedReference = 380, subSteps = 4) {
+  appendParticles(newParticles) {
+    if (!this.isSupported || !newParticles || newParticles.length === 0) return;
+    const addCount = Math.min(newParticles.length, this.capacity - this.count);
+    if (addCount <= 0) return;
+
+    const packed = this._packParticles(newParticles, 0, addCount);
+    const byteOffset = this.count * 32;
+    const byteLength = addCount * 32;
+    this.device.queue.writeBuffer(this.bufferA, byteOffset, packed.buffer, 0, byteLength);
+    this.device.queue.writeBuffer(this.bufferB, byteOffset, packed.buffer, 0, byteLength);
+    this.count += addCount;
+  }
+
+  step(dt, gravityEnabled, gravity = 350, damping = 1.0, bounds = null, maxSpeedReference = 380, subSteps = 4, simModel = 0) {
     if (!this.isSupported || this.count === 0) return null;
 
     const effectiveSubSteps = Math.max(1, Math.min(16, subSteps || 4));
@@ -236,13 +240,13 @@ export class ParticleGPUCompute {
     this.uniformFloats[9] = this.cellSize;
     this.uniformU32[10] = this.gridCols;
     this.uniformU32[11] = this.gridRows;
-    this.uniformFloats[12] = hasBounds ? bounds.minX - 100 : -1000.0;
-    this.uniformFloats[13] = hasBounds ? bounds.minY - 100 : -1000.0;
+    this.uniformFloats[12] = hasBounds ? bounds.minX - 50.0 : -500.0;
+    this.uniformFloats[13] = hasBounds ? bounds.minY - 50.0 : -500.0;
     this.uniformFloats[14] = hasBounds ? bounds.minX : 0;
     this.uniformFloats[15] = hasBounds ? bounds.minY : 0;
     this.uniformFloats[16] = hasBounds ? bounds.maxX : 2500;
     this.uniformFloats[17] = hasBounds ? bounds.maxY : 2500;
-    this.uniformU32[18] = 0;
+    this.uniformU32[18] = simModel ? 1 : 0;
     this.uniformU32[19] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);

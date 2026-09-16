@@ -154,6 +154,28 @@ def run_test():
                     if (p.pos.x <= 500 && p.vel.x < 0) gpuBounced++;
                 }
 
+                // 2b. Test Shallow-Angle (Glancing) Wall Collision Detection
+                const shallowWall = new Wall(500, 0, 500, 1000, { thickness: 4 });
+                window.gpuCompute.uploadWalls([shallowWall]);
+                const shallowParticles = [];
+                for (let i = 0; i < 50; i++) {
+                    shallowParticles.push({
+                        pos: { x: 490, y: 100 + i * 15 },
+                        vel: { x: 1200, y: 7000 }, // ~80 degree glancing angle
+                        radius: 3.5,
+                        mass: 1.0
+                    });
+                }
+                window.gpuCompute.uploadParticles(shallowParticles);
+                window.gpuCompute.step(0.016, false, 0, 1.0, null, 3000, 1);
+                const afterShallow = await window.gpuCompute.readbackParticles(50);
+                let shallowTunneled = 0;
+                let shallowBounced = 0;
+                for (let p of afterShallow) {
+                    if (p.pos.x > 500) shallowTunneled++;
+                    if (p.pos.x <= 500 && p.vel.x < 0) shallowBounced++;
+                }
+
                 // 3. Test Continuous Collision Detection (CCD) Anti-Tunneling on CPU
                 window.engine.clear();
                 window.engine.useGPUCompute = false;
@@ -165,6 +187,40 @@ def run_test():
                 const cpuTunneled = cpuParticle.pos.x > 500;
                 const cpuBounced = cpuParticle.pos.x <= 500 && cpuParticle.vel.x < 0;
 
+                // 4. Test Continuous Emitter Emission in GPU Mode
+                window.engine.clear();
+                window.engine.useGPUCompute = true;
+                window.engine.isPaused = false;
+                window.engine.addEmitter(100, 100, 40, 40, { rate: 60, temperature: 300, mass: 1.0 });
+                for (let emStep = 0; emStep < 15; emStep++) {
+                    window.engine.step(0.016);
+                }
+                const emitterActive = window.engine.particles.length > 0;
+                const emitterGpuCount = window.gpuCompute.count;
+
+                // 5. Test Ideal Gas Energy Conservation (No Freezing / Damping)
+                window.engine.clear();
+                window.engine.simModel = 'hard_sphere';
+                const initialParticles = [];
+                for (let i = 0; i < 500; i++) {
+                    initialParticles.push({
+                        pos: { x: 300 + (i % 20) * 10, y: 300 + Math.floor(i / 20) * 10 },
+                        vel: { x: 200, y: 0 },
+                        radius: 3.5,
+                        mass: 1.0
+                    });
+                }
+                window.gpuCompute.uploadParticles(initialParticles);
+                for (let s = 0; s < 30; s++) {
+                    window.gpuCompute.step(0.016, false, 0, 1.0, null, 380, 4, 0);
+                }
+                const afterSim = await window.gpuCompute.readbackParticles(500);
+                let totalSpeed = 0;
+                for (let p of afterSim) {
+                    totalSpeed += Math.hypot(p.vel.x, p.vel.y);
+                }
+                const meanSpeedAfter = totalSpeed / afterSim.length;
+
                 return {
                     success: true,
                     count: 50000,
@@ -172,8 +228,13 @@ def run_test():
                     isEngineUsingGPU: true,
                     gpuTunneled,
                     gpuBounced,
+                    shallowTunneled,
+                    shallowBounced,
                     cpuTunneled,
                     cpuBounced,
+                    emitterActive,
+                    emitterGpuCount,
+                    meanSpeedAfter,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -199,10 +260,15 @@ def run_test():
         assert val.get('isEngineUsingGPU') == True, "Engine did not enable GPU compute"
         assert val.get('gpuTunneled') == 0, f"GPU particles tunneled: {val.get('gpuTunneled')} tunneled!"
         assert val.get('gpuBounced') == 100, f"Expected 100 particles bounced on GPU, got {val.get('gpuBounced')}"
+        assert val.get('shallowTunneled') == 0, f"Shallow glancing GPU particles tunneled: {val.get('shallowTunneled')} tunneled!"
+        assert val.get('shallowBounced') == 50, f"Expected 50 shallow particles bounced on GPU, got {val.get('shallowBounced')}"
         assert val.get('cpuTunneled') == False, f"CPU particle tunneled through wall!"
         assert val.get('cpuBounced') == True, f"CPU particle failed to bounce!"
+        assert val.get('emitterActive') == True, "Emitter did not emit particles in GPU mode!"
+        assert val.get('emitterGpuCount', 0) > 0, "GPU compute did not synchronize emitted particles!"
+        assert val.get('meanSpeedAfter', 0) > 120, f"Ideal gas froze! Mean speed {val.get('meanSpeedAfter')} is too low (expected > 120)"
 
-        print("\nAll 50,000 Particle Zero-Copy GPU Compute & CCD Anti-Tunneling tests PASSED!")
+        print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter & Energy Conservation tests PASSED!")
 
     finally:
         proc.terminate()

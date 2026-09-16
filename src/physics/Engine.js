@@ -225,8 +225,10 @@ export class Engine {
     let spawned = 0;
     for (let r = 0; r < rows && spawned < count; r++) {
       for (let c = 0; c < cols && spawned < count; c++) {
-        const px = x + pad + (cols > 1 ? c * stepX : effW * 0.5);
-        const py = y + pad + (rows > 1 ? r * stepY : effH * 0.5);
+        const jx = (Math.random() - 0.5) * Math.min(stepX * 0.25, 2.0);
+        const jy = (Math.random() - 0.5) * Math.min(stepY * 0.25, 2.0);
+        const px = x + pad + (cols > 1 ? c * stepX : effW * 0.5) + jx;
+        const py = y + pad + (rows > 1 ? r * stepY : effH * 0.5) + jy;
 
         let vx = 0, vy = 0;
         if (velocityMode === 'uniform_speed') {
@@ -386,39 +388,12 @@ export class Engine {
 
     const effectiveDt = dt * this.timeScale;
 
-    // GPU Compute Simulation Branch (Phase 2 Zero-Copy)
-    if (this.gpuCompute && this.useGPUCompute) {
-      if (this.gpuCompute.count !== this.particles.length) {
-        this.syncParticlesToGPU();
-      }
-      if (this.gpuCompute.count > 0) {
-        if (this.sequencer && this.sequencer.isEnabled) {
-          this.sequencer.step(effectiveDt, this);
-        }
-        for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
-        for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
-        for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
-        for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
-
-        if (this.walls.length > 0) {
-          this.gpuCompute.uploadWalls(this.walls);
-        }
-
-        this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 0.98, this.ambientBounds, 380, this.subSteps);
-        this.totalTime += effectiveDt;
-        this.stats.particleCount = this.gpuCompute.count;
-        return;
-      }
-    }
-
-    const subDt = effectiveDt / this.subSteps;
-
     // 0. Precision Cycle Sequencer (Coordinates valves, pistons & thermals per phase)
     if (this.sequencer && this.sequencer.isEnabled) {
       this.sequencer.step(effectiveDt, this);
     }
 
-    // 1. Particle Emitters & Regulators & Throttle Valves
+    // 1. Particle Emitters & Regulators & Throttle Valves (Active in both GPU and CPU modes)
     for (let i = 0; i < this.emitters.length; i++) {
       this.emitters[i].update(effectiveDt, this);
     }
@@ -428,6 +403,34 @@ export class Engine {
     for (let i = 0; i < (this.throttleValves || []).length; i++) {
       this.throttleValves[i].update(effectiveDt);
     }
+
+    // GPU Compute Simulation Branch (Phase 2 Zero-Copy)
+    if (this.gpuCompute && this.useGPUCompute) {
+      if (this.particles.length > this.gpuCompute.count) {
+        const newPts = this.particles.slice(this.gpuCompute.count);
+        this.gpuCompute.appendParticles(newPts);
+      } else if (this.particles.length < this.gpuCompute.count) {
+        this.syncParticlesToGPU();
+      }
+      if (this.gpuCompute.count > 0) {
+        for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
+        for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
+        for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
+        for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+
+        if (this.walls.length > 0) {
+          this.gpuCompute.uploadWalls(this.walls);
+        }
+
+        const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
+        this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this.subSteps, modelType);
+        this.totalTime += effectiveDt;
+        this.stats.particleCount = this.gpuCompute.count;
+        return;
+      }
+    }
+
+    const subDt = effectiveDt / this.subSteps;
 
     // 2. Sub-step Physics
     for (let step = 0; step < this.subSteps; step++) {

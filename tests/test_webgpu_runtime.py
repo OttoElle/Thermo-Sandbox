@@ -80,7 +80,14 @@ def run_test():
         send_cdp('Page.enable')
         send_cdp('Console.enable')
 
-        time.sleep(1.0)
+        time.sleep(0.5)
+        for _ in range(30):
+            chk = send_cdp('Runtime.evaluate', {
+                'expression': 'typeof window.renderer !== "undefined" && typeof window.engine !== "undefined"'
+            })
+            if chk.get('result', {}).get('value') is True:
+                break
+            time.sleep(0.2)
 
         # Re-invoke and await initGPU directly to catch any error message
         diag = send_cdp('Runtime.evaluate', {
