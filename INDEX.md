@@ -44,8 +44,8 @@
 ## src/physics/ (Physics Engine & Geometry)
 - **Vector2.js**: 2D vector mathematics utility (dot, cross, norm, rot, dist).
 - **Particle.js**: Hard-sphere and Lennard-Jones particle model with position, velocity, mass, radius, and thermal coloring.
-- **ParticleGPUComputeShader.js**: WGSL compute shader kernel source code implementing numerical particle integration, gravity, world bounds, and Continuous Collision Detection (CCD) Ray-vs-Segment swept tests.
-- **ParticleGPUCompute.js**: WebGPU GPGPU compute shader coordinator managing Ping-Pong storage buffers, wall storage buffer, multi-substep dispatch, zero-copy rendering output, and async particle readbacks.
+- **ParticleGPUComputeShader.js**: WGSL compute shader kernel implementing spatial hash grid (cs_clear_grid, cs_build_grid, cs_integrate), dominant pairwise elastic impulse solver, Lennard-Jones potential, normalized Jacobi position relaxation, and startPos-anchored Continuous Collision Detection (CCD) Ray-vs-Segment swept tests.
+- **ParticleGPUCompute.js**: WebGPU GPGPU compute shader coordinator managing Ping-Pong storage buffers, wall storage buffer, spatial hash grid buffers, incremental VRAM streaming (appendParticles), multi-substep dispatch, zero-copy rendering output, and async particle readbacks.
 - **ParticleGroup.js**: Represents grouped clusters of particles for collective tracking in canvas elements outline.
 - **SpatialGrid.js**: Spatial partitioning hash grid for optimized O(N) particle-particle collision detection.
 - **Wall.js**: Static and conductive line segments, manual valves, check valves, and pressure relief valves with zero-allocation scalar projection.
@@ -82,6 +82,6 @@
 ## tests/ (Automated Verification & CDP Test Suites)
 - **verify_all.py**: Master test suite running file size audits (< 350 lines), CSS syntax checks, build verification, headless browser runtime test, WebGPU runtime test, and 50,000 particle Zero-Copy compute verification.
 - **test_webgpu_runtime.py**: Headless Chrome CDP test verifying WebGPU adapter, device, WGSL pipeline, and render pass.
-- **test_gpu_compute_cdp.py**: Headless Chrome CDP test verifying 50,000 particle Zero-Copy GPU compute simulation and Continuous Collision Detection (CCD) anti-tunneling on GPU and CPU.
+- **test_gpu_compute_cdp.py**: Headless Chrome CDP test verifying 50,000 particle Zero-Copy GPU compute, glancing/shallow-angle CCD anti-tunneling, continuous emitter streaming, and 180-frame confined gas anti-freezing.
 - **test_sequencer_modal_cdp.py**: Chrome DevTools Protocol end-to-end test verifying sequencer UI, dialogs, exclusive accordions, and scrolling.
 - **test_transition_cdp.py**: CDP test suite verifying 2D compound transition builder, Boolean precedence, square chip collapse, and cycle execution.

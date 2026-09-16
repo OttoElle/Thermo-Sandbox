@@ -251,7 +251,7 @@
   - Added proximity / resting contact fallback preventing particles from penetrating wall corners or drifting at resting contact.
 - [x] **2. GPU Wall Storage Buffer & WGSL Modularization (`ParticleGPUComputeShader.js`)**:
   - Implemented 48-byte `WallData` struct (`p1: vec2f, p2: vec2f, normal: vec2f, thickness: f32, isOpen: u32, wallType: u32, allowedDir: f32, temperature: f32, conductivity: f32`) supporting up to 512 CAD walls in `GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST`.
-  - Decoupled WGSL compute shader source into dedicated module `ParticleGPUComputeShader.js` (183 lines) and kept `ParticleGPUCompute.js` (273 lines), strictly under the 350-line modularity limit.
+  - Decoupled WGSL compute shader source into dedicated module `ParticleGPUComputeShader.js` (322 lines) and kept `ParticleGPUCompute.js` (282 lines), strictly under the 350-line modularity limit.
   - Added multi-substep execution per frame (`subSteps = 4`), submitting 4 synchronized ping-pong compute passes per frame in a single command buffer submission.
   - Added `readbackParticles` async method using a `MAP_READ` staging buffer for verification and telemetry inspection.
 - [x] **3. Automated Chrome CDP Anti-Tunneling Verification (`test_gpu_compute_cdp.py`)**:
@@ -260,9 +260,30 @@
   - Verified 50,000 particle Zero-Copy simulation at stable 60 FPS.
   - All 6 stages in `tests/verify_all.py` pass 100%.
 
+### U. Complete WebGPU Zero-Copy GPGPU Physics Architecture (Phase 2 - Full Realization)
+- [x] **1. GPU Spatial Hash Grid for Particle-Particle Collisions**:
+  - Implemented 2D uniform grid ($256 \times 256$ cells, $14.0\text{ px}$ cell size) spanning from $-500\text{ px}$ to $+3084\text{ px}$.
+  - Atomic cell heads and linked list pointers (`atomic<i32>`, `particleNext`).
+  - Compute passes: `cs_clear_grid`, `cs_build_grid`, and `cs_integrate` executed ping-pong across sub-steps in a single command buffer submission.
+  - Multi-model simulation switch: Ideal Gas (100% elastic hard-sphere collisions) vs. Real Gas (Lennard-Jones 6-12 inter-atomic potential).
+- [x] **2. Dominant Pairwise Elastic Impulse Solver (`bestApproach`)**:
+  - Replaced multi-body impulse accumulation with dominant approaching partner momentum exchange (`approach = -vRelN`, `bestApproach`), completely eliminating multi-neighbor impulse cancellation that previously caused hexagonal close-packed (HCP) crystallization/freezing.
+  - Normalized Jacobi Position Relaxation (`totalPosShift / collisionCount`, clamped to 1.5 px) cleanly separating overlapping particles without overshooting.
+- [x] **3. Incremental VRAM Streaming (`appendParticles`)**:
+  - Added `appendParticles(newParticles)` in `ParticleGPUCompute.js` streaming newly spawned particles directly to `byteOffset = oldCount * 32`.
+  - In `Engine.js`, replaced destructive full buffer uploads on emission with incremental append, allowing Emitters and Spawners to continuously inject particles without disturbing existing GPU particle state or freezing emissions.
+- [x] **4. `startPos`-Anchored Wall Continuous Collision Detection (CCD) & Fallback**:
+  - Formulated analytic ray-vs-capsule boundary intersection detecting glancing/shallow-angle impacts ($80^\circ$–$89^\circ$) with 0 tunneling.
+  - Anchored wall normal and proximity fallback to the timestep's starting position (`startPos`), ensuring that even under extreme multi-particle compression, particles are always repelled back into the container interior rather than expelled outside.
+  - Eliminated double-reflection glitches by skipping `hitWallIdx` in the fallback pass.
+- [x] **5. Verification & Scalability**:
+  - Zero-Copy GPU rendering passing output buffer directly to instanced vertex pipeline at 50,000 particles.
+  - 180-frame (3 seconds @ 60 FPS) confined gas stress test with 1,000 particles in a tight box: 0 tunneled, stable Maxwell-Boltzmann distribution, 0 frozen clusters.
+  - All modified files strictly under 350 lines (`ParticleGPUCompute.js`: 282 lines, `ParticleGPUComputeShader.js`: 322 lines).
+
 ---
 
 ## 3. Next Session Starting Tasks
-- [ ] Phase 2 Step 3: GPU Spatial Hashing / Uniform Grid for particle-particle collisions.
+- [ ] Phase 2 Step 4: GPU thermal boundaries & heat exchange with moving pistons.
 - [ ] Add CSV export for chamber and dashboard time-series telemetry data.
 - [ ] Add interactive particle inspector (click single particle to track trajectory and velocity history).
