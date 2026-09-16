@@ -3370,6 +3370,7 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   }
 
   var p = particlesIn[idx];
+  let startPos = p.pos;
 
   // 1. Gravity acceleration
   if (params.gravityEnabled != 0u) {
@@ -3382,19 +3383,17 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
 
   if (cellX >= 0 && cellX < i32(params.gridCols) && cellY >= 0 && cellY < i32(params.gridRows)) {
     var totalPosShift = vec2f(0.0, 0.0);
-    var totalVelDelta = vec2f(0.0, 0.0);
     var collisionCount = 0.0;
+    var bestApproach = 0.0;
+    var bestImpulse = vec2f(0.0, 0.0);
+    var ljForce = vec2f(0.0, 0.0);
 
     for (var dy = -1; dy <= 1; dy++) {
       let ny = cellY + dy;
-      if (ny < 0 || ny >= i32(params.gridRows)) {
-        continue;
-      }
+      if (ny < 0 || ny >= i32(params.gridRows)) { continue; }
       for (var dx = -1; dx <= 1; dx++) {
         let nx = cellX + dx;
-        if (nx < 0 || nx >= i32(params.gridCols)) {
-          continue;
-        }
+        if (nx < 0 || nx >= i32(params.gridCols)) { continue; }
         let nCellIdx = u32(ny * i32(params.gridCols) + nx);
         var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
         var loopSteps = 0;
@@ -3421,10 +3420,10 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
                   let dist = sqrt(distSq);
                   forceOverDist = select(-1000.0, 1000.0, forceOverDist > 0.0) / dist;
                 }
-                totalVelDelta += (diff * (forceOverDist / p.mass)) * params.dt;
+                ljForce += diff * (forceOverDist / p.mass);
               }
             } else {
-              // Ideal Gas Model: 100% Elastic Momentum Conservation (Restitution = 1.0)
+              // Ideal Gas Model: Dominant Elastic Pairwise Impulse (anti-freeze, zero energy loss)
               let minDist = p.radius + pOther.radius;
               if (distSq < minDist * minDist && distSq > 1e-4) {
                 let dist = sqrt(distSq);
@@ -3432,14 +3431,18 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
                 let overlap = minDist - dist;
                 let mTotal = p.mass + pOther.mass;
 
-                totalPosShift += n * (overlap * (pOther.mass / mTotal) * 0.5);
+                totalPosShift += n * (overlap * (pOther.mass / mTotal));
                 collisionCount += 1.0;
 
                 let relVel = p.vel - pOther.vel;
                 let vRelN = dot(relVel, n);
                 if (vRelN < 0.0) {
-                  let impulse = 2.0 * vRelN / mTotal;
-                  totalVelDelta -= impulse * pOther.mass * n;
+                  let approach = -vRelN;
+                  if (approach > bestApproach) {
+                    bestApproach = approach;
+                    let impulse = 2.0 * vRelN / mTotal;
+                    bestImpulse = -impulse * pOther.mass * n;
+                  }
                 }
               }
             }
@@ -3450,24 +3453,21 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
       }
     }
 
-    if (collisionCount > 1.0) {
-      totalVelDelta = totalVelDelta / collisionCount;
-    }
-    if (params.simModel == 0u && collisionCount > 0.0) {
-      let shiftLen = length(totalPosShift);
-      if (shiftLen > 1.5) {
-        totalPosShift = (totalPosShift / shiftLen) * 1.5;
+    if (params.simModel == 1u) {
+      p.vel += ljForce * params.dt;
+    } else {
+      p.vel += bestImpulse;
+      if (collisionCount > 0.0) {
+        let shift = totalPosShift / collisionCount;
+        let sLen = length(shift);
+        p.pos += select(shift, (shift / sLen) * 1.5, sLen > 1.5);
       }
-      p.pos += totalPosShift;
     }
-    p.vel += totalVelDelta;
   }
 
-  // 3. Continuous Collision Detection (CCD) Ray-vs-Segment swept test against CAD walls
-  let oldPos = p.pos;
-  let moveVec = p.vel * params.dt;
-  var candidatePos = oldPos + moveVec;
-
+  // 3. Wall Continuous Collision Detection (CCD)
+  let moveVec = (p.pos - startPos) + p.vel * params.dt;
+  var candidatePos = startPos + moveVec;
   var earliestT = 2.0;
   var hitWallIdx = -1;
   var hitNormal = vec2f(0.0, 0.0);
@@ -3475,60 +3475,47 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
 
   for (var i = 0u; i < params.wallCount; i++) {
     let w = walls[i];
-    if (w.wallType == 1u && w.isOpen != 0u) {
-      continue;
-    }
-    if (w.wallType == 3u && w.isOpen != 0u && abs(w.allowedDir) < 0.01) {
-      continue;
-    }
+    if (w.wallType == 1u && w.isOpen != 0u) { continue; }
+    let vDotN = dot(p.vel, w.normal);
+    let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
+    if (isOneWay && (vDotN * w.allowedDir > 0.0)) { continue; }
 
     let effRad = p.radius + w.thickness * 0.5;
     let seg = w.p2 - w.p1;
     let segLenSq = dot(seg, seg);
-    if (segLenSq < 1e-6) {
-      continue;
-    }
+    if (segLenSq < 1e-6) { continue; }
 
-    let vDotN = dot(p.vel, w.normal);
-    let h0 = dot(oldPos - w.p1, w.normal);
-    let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
-    if (isOneWay && (vDotN * w.allowedDir > 0.0)) {
-      continue;
-    }
+    let vx = moveVec.x;
+    let vy = moveVec.y;
+    let wx = seg.x;
+    let wy = seg.y;
+    let denom = vx * wy - vy * wx;
 
-    let vNormDt = vDotN * params.dt;
-    let isMovingIn = (h0 * vDotN <= 0.0);
-    let targetDist = select(-effRad, effRad, h0 >= 0.0);
+    if (abs(denom) > 1e-6) {
+      let dx13 = w.p1.x - startPos.x;
+      let dy13 = w.p1.y - startPos.y;
+      let t = (dx13 * wy - dy13 * wx) / denom;
+      let u = (dx13 * vy - dy13 * vx) / denom;
+      let wallLen = sqrt(segLenSq);
+      let eps = effRad / wallLen;
 
-    if (abs(vNormDt) > 1e-5 && isMovingIn) {
-      var t = (targetDist - h0) / vNormDt;
-      if (abs(h0) <= effRad) {
-        t = 0.0;
-      }
-      if (t >= 0.0 && t <= 1.0) {
-        let hitPos = oldPos + moveVec * t;
-        let u = dot(hitPos - w.p1, seg) / segLenSq;
-        let wallLen = sqrt(segLenSq);
-        let eps = effRad / wallLen;
-
-        if (u >= -eps && u <= 1.0 + eps && t < earliestT) {
-          earliestT = t;
-          hitWallIdx = i32(i);
-          hitNormal = select(-w.normal, w.normal, h0 >= 0.0);
-          hitEffRad = effRad;
-        }
+      if (t >= 0.0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps && t < earliestT) {
+        let hStart = dot(startPos - w.p1, w.normal);
+        var norm = select(-w.normal, w.normal, hStart >= 0.0);
+        if (abs(hStart) < 1e-4) { norm = select(-w.normal, w.normal, vDotN < 0.0); }
+        earliestT = t;
+        hitWallIdx = i32(i);
+        hitNormal = norm;
+        hitEffRad = effRad;
       }
     }
   }
 
   if (hitWallIdx >= 0) {
     let w = walls[u32(hitWallIdx)];
-    let hitPos = oldPos + moveVec * earliestT;
     let velAlongNormal = dot(p.vel, hitNormal);
-
     if (velAlongNormal < 0.0) {
-      p.vel = p.vel - 2.0 * velAlongNormal * hitNormal;
-
+      p.vel -= 2.0 * velAlongNormal * hitNormal;
       if (w.conductivity > 0.0) {
         let kB = 35.0;
         let targetSpeedSq = (2.0 * kB * w.temperature) / p.mass;
@@ -3539,21 +3526,21 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
         p.vel *= factor;
       }
     }
-
-    let h0 = dot(oldPos - w.p1, hitNormal);
-    let pushDist = select(0.05, hitEffRad - h0 + 0.05, h0 < hitEffRad);
+    let hitPoint = startPos + moveVec * earliestT;
     let remainT = (1.0 - earliestT) * params.dt;
-    candidatePos = hitPos + hitNormal * pushDist + p.vel * remainT;
+    candidatePos = hitPoint + hitNormal * (hitEffRad + 0.05) + p.vel * remainT;
   }
-
   p.pos = candidatePos;
 
-  // 4. Proximity / resting contact fallback for walls
+  // 4. Proximity / resting contact fallback for all walls
   for (var i = 0u; i < params.wallCount; i++) {
+    if (i32(i) == hitWallIdx) { continue; }
     let w = walls[i];
-    if (w.wallType == 1u && w.isOpen != 0u) {
-      continue;
-    }
+    if (w.wallType == 1u && w.isOpen != 0u) { continue; }
+    let vDotN = dot(p.vel, w.normal);
+    let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
+    if (isOneWay && (vDotN * w.allowedDir > 0.0)) { continue; }
+
     let effRad = p.radius + w.thickness * 0.5;
     let seg = w.p2 - w.p1;
     let segLenSq = dot(seg, seg);
@@ -3564,27 +3551,34 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     let closest = w.p1 + seg * u_proj;
     let diff = p.pos - closest;
     let distSq = dot(diff, diff);
-    if (distSq < effRad * effRad && distSq > 1e-8) {
+    if (distSq < effRad * effRad) {
       let dist = sqrt(distSq);
-      var norm = diff / dist;
-      let vDotN = dot(p.vel, w.normal);
-      let targetNorm = select(-w.normal, w.normal, vDotN < 0.0);
-      if (dot(norm, targetNorm) < 0.0) {
-        norm = targetNorm;
+      let hStart = dot(startPos - w.p1, w.normal);
+      var norm = select(-w.normal, w.normal, hStart >= 0.0);
+      if (abs(hStart) < 1e-4) { norm = select(-w.normal, w.normal, vDotN <= 0.0); }
+      if (dist > 1e-4 && dot(diff, norm) > 0.0) {
+        norm = diff / dist;
       }
       p.pos = closest + norm * (effRad + 0.05);
       let vn = dot(p.vel, norm);
       if (vn < 0.0) {
-        p.vel = p.vel - 2.0 * vn * norm;
+        p.vel -= 2.0 * vn * norm;
+        if (w.conductivity > 0.0) {
+          let kB = 35.0;
+          let targetSpeedSq = (2.0 * kB * w.temperature) / p.mass;
+          let curSpeedSq = dot(p.vel, p.vel);
+          let alpha = w.conductivity * 0.8;
+          let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+          let factor = select(1.0, sqrt(blendSq / curSpeedSq), curSpeedSq > 0.001);
+          p.vel *= factor;
+        }
       }
     }
   }
 
-  // Speed safety clamp to prevent extreme acceleration and corner tunneling
+  // Speed safety clamp
   let curSpeed = length(p.vel);
-  if (curSpeed > 3500.0) {
-    p.vel = (p.vel / curSpeed) * 3500.0;
-  }
+  if (curSpeed > 2500.0) { p.vel = (p.vel / curSpeed) * 2500.0; }
 
   // 5. Optional Screen Boundaries (ONLY when boundsEnabled != 0u, e.g. in splash mode)
   if (params.boundsEnabled != 0u) {
@@ -3596,7 +3590,6 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
       p.pos.x = params.boundMax.x - r;
       p.vel.x = -abs(p.vel.x) * params.damping;
     }
-
     if (p.pos.y - r < params.boundMin.y) {
       p.pos.y = params.boundMin.y + r;
       p.vel.y = abs(p.vel.y) * params.damping;

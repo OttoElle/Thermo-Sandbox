@@ -221,6 +221,38 @@ def run_test():
                 }
                 const meanSpeedAfter = totalSpeed / afterSim.length;
 
+                // 6. Test Dense Confined Gas: Anti-Freezing, Anti-Clustering & Anti-Tunneling against Walls
+                window.engine.clear();
+                window.engine.useGPUCompute = true;
+                window.engine.enableGPUCompute(window.gpuCompute);
+                window.engine.addWall(200, 100, 200, 700, { thickness: 4 });
+                window.engine.addWall(600, 100, 600, 700, { thickness: 4 });
+                window.engine.addWall(200, 100, 600, 100, { thickness: 4 });
+                window.engine.addWall(200, 700, 600, 700, { thickness: 4 });
+
+                const denseN = 1000;
+                window.engine.spawnGasRaster(220, 120, 360, 560, denseN, 1.0, 300);
+                window.engine.syncParticlesToGPU();
+                window.engine.syncWallsToGPU();
+
+                for (let step = 0; step < 180; step++) {
+                    window.engine.step(0.016);
+                }
+
+                const denseAfter = await window.gpuCompute.readbackParticles(denseN);
+                let denseTunneled = 0;
+                let denseFrozen = 0;
+                let denseSpeedSum = 0;
+                for (let p of denseAfter) {
+                    const spd = Math.hypot(p.vel.x, p.vel.y);
+                    denseSpeedSum += spd;
+                    if (spd < 10) denseFrozen++;
+                    if (p.pos.x < 195 || p.pos.x > 605 || p.pos.y < 95 || p.pos.y > 705) {
+                        denseTunneled++;
+                    }
+                }
+                const denseMeanSpeed = denseSpeedSum / denseAfter.length;
+
                 return {
                     success: true,
                     count: 50000,
@@ -235,6 +267,9 @@ def run_test():
                     emitterActive,
                     emitterGpuCount,
                     meanSpeedAfter,
+                    denseTunneled,
+                    denseFrozen,
+                    denseMeanSpeed,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -267,6 +302,9 @@ def run_test():
         assert val.get('emitterActive') == True, "Emitter did not emit particles in GPU mode!"
         assert val.get('emitterGpuCount', 0) > 0, "GPU compute did not synchronize emitted particles!"
         assert val.get('meanSpeedAfter', 0) > 120, f"Ideal gas froze! Mean speed {val.get('meanSpeedAfter')} is too low (expected > 120)"
+        assert val.get('denseTunneled') == 0, f"Dense gas particles tunneled through wall: {val.get('denseTunneled')}"
+        assert val.get('denseFrozen') < 30, f"Dense gas froze into cluster! {val.get('denseFrozen')} particles frozen"
+        assert val.get('denseMeanSpeed', 0) > 100, f"Dense gas mean speed {val.get('denseMeanSpeed')} is too low (expected > 100)"
 
         print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter & Energy Conservation tests PASSED!")
 
