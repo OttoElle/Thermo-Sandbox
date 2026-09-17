@@ -5,7 +5,7 @@ export class ParticleGPUCompute {
     this.device = device;
     this.isSupported = !!device;
 
-    this.capacity = 100000;
+    this.capacity = 1000000;
     this.count = 0;
     this.maxWalls = 512;
     this.wallCount = 0;
