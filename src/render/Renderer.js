@@ -12,18 +12,20 @@ import { TextLabel } from '../physics/TextLabel.js';
 import { ParticleGroup } from '../physics/ParticleGroup.js';
 import { Regulator } from '../physics/Regulator.js';
 import { ThrottleValve } from '../physics/ThrottleValve.js';
-import { ParticleGLRenderer } from './ParticleGLRenderer.js';
+import { ParticleGPURenderer } from './ParticleGPURenderer.js';
 
 export class Renderer {
-  constructor(canvas, glCanvas = null) {
+  constructor(canvas, gpuCanvas = null, bgCanvas = null) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.glCanvas = null;
-    this.glRenderer = null;
-    this.useWebGL = false;
+    this.bgCanvas = bgCanvas;
+    this.bgCtx = bgCanvas ? bgCanvas.getContext('2d') : null;
+    this.gpuCanvas = null;
+    this.gpuRenderer = null;
+    this.useWebGPU = false;
 
-    if (glCanvas) {
-      this.setGLCanvas(glCanvas);
+    if (gpuCanvas) {
+      this.initGPU(gpuCanvas);
     }
     
     // Viewport Camera (Pan & Zoom)
@@ -45,16 +47,17 @@ export class Renderer {
     this.highlightedSequencerItem = null;
   }
 
-  setGLCanvas(glCanvas) {
-    this.glCanvas = glCanvas;
-    try {
-      this.glRenderer = glCanvas ? new ParticleGLRenderer(glCanvas) : null;
-      this.useWebGL = !!(this.glRenderer && this.glRenderer.isSupported);
-    } catch (e) {
-      console.warn('Failed to initialize ParticleGLRenderer, using 2D Canvas fallback:', e);
-      this.glRenderer = null;
-      this.useWebGL = false;
+  async initGPU(gpuCanvas) {
+    this.gpuCanvas = gpuCanvas;
+    if (!gpuCanvas) {
+      this.gpuRenderer = null;
+      this.useWebGPU = false;
+      return false;
     }
+    this.gpuRenderer = new ParticleGPURenderer(gpuCanvas);
+    const ok = await this.gpuRenderer.init();
+    this.useWebGPU = ok;
+    return ok;
   }
 
   screenToWorld(screenX, screenY) {
@@ -90,22 +93,21 @@ export class Renderer {
     const w = this.canvas.width;
     const h = this.canvas.height;
 
-    if (this.useWebGL) {
-      // Clear 2D overlay canvas to transparent
-      ctx.clearRect(0, 0, w, h);
-    } else {
-      // 2D fallback: dark background
-      ctx.fillStyle = '#101216';
-      ctx.fillRect(0, 0, w, h);
-    }
+    // Clear 2D overlay canvas to transparent
+    ctx.clearRect(0, 0, w, h);
 
-    if (this.showGrid) {
-      this.drawDotGrid();
+    if (this.bgCtx) {
+      this.bgCtx.clearRect(0, 0, w, h);
+      if (this.showGrid) {
+        this.drawDotGrid(this.bgCtx);
+      }
+    } else if (this.showGrid) {
+      this.drawDotGrid(ctx);
     }
   }
 
-  drawDotGrid() {
-    const ctx = this.ctx;
+  drawDotGrid(targetCtx = this.ctx) {
+    const ctx = targetCtx;
     const w = this.canvas.width;
     const h = this.canvas.height;
     const step = this.gridSize;
@@ -202,20 +204,20 @@ export class Renderer {
       }
     }
 
-    // 2. Particles (Rendered on top of physical structures)
-    if (this.useWebGL) {
-      this.glRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
-      const pCount = engine.particles.length;
-      for (let i = 0; i < pCount; i++) {
-        const p = engine.particles[i];
-        if (p.selected || this.showVectors) {
-          this.drawParticleOverlay(p);
+    // 2. Particles (Rendered on GPU with 2D overlay for selection/vectors)
+    if (this.useWebGPU && this.gpuRenderer) {
+      if (engine.gpuCompute && engine.gpuCompute.count > 0 && engine.useGPUCompute) {
+        const outputBuffer = engine.gpuCompute.getOutputBuffer();
+        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+      } else {
+        this.gpuRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+        const pCount = engine.particles ? engine.particles.length : 0;
+        for (let i = 0; i < pCount; i++) {
+          const p = engine.particles[i];
+          if (p.selected || this.showVectors) {
+            this.drawParticleOverlay(p);
+          }
         }
-      }
-    } else {
-      if (this.glRenderer) this.glRenderer.clear();
-      for (let i = 0; i < engine.particles.length; i++) {
-        this.drawParticle(engine.particles[i]);
       }
     }
 
@@ -1330,60 +1332,6 @@ export class Renderer {
     ctx.fillText(modeSymbol, piston.x, piston.y + 4);
 
     ctx.restore();
-  }
-
-  drawParticle(p) {
-    const ctx = this.ctx;
-    const speed = p.getSpeed();
-    let fillStyle = '#38bdf8';
-
-    if (this.colorByVelocity) {
-      const norm = Math.min(1.0, speed / this.maxSpeedReference);
-      const colorObj = thermalColormap.getColor(norm);
-      fillStyle = colorObj.rgb;
-    }
-
-    // Particle circle
-    ctx.beginPath();
-    ctx.arc(p.pos.x, p.pos.y, p.radius, 0, Math.PI * 2);
-    ctx.fillStyle = fillStyle;
-    ctx.fill();
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Highlight selected particle
-    if (p.selected) {
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(p.pos.x, p.pos.y, p.radius + 3.5, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.fillStyle = 'rgba(56, 189, 248, 0.3)';
-      ctx.beginPath();
-      ctx.arc(p.pos.x, p.pos.y, p.radius + 3.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Optional Velocity Vector Arrow
-    if (this.showVectors && speed > 2) {
-      const scale = 0.09;
-      const vx = p.vel.x * scale;
-      const vy = p.vel.y * scale;
-      const endX = p.pos.x + vx;
-      const endY = p.pos.y + vy;
-
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(p.pos.x, p.pos.y);
-      ctx.lineTo(endX, endY);
-      ctx.stroke();
-      ctx.restore();
-    }
   }
 
   drawParticleOverlay(p) {

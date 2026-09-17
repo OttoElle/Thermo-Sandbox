@@ -50,8 +50,11 @@ export class VelHistChart {
     }
 
     const counts = new Array(this.binRanges.length).fill(0);
-    for (let i = 0; i < N; i++) {
-      const spd = particles[i].getSpeed();
+    const step = N > 1000 ? Math.max(1, Math.floor(N / 1000)) : 1;
+    for (let i = 0; i < N; i += step) {
+      const p = particles[i];
+      if (!p) continue;
+      const spd = typeof p.getSpeed === 'function' ? p.getSpeed() : Math.hypot(p.vel ? p.vel.x : 0, p.vel ? p.vel.y : 0);
       for (let b = 0; b < this.binRanges.length; b++) {
         if (spd >= this.binRanges[b].min && spd < this.binRanges[b].max) {
           counts[b]++;

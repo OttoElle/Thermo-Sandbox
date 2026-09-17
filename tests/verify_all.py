@@ -94,17 +94,38 @@ def test_browser_cdp():
     finally:
         proc.terminate()
 
+def test_webgpu_runtime():
+    print("\n--- 5. WebGPU Runtime & Shaders Verification ---")
+    res = subprocess.run([sys.executable, 'tests/test_webgpu_runtime.py'], capture_output=True, text=True)
+    print(res.stdout.strip())
+    if res.returncode != 0:
+        print(res.stderr.strip())
+        raise AssertionError("WebGPU runtime test failed!")
+    print("WebGPU runtime verification PASSED.")
+
+def test_gpu_compute():
+    print("\n--- 6. WebGPU Compute Shaders & Zero-Copy 50,000 Particles Verification ---")
+    res = subprocess.run([sys.executable, 'tests/test_gpu_compute_cdp.py'], capture_output=True, text=True)
+    print(res.stdout.strip())
+    if res.returncode != 0:
+        print(res.stderr.strip())
+        raise AssertionError("GPU Compute 50,000 particle test failed!")
+    print("WebGPU Compute Shaders & Zero-Copy verification PASSED.")
+
 def main():
     print("==================================================")
-    print("  Thermo Sandbox Sequencer Re-Architecture Tests  ")
+    print("  Thermo Sandbox Verification Test Suite          ")
     print("==================================================")
     test_file_sizes()
     test_css_integrity()
     test_build()
     test_browser_cdp()
+    test_webgpu_runtime()
+    test_gpu_compute()
     print("\n==================================================")
     print("  ALL VERIFICATION TESTS COMPLETED SUCCESSFULLY!  ")
     print("==================================================")
 
 if __name__ == '__main__':
     main()
+

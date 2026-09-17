@@ -27,10 +27,30 @@
   <input type="file" id="fileImportInput" accept=".json" style="display: none;">
 
   <div class="app-viewport">
-    <!-- Hardware Accelerated WebGL 2 Particle Canvas -->
-    <canvas id="glCanvas"></canvas>
-    <!-- Fullscreen Infinite UI & Geometry Canvas -->
+    <!-- Background & Dot Grid Canvas (Layer 0, behind WebGPU particles) -->
+    <canvas id="bgCanvas"></canvas>
+    <!-- Hardware Accelerated WebGPU Particle Canvas (Layer 1) -->
+    <canvas id="gpuCanvas"></canvas>
+    <!-- Fullscreen Infinite UI & Geometry Canvas (Layer 2, transparent overlay) -->
     <canvas id="simCanvas"></canvas>
+
+    <!-- WebGPU Modern Browser Requirement Overlay (Shown only if WebGPU is unavailable) -->
+    <div id="webgpuErrorOverlay" class="webgpu-error-overlay" style="display: none;">
+      <div class="webgpu-error-card">
+        <div class="webgpu-error-title">WebGPU Required</div>
+        <div class="webgpu-error-desc">
+          Thermo Sandbox utilizes next-generation WebGPU hardware acceleration for real-time kinetic particle simulation.
+          Your current browser or system configuration does not support WebGPU.
+        </div>
+        <div class="webgpu-error-specs">
+          <b>Recommended Modern Browsers:</b><br>
+          • Google Chrome 113+ (Windows, macOS, ChromeOS)<br>
+          • Microsoft Edge 113+ (Windows, macOS)<br>
+          • Apple Safari 17.4+ (macOS Sonoma, iOS 17.4+)<br>
+          • Ensure hardware acceleration is enabled in your browser settings.
+        </div>
+      </div>
+    </div>
 
     <!-- Floating Velocity / Temp Colormap Legend Badge (Vertical, Right Side above Zoom Controls) -->
     <div id="floatingVelLegend" class="floating-vel-legend" title="Velocity / Temperature Colormap">
@@ -503,7 +523,10 @@
     <aside class="floating-sidebar floating-right">
       <!-- Section 1: Global System Statistics -->
       <div class="sidebar-block">
-        <div class="section-title">SYSTEM STATS</div>
+        <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
+          <span>SYSTEM STATS</span>
+          <span id="gpuStatusBadge" style="font-size:10px; font-weight:600; padding:2px 6px; border-radius:4px; text-transform:none; letter-spacing:0; background:rgba(34,197,94,0.15); color:#22c55e; border:1px solid rgba(34,197,94,0.3);">WebGPU</span>
+        </div>
         <div class="stats-grid">
           <div class="stat-card">
             <span class="stat-label">Particles N</span>
@@ -863,7 +886,7 @@
             <span class="splash-keyboard-hint">Tip: Click the <strong>Thermo Sandbox</strong> logo or press <kbd>Esc</kbd> anytime to open this dashboard.</span>
           </div>
           <div class="splash-footer-right">
-            <span class="splash-tag">v2.0 • WebGL 2 Accelerated</span>
+            <span class="splash-tag">v2.1 • WebGPU Accelerated</span>
           </div>
         </div>
       </div>

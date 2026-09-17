@@ -19,13 +19,15 @@ body.splash-mode .modal-overlay:not(#splashOverlay) {
   display: none !important;
 }
 
+body.splash-mode #bgCanvas,
+body.splash-mode #gpuCanvas,
 body.splash-mode #glCanvas,
 body.splash-mode #simCanvas {
   filter: brightness(1.05) saturate(1.15);
   transition: filter 0.4s ease;
 }
 
-#glCanvas, #simCanvas {
+#bgCanvas, #gpuCanvas, #glCanvas, #simCanvas {
   transition: filter 0.4s ease;
 }
 
