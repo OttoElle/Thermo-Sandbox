@@ -163,6 +163,7 @@ const engine = new Engine(2500, 2500);
 const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;
+window.Presets = Presets;
 
 // Asynchronously initialize WebGPU & GPU Compute
 if (gpuCanvas) {

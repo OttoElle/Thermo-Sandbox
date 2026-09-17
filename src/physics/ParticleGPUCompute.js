@@ -23,6 +23,7 @@ export class ParticleGPUCompute {
 
     this.cellHeadsBuffer = null;
     this.particleNextBuffer = null;
+    this.bestPartnersBuffer = null;
 
     this.uniformData = new ArrayBuffer(80);
     this.uniformFloats = new Float32Array(this.uniformData);
@@ -30,6 +31,7 @@ export class ParticleGPUCompute {
 
     this.pipelineClearGrid = null;
     this.pipelineBuildGrid = null;
+    this.pipelineFindPairs = null;
     this.pipelineIntegrate = null;
     this.bindGroupAB = null;
     this.bindGroupBA = null;
@@ -64,7 +66,7 @@ export class ParticleGPUCompute {
 
     this.wallsBuffer = device.createBuffer({
       label: 'ParticleComputeWalls',
-      size: this.maxWalls * 48,
+      size: this.maxWalls * 64,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
     });
 
@@ -79,6 +81,12 @@ export class ParticleGPUCompute {
       size: this.capacity * 4,
       usage: GPUBufferUsage.STORAGE
     });
+
+    this.bestPartnersBuffer = device.createBuffer({
+      label: 'ParticleComputeBestPartners',
+      size: this.capacity * 4,
+      usage: GPUBufferUsage.STORAGE
+    });
   }
 
   _initPipeline() {
@@ -89,15 +97,12 @@ export class ParticleGPUCompute {
       code: particleComputeWGSL
     });
 
+    const entry = (binding, type) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type } });
     const bindGroupLayout = device.createBindGroupLayout({
       label: 'ParticleComputeBindGroupLayout',
       entries: [
-        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-        { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
+        entry(0, 'uniform'), entry(1, 'read-only-storage'), entry(2, 'storage'),
+        entry(3, 'read-only-storage'), entry(4, 'storage'), entry(5, 'storage'), entry(6, 'storage')
       ]
     });
 
@@ -106,23 +111,13 @@ export class ParticleGPUCompute {
       bindGroupLayouts: [bindGroupLayout]
     });
 
-    this.pipelineClearGrid = device.createComputePipeline({
-      label: 'ParticleComputePipelineClearGrid',
-      layout: pipelineLayout,
-      compute: { module: shaderModule, entryPoint: 'cs_clear_grid' }
+    const makePipe = (entryPoint, label) => device.createComputePipeline({
+      label, layout: pipelineLayout, compute: { module: shaderModule, entryPoint }
     });
-
-    this.pipelineBuildGrid = device.createComputePipeline({
-      label: 'ParticleComputePipelineBuildGrid',
-      layout: pipelineLayout,
-      compute: { module: shaderModule, entryPoint: 'cs_build_grid' }
-    });
-
-    this.pipelineIntegrate = device.createComputePipeline({
-      label: 'ParticleComputePipelineIntegrate',
-      layout: pipelineLayout,
-      compute: { module: shaderModule, entryPoint: 'cs_integrate' }
-    });
+    this.pipelineClearGrid = makePipe('cs_clear_grid', 'ParticleComputePipelineClearGrid');
+    this.pipelineBuildGrid = makePipe('cs_build_grid', 'ParticleComputePipelineBuildGrid');
+    this.pipelineFindPairs = makePipe('cs_find_pairs', 'ParticleComputePipelineFindPairs');
+    this.pipelineIntegrate = makePipe('cs_integrate', 'ParticleComputePipelineIntegrate');
 
     const makeBG = (inBuf, outBuf, label) => device.createBindGroup({
       label, layout: bindGroupLayout,
@@ -132,7 +127,8 @@ export class ParticleGPUCompute {
         { binding: 2, resource: { buffer: outBuf } },
         { binding: 3, resource: { buffer: this.wallsBuffer } },
         { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
-        { binding: 5, resource: { buffer: this.particleNextBuffer } }
+        { binding: 5, resource: { buffer: this.particleNextBuffer } },
+        { binding: 6, resource: { buffer: this.bestPartnersBuffer } }
       ]
     });
     this.bindGroupAB = makeBG(this.bufferA, this.bufferB, 'ParticleComputeBindGroupAB');
@@ -145,7 +141,7 @@ export class ParticleGPUCompute {
     this.wallCount = count;
     if (count === 0) return;
 
-    const data = new ArrayBuffer(count * 48);
+    const data = new ArrayBuffer(count * 64);
     const f32 = new Float32Array(data);
     const u32 = new Uint32Array(data);
 
@@ -170,11 +166,15 @@ export class ParticleGPUCompute {
       f32[ptr + 9] = w.allowedDirection !== undefined ? w.allowedDirection : 1.0;
       f32[ptr + 10] = w.temperature !== undefined ? w.temperature : 300.0;
       f32[ptr + 11] = w.conductivity !== undefined ? w.conductivity : 0.0;
+      f32[ptr + 12] = w.vel ? w.vel.x : (w.velX || 0);
+      f32[ptr + 13] = w.vel ? w.vel.y : (w.velY || 0);
+      f32[ptr + 14] = 0;
+      f32[ptr + 15] = 0;
 
-      ptr += 12;
+      ptr += 16;
     }
 
-    this.device.queue.writeBuffer(this.wallsBuffer, 0, data, 0, count * 48);
+    this.device.queue.writeBuffer(this.wallsBuffer, 0, data, 0, count * 64);
   }
 
   _packParticles(particles, startIdx, count) {
@@ -275,7 +275,14 @@ export class ParticleGPUCompute {
       passBuild.dispatchWorkgroups(particleWorkgroups);
       passBuild.end();
 
-      // Pass 3: Particle-Particle & Wall-CCD Collision + Integration
+      // Pass 3: Find Mutual Collision Pairs
+      const passPairs = commandEncoder.beginComputePass({ label: `FindPairs_${s}` });
+      passPairs.setPipeline(this.pipelineFindPairs);
+      passPairs.setBindGroup(0, activeBindGroup);
+      passPairs.dispatchWorkgroups(particleWorkgroups);
+      passPairs.end();
+
+      // Pass 4: Mutual Elastic Impulse & Wall-CCD Collision + Integration
       const passIntegrate = commandEncoder.beginComputePass({ label: `Integrate_${s}` });
       passIntegrate.setPipeline(this.pipelineIntegrate);
       passIntegrate.setBindGroup(0, activeBindGroup);

@@ -303,8 +303,8 @@ def run_test():
         assert val.get('emitterGpuCount', 0) > 0, "GPU compute did not synchronize emitted particles!"
         assert val.get('meanSpeedAfter', 0) > 120, f"Ideal gas froze! Mean speed {val.get('meanSpeedAfter')} is too low (expected > 120)"
         assert val.get('denseTunneled') == 0, f"Dense gas particles tunneled through wall: {val.get('denseTunneled')}"
-        assert val.get('denseFrozen') < 30, f"Dense gas froze into cluster! {val.get('denseFrozen')} particles frozen"
-        assert val.get('denseMeanSpeed', 0) > 100, f"Dense gas mean speed {val.get('denseMeanSpeed')} is too low (expected > 100)"
+        assert val.get('denseFrozen') < 20, f"Dense gas froze into cluster! {val.get('denseFrozen')} particles frozen"
+        assert val.get('denseMeanSpeed', 0) > 120, f"Dense gas mean speed {val.get('denseMeanSpeed')} is too low (expected > 120, MB eq is ~128.4)"
 
         print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter & Energy Conservation tests PASSED!")
 

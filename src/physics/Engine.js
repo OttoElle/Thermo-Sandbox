@@ -362,8 +362,8 @@ export class Engine {
     if (this.particles.length > 0) {
       this.gpuCompute.uploadParticles(this.particles);
     }
-    if (this.walls.length > 0) {
-      this.gpuCompute.uploadWalls(this.walls);
+    if (this.walls.length > 0 || this.pistons.length > 0) {
+      this.syncWallsToGPU();
     }
   }
 
@@ -377,9 +377,59 @@ export class Engine {
     }
   }
 
+  getGPUWalls() {
+    const list = [...this.walls];
+    for (let k = 0; k < this.pistons.length; k++) {
+      const p = this.pistons[k];
+      const hw = p.width * 0.5;
+      const hh = p.height * 0.5;
+      if (p.orientation === 'horizontal') {
+        const vx = p.velocity;
+        const extH = hh + 25;
+        list.push({
+          p1: { x: p.x - hw, y: p.y - extH },
+          p2: { x: p.x - hw, y: p.y + extH },
+          normal: { x: -1, y: 0 },
+          thickness: 6, isOpen: false, type: 'standard', allowedDirection: 1,
+          temperature: p.temperature, conductivity: p.conductivity,
+          vel: { x: vx, y: 0 }
+        });
+        list.push({
+          p1: { x: p.x + hw, y: p.y - extH },
+          p2: { x: p.x + hw, y: p.y + extH },
+          normal: { x: 1, y: 0 },
+          thickness: 6, isOpen: false, type: 'standard', allowedDirection: 1,
+          temperature: p.temperature, conductivity: p.conductivity,
+          vel: { x: vx, y: 0 }
+        });
+      } else {
+        const vy = p.velocity;
+        const extW = hw + 25;
+        list.push({
+          p1: { x: p.x - extW, y: p.y - hh },
+          p2: { x: p.x + extW, y: p.y - hh },
+          normal: { x: 0, y: -1 },
+          thickness: 6, isOpen: false, type: 'standard', allowedDirection: 1,
+          temperature: p.temperature, conductivity: p.conductivity,
+          vel: { x: 0, y: vy }
+        });
+        list.push({
+          p1: { x: p.x - extW, y: p.y + hh },
+          p2: { x: p.x + extW, y: p.y + hh },
+          normal: { x: 0, y: 1 },
+          thickness: 6, isOpen: false, type: 'standard', allowedDirection: 1,
+          temperature: p.temperature, conductivity: p.conductivity,
+          vel: { x: 0, y: vy }
+        });
+      }
+    }
+    return list;
+  }
+
   syncWallsToGPU() {
-    if (this.gpuCompute && this.useGPUCompute && this.walls) {
-      this.gpuCompute.uploadWalls(this.walls);
+    if (this.gpuCompute && this.useGPUCompute) {
+      const gpuWalls = this.getGPUWalls();
+      this.gpuCompute.uploadWalls(gpuWalls);
     }
   }
 
@@ -418,8 +468,8 @@ export class Engine {
         for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
         for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
 
-        if (this.walls.length > 0) {
-          this.gpuCompute.uploadWalls(this.walls);
+        if (this.walls.length > 0 || this.pistons.length > 0) {
+          this.syncWallsToGPU();
         }
 
         const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
