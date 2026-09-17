@@ -253,6 +253,18 @@ def run_test():
                 }
                 const denseMeanSpeed = denseSpeedSum / denseAfter.length;
 
+                // 7. Test Negative World Space Collisions (Unbounded GPU Spatial Hash Grid)
+                const negPts = [
+                    { pos: { x: -1205, y: -800 }, vel: { x: 100, y: 0 }, radius: 3.5, mass: 1.0 },
+                    { pos: { x: -1195, y: -800 }, vel: { x: -100, y: 0 }, radius: 3.5, mass: 1.0 }
+                ];
+                window.gpuCompute.uploadParticles(negPts);
+                for (let i = 0; i < 5; i++) {
+                    window.gpuCompute.step(0.016, false, 0, 1.0, null, 380, 4, 0);
+                }
+                const negRes = await window.gpuCompute.readbackParticles(2);
+                const negCollisionBounced = (negRes[0].vel.x < 0) && (negRes[1].vel.x > 0);
+
                 return {
                     success: true,
                     count: 50000,
@@ -270,6 +282,7 @@ def run_test():
                     denseTunneled,
                     denseFrozen,
                     denseMeanSpeed,
+                    negCollisionBounced,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -305,6 +318,7 @@ def run_test():
         assert val.get('denseTunneled') == 0, f"Dense gas particles tunneled through wall: {val.get('denseTunneled')}"
         assert val.get('denseFrozen') < 20, f"Dense gas froze into cluster! {val.get('denseFrozen')} particles frozen"
         assert val.get('denseMeanSpeed', 0) > 120, f"Dense gas mean speed {val.get('denseMeanSpeed')} is too low (expected > 120, MB eq is ~128.4)"
+        assert val.get('negCollisionBounced') == True, "Particles at negative coordinates failed to collide/bounce on GPU!"
 
         print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter & Energy Conservation tests PASSED!")
 

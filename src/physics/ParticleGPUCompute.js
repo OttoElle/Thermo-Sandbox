@@ -16,10 +16,8 @@ export class ParticleGPUCompute {
     this.uniformBuffer = null;
     this.wallsBuffer = null;
 
-    this.gridCols = 256;
-    this.gridRows = 256;
-    this.totalCells = this.gridCols * this.gridRows;
-    this.cellSize = 14.0;
+    this.gridTableSize = 131072;
+    this.cellSize = 16.0;
 
     this.cellHeadsBuffer = null;
     this.particleNextBuffer = null;
@@ -72,7 +70,7 @@ export class ParticleGPUCompute {
 
     this.cellHeadsBuffer = device.createBuffer({
       label: 'ParticleComputeCellHeads',
-      size: this.totalCells * 4,
+      size: this.gridTableSize * 4,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
     });
 
@@ -238,15 +236,15 @@ export class ParticleGPUCompute {
     this.uniformU32[7] = effectiveSubSteps;
     this.uniformU32[8] = hasBounds ? 1 : 0;
     this.uniformFloats[9] = this.cellSize;
-    this.uniformU32[10] = this.gridCols;
-    this.uniformU32[11] = this.gridRows;
-    this.uniformFloats[12] = hasBounds ? bounds.minX - 50.0 : -500.0;
-    this.uniformFloats[13] = hasBounds ? bounds.minY - 50.0 : -500.0;
-    this.uniformFloats[14] = hasBounds ? bounds.minX : 0;
-    this.uniformFloats[15] = hasBounds ? bounds.minY : 0;
-    this.uniformFloats[16] = hasBounds ? bounds.maxX : 2500;
-    this.uniformFloats[17] = hasBounds ? bounds.maxY : 2500;
-    this.uniformU32[18] = simModel ? 1 : 0;
+    this.uniformU32[10] = this.gridTableSize;
+    this.uniformU32[11] = 0;
+    this.uniformFloats[12] = hasBounds ? bounds.minX : 0;
+    this.uniformFloats[13] = hasBounds ? bounds.minY : 0;
+    this.uniformFloats[14] = hasBounds ? bounds.maxX : 2500;
+    this.uniformFloats[15] = hasBounds ? bounds.maxY : 2500;
+    this.uniformU32[16] = simModel ? 1 : 0;
+    this.uniformU32[17] = 0;
+    this.uniformU32[18] = 0;
     this.uniformU32[19] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
@@ -255,7 +253,7 @@ export class ParticleGPUCompute {
       label: 'ParticleComputeEncoder'
     });
 
-    const clearGridWorkgroups = Math.ceil(this.totalCells / 64);
+    const clearGridWorkgroups = Math.ceil(this.gridTableSize / 64);
     const particleWorkgroups = Math.ceil(this.count / 64);
 
     for (let s = 0; s < effectiveSubSteps; s++) {

@@ -1,45 +1,20 @@
 export const particleComputeWGSL = `
 struct SimParams {
-  dt: f32,
-  gravity: f32,
-  gravityEnabled: u32,
-  damping: f32,
-  particleCount: u32,
-  maxSpeedReference: f32,
-  wallCount: u32,
-  subSteps: u32,
-  boundsEnabled: u32,
-  cellSize: f32,
-  gridCols: u32,
-  gridRows: u32,
-  gridOrigin: vec2f,
-  boundMin: vec2f,
-  boundMax: vec2f,
-  simModel: u32,
-  pad2: u32,
+  dt: f32, gravity: f32, gravityEnabled: u32, damping: f32,
+  particleCount: u32, maxSpeedReference: f32, wallCount: u32, subSteps: u32,
+  boundsEnabled: u32, cellSize: f32, gridTableSize: u32, pad1: u32,
+  boundMin: vec2f, boundMax: vec2f,
+  simModel: u32, pad2: u32, pad3: u32, pad4: u32,
 };
 
 struct Particle {
-  pos: vec2f,
-  vel: vec2f,
-  radius: f32,
-  mass: f32,
-  speedNorm: f32,
-  pad: f32,
+  pos: vec2f, vel: vec2f, radius: f32, mass: f32, speedNorm: f32, pad: f32,
 };
 
 struct WallData {
-  p1: vec2f,
-  p2: vec2f,
-  normal: vec2f,
-  thickness: f32,
-  isOpen: u32,
-  wallType: u32,
-  allowedDir: f32,
-  temperature: f32,
-  conductivity: f32,
-  vel: vec2f,
-  pad: vec2f,
+  p1: vec2f, p2: vec2f, normal: vec2f, thickness: f32,
+  isOpen: u32, wallType: u32, allowedDir: f32,
+  temperature: f32, conductivity: f32, vel: vec2f, pad: vec2f,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -50,11 +25,18 @@ struct WallData {
 @group(0) @binding(5) var<storage, read_write> particleNext: array<i32>;
 @group(0) @binding(6) var<storage, read_write> bestPartners: array<i32>;
 
+fn hashCell(cx: i32, cy: i32, tableSize: u32) -> u32 {
+  let p1 = 73856093u;
+  let p2 = 19349663u;
+  let ux = bitcast<u32>(cx);
+  let uy = bitcast<u32>(cy);
+  return ((ux * p1) ^ (uy * p2)) % tableSize;
+}
+
 @compute @workgroup_size(64)
 fn cs_clear_grid(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
-  let totalCells = params.gridCols * params.gridRows;
-  if (idx < totalCells) {
+  if (idx < params.gridTableSize) {
     atomicStore(&cellHeads[idx], -1);
   }
 }
@@ -66,15 +48,11 @@ fn cs_build_grid(@builtin(global_invocation_id) global_id: vec3u) {
     return;
   }
   let p = particlesIn[idx];
-  let rawX = i32(floor((p.pos.x - params.gridOrigin.x) / params.cellSize));
-  let rawY = i32(floor((p.pos.y - params.gridOrigin.y) / params.cellSize));
-  if (rawX >= 0 && rawX < i32(params.gridCols) && rawY >= 0 && rawY < i32(params.gridRows)) {
-    let cellIdx = u32(rawY * i32(params.gridCols) + rawX);
-    let prevHead = atomicExchange(&cellHeads[cellIdx], i32(idx));
-    particleNext[idx] = prevHead;
-  } else {
-    particleNext[idx] = -1;
-  }
+  let cx = i32(floor(p.pos.x / params.cellSize));
+  let cy = i32(floor(p.pos.y / params.cellSize));
+  let cellIdx = hashCell(cx, cy, params.gridTableSize);
+  let prevHead = atomicExchange(&cellHeads[cellIdx], i32(idx));
+  particleNext[idx] = prevHead;
 }
 
 @compute @workgroup_size(64)
@@ -82,45 +60,52 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
   if (idx >= params.particleCount) { return; }
   let p = particlesIn[idx];
-  let cellX = i32(floor((p.pos.x - params.gridOrigin.x) / params.cellSize));
-  let cellY = i32(floor((p.pos.y - params.gridOrigin.y) / params.cellSize));
+  let cx = i32(floor(p.pos.x / params.cellSize));
+  let cy = i32(floor(p.pos.y / params.cellSize));
 
   var bestPartner = -1;
   var maxApproach = 0.0;
+  var visitedBuckets: array<u32, 9>;
+  var visitedCount = 0u;
 
-  if (cellX >= 0 && cellX < i32(params.gridCols) && cellY >= 0 && cellY < i32(params.gridRows)) {
-    for (var dy = -1; dy <= 1; dy++) {
-      let ny = cellY + dy;
-      if (ny < 0 || ny >= i32(params.gridRows)) { continue; }
-      for (var dx = -1; dx <= 1; dx++) {
-        let nx = cellX + dx;
-        if (nx < 0 || nx >= i32(params.gridCols)) { continue; }
-        let nCellIdx = u32(ny * i32(params.gridCols) + nx);
-        var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
-        var loopSteps = 0;
-        while (otherIdx >= 0 && loopSteps < 48) {
-          if (otherIdx != i32(idx)) {
-            let pOther = particlesIn[u32(otherIdx)];
-            let diff = p.pos - pOther.pos;
-            let distSq = dot(diff, diff);
-            let minDist = p.radius + pOther.radius;
-            if (distSq < minDist * minDist && distSq > 1e-4) {
-              let dist = sqrt(distSq);
-              let n = diff / dist;
-              let relVel = p.vel - pOther.vel;
-              let vRelN = dot(relVel, n);
-              if (vRelN < 0.0) {
-                let approach = -vRelN;
-                if (approach > maxApproach) {
-                  maxApproach = approach;
-                  bestPartner = otherIdx;
-                }
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let nCellIdx = hashCell(cx + dx, cy + dy, params.gridTableSize);
+      var alreadyVisited = false;
+      for (var v = 0u; v < visitedCount; v++) {
+        if (visitedBuckets[v] == nCellIdx) {
+          alreadyVisited = true;
+          break;
+        }
+      }
+      if (alreadyVisited) { continue; }
+      visitedBuckets[visitedCount] = nCellIdx;
+      visitedCount++;
+
+      var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
+      var loopSteps = 0;
+      while (otherIdx >= 0 && loopSteps < 48) {
+        if (otherIdx != i32(idx)) {
+          let pOther = particlesIn[u32(otherIdx)];
+          let diff = p.pos - pOther.pos;
+          let distSq = dot(diff, diff);
+          let minDist = p.radius + pOther.radius;
+          if (distSq < minDist * minDist && distSq > 1e-4) {
+            let dist = sqrt(distSq);
+            let n = diff / dist;
+            let relVel = p.vel - pOther.vel;
+            let vRelN = dot(relVel, n);
+            if (vRelN < 0.0) {
+              let approach = -vRelN;
+              if (approach > maxApproach) {
+                maxApproach = approach;
+                bestPartner = otherIdx;
               }
             }
           }
-          otherIdx = particleNext[u32(otherIdx)];
-          loopSteps++;
         }
+        otherIdx = particleNext[u32(otherIdx)];
+        loopSteps++;
       }
     }
   }
@@ -142,49 +127,57 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   // 2. Particle-Particle Mutual Elastic Collision (Newton III Strict Conservation)
   if (params.simModel == 1u) {
     // Real Gas: Lennard-Jones 6-12 potential
-    let cellX = i32(floor((p.pos.x - params.gridOrigin.x) / params.cellSize));
-    let cellY = i32(floor((p.pos.y - params.gridOrigin.y) / params.cellSize));
-    if (cellX >= 0 && cellX < i32(params.gridCols) && cellY >= 0 && cellY < i32(params.gridRows)) {
-      var ljForce = vec2f(0.0, 0.0);
-      for (var dy = -1; dy <= 1; dy++) {
-        let ny = cellY + dy;
-        if (ny < 0 || ny >= i32(params.gridRows)) { continue; }
-        for (var dx = -1; dx <= 1; dx++) {
-          let nx = cellX + dx;
-          if (nx < 0 || nx >= i32(params.gridCols)) { continue; }
-          let nCellIdx = u32(ny * i32(params.gridCols) + nx);
-          var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
-          var loopSteps = 0;
-          while (otherIdx >= 0 && loopSteps < 32) {
-            if (otherIdx != i32(idx)) {
-              let pOther = particlesIn[u32(otherIdx)];
-              let diff = p.pos - pOther.pos;
-              let distSq = dot(diff, diff);
-              let sigma = (p.radius + pOther.radius) * 0.9;
-              let sigmaSq = sigma * sigma;
-              let rCutSq = sigmaSq * 6.25;
-              if (distSq < rCutSq && distSq > 1e-4) {
-                let invDistSq = 1.0 / distSq;
-                let s_r2 = sigmaSq * invDistSq;
-                let s_r6 = s_r2 * s_r2 * s_r2;
-                let s_r12 = s_r6 * s_r6;
-                let epsilon = 30.0;
-                var forceOverDist = 24.0 * epsilon * (2.0 * s_r12 - s_r6) * invDistSq;
-                let fSq = forceOverDist * forceOverDist * distSq;
-                if (fSq > 1000000.0) {
-                  let dist = sqrt(distSq);
-                  forceOverDist = select(-1000.0, 1000.0, forceOverDist > 0.0) / dist;
-                }
-                ljForce += diff * (forceOverDist / p.mass);
-              }
-            }
-            otherIdx = particleNext[u32(otherIdx)];
-            loopSteps++;
+    let cx = i32(floor(p.pos.x / params.cellSize));
+    let cy = i32(floor(p.pos.y / params.cellSize));
+    var ljForce = vec2f(0.0, 0.0);
+    var visitedBuckets: array<u32, 9>;
+    var visitedCount = 0u;
+
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        let nCellIdx = hashCell(cx + dx, cy + dy, params.gridTableSize);
+        var alreadyVisited = false;
+        for (var v = 0u; v < visitedCount; v++) {
+          if (visitedBuckets[v] == nCellIdx) {
+            alreadyVisited = true;
+            break;
           }
         }
+        if (alreadyVisited) { continue; }
+        visitedBuckets[visitedCount] = nCellIdx;
+        visitedCount++;
+
+        var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
+        var loopSteps = 0;
+        while (otherIdx >= 0 && loopSteps < 32) {
+          if (otherIdx != i32(idx)) {
+            let pOther = particlesIn[u32(otherIdx)];
+            let diff = p.pos - pOther.pos;
+            let distSq = dot(diff, diff);
+            let sigma = (p.radius + pOther.radius) * 0.9;
+            let sigmaSq = sigma * sigma;
+            let rCutSq = sigmaSq * 6.25;
+            if (distSq < rCutSq && distSq > 1e-4) {
+              let invDistSq = 1.0 / distSq;
+              let s_r2 = sigmaSq * invDistSq;
+              let s_r6 = s_r2 * s_r2 * s_r2;
+              let s_r12 = s_r6 * s_r6;
+              let epsilon = 30.0;
+              var forceOverDist = 24.0 * epsilon * (2.0 * s_r12 - s_r6) * invDistSq;
+              let fSq = forceOverDist * forceOverDist * distSq;
+              if (fSq > 1000000.0) {
+                let dist = sqrt(distSq);
+                forceOverDist = select(-1000.0, 1000.0, forceOverDist > 0.0) / dist;
+              }
+              ljForce += diff * (forceOverDist / p.mass);
+            }
+          }
+          otherIdx = particleNext[u32(otherIdx)];
+          loopSteps++;
+        }
       }
-      p.vel += ljForce * params.dt;
     }
+    p.vel += ljForce * params.dt;
   } else {
     // Ideal Gas: Mutual Pairwise Elastic Impulse
     let partnerIdx = bestPartners[idx];

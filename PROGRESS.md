@@ -295,9 +295,21 @@
   - Added velocity vectors to `WallData` (64 bytes aligned).
   - Integrated dynamic moving piston heads (`getGPUWalls()`) directly into the WebGPU storage buffer, allowing native $PV$ compression heating and expansion cooling on the GPU.
 - [x] **3. Codebase Streamlining & Verification**:
-  - Kept all files strictly under 350 lines (`ParticleGPUCompute.js`: 347 lines, `ParticleGPUComputeShader.js`: 341 lines).
+  - Kept all files strictly under 350 lines (`ParticleGPUCompute.js`: 345 lines, `ParticleGPUComputeShader.js`: 334 lines).
   - Updated `build_all.py` standalone and bundles.
   - All 6 stages in `tests/verify_all.py` pass 100%.
+
+### W. Unbounded GPU Spatial Hash Grid (Universal Domain Collision Architecture)
+- [x] **1. Eliminated Bounded Grid Clipping Bug**:
+  - Identified and solved the issue where particles with $x < -500.0\text{ px}$ ceased colliding with each other because the former spatial grid was constrained to a fixed window with hardcoded `gridOrigin = (-500, -500)`.
+- [x] **2. Teschner GPU Spatial Hashing Implementation**:
+  - Replaced bounded $256 \times 256$ grid with an unbounded spatial hash grid ($\text{tableSize} = 131{,}072$ buckets, $512\text{ KB}$ buffer).
+  - Integer cell mapping via $c_x = \lfloor x / \text{cellSize} \rfloor, c_y = \lfloor y / \text{cellSize} \rfloor$ over the entire $(-\infty, +\infty)$ domain.
+  - Teschner prime hash function in WGSL: `((bitcast<u32>(cx) * 73856093u) ^ (bitcast<u32>(cy) * 19349663u)) % tableSize`.
+  - Added duplicate neighbor bucket filtering (`visitedBuckets: array<u32, 9>`) to prevent duplicate partner tests or double Lennard-Jones force accumulation.
+- [x] **3. Automated Negative Space Verification**:
+  - Added test in `tests/test_gpu_compute_cdp.py` verifying head-on collisions and elastic scatter at negative coordinates ($x = -1200\text{ px}$).
+  - All 6 stages in `tests/verify_all.py` pass 100%. All source files strictly under 350 lines (`ParticleGPUCompute.js`: 345 lines, `ParticleGPUComputeShader.js`: 334 lines).
 
 ---
 
