@@ -1862,6 +1862,76 @@ body.sequencer-expanded .floating-vel-legend {
   color: var(--text-muted);
 }
 
+.chamber-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-chamber-add-chart {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: var(--accent-blue);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-chamber-add-chart:hover {
+  background: rgba(56, 189, 248, 0.25);
+  border-color: var(--accent-blue);
+}
+
+.chamber-drift-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  background-color: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+}
+
+.drift-compass-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.drift-compass-svg {
+  display: block;
+}
+
+.drift-arrow-group {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.drift-info-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.drift-caption {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.drift-speed-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: color 0.15s;
+}
+
 .chamber-card-body {
   display: none;
   padding: 8px 10px;
@@ -4450,7 +4520,7 @@ body.seq-picking-active #simCanvas {
                 <span>Emitter</span>
               </button>
               <button class="ribbon-tool-btn" data-tool="sink" id="toolSink" title="Particle Absorber / Vacuum">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
                 <span>Absorber</span>
               </button>
               <button class="ribbon-tool-btn" data-tool="regulator" id="toolRegulator" title="Particle Regulator Zone (Maintains Target N with Hysteresis)">
@@ -4846,6 +4916,9 @@ body.seq-picking-active #simCanvas {
               <option value="kinetic">Kinetic Energy E_kin(t)</option>
               <option value="drift">Drift Velocity |v_drift|(t)</option>
               <option value="pv">P-V Indicator Diagram</option>
+              <option value="pt">P-T State Diagram</option>
+              <option value="ts">T-s State Diagram</option>
+              <option value="hist">Velocity Distribution f(v)</option>
             </select>
           </div>
           <div class="modal-actions-row">
@@ -5901,55 +5974,72 @@ class SensorZone {
   }
 
   updateMeasurements(particles, currentTime = 0) {
-    let count = 0;
-    let sumVx = 0;
-    let sumVy = 0;
-    let sumMVx = 0;
-    let sumMVy = 0;
-    let sumMass = 0;
-    let totalKinetic = 0;
-    let sumThermalEnergy = 0;
-
+    let sampleCount = 0, sumVx = 0, sumVy = 0, sumMVx = 0, sumMVy = 0, sumMass = 0, sampleKinetic = 0;
+    const speedSamples = [];
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
       if (this.contains(p.pos)) {
-        count++;
-        sumVx += p.vel.x;
-        sumVy += p.vel.y;
-        sumMVx += p.mass * p.vel.x;
-        sumMVy += p.mass * p.vel.y;
+        sampleCount++;
+        sumVx += p.vel.x; sumVy += p.vel.y;
+        sumMVx += p.mass * p.vel.x; sumMVy += p.mass * p.vel.y;
         sumMass += p.mass;
-        totalKinetic += 0.5 * p.mass * p.getSpeedSq();
+        const spdSq = p.getSpeedSq();
+        sampleKinetic += 0.5 * p.mass * spdSq;
+        if (speedSamples.length < 500) speedSamples.push(Math.sqrt(spdSq));
       }
     }
+    this._processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, 1.0, currentTime, speedSamples);
+  }
 
-    this.particleCount = count;
+  updateMeasurementsFromGPU(floats, count, scaleFactor = 1.0, currentTime = 0) {
+    let sampleCount = 0, sumVx = 0, sumVy = 0, sumMVx = 0, sumMVy = 0, sumMass = 0, sampleKinetic = 0;
+    const speedSamples = [];
+    const minX = this.x, maxX = this.x + this.width;
+    const minY = this.y, maxY = this.y + this.height;
+
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const px = floats[ptr], py = floats[ptr + 1];
+      if (px >= minX && px <= maxX && py >= minY && py <= maxY) {
+        sampleCount++;
+        const vx = floats[ptr + 2], vy = floats[ptr + 3], m = floats[ptr + 5];
+        sumVx += vx; sumVy += vy;
+        sumMVx += m * vx; sumMVy += m * vy;
+        sumMass += m;
+        const spdSq = vx * vx + vy * vy;
+        sampleKinetic += 0.5 * m * spdSq;
+        if (speedSamples.length < 500) speedSamples.push(Math.sqrt(spdSq));
+      }
+      ptr += 8;
+    }
+    this._processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, scaleFactor, currentTime, speedSamples);
+  }
+
+  _processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, scaleFactor = 1.0, currentTime = 0, speedSamples = []) {
+    const effectiveCount = Math.round(sampleCount * scaleFactor);
+    this.particleCount = effectiveCount;
     const area = this.getArea();
     this.volume = area;
-    this.density = area > 0 ? (count / area) * 1000 : 0;
-    this.kineticEnergy = totalKinetic;
+    this.density = area > 0 ? (effectiveCount / area) * 1000 : 0;
+    this.kineticEnergy = sampleKinetic * scaleFactor;
+    this.speedSamples = speedSamples;
 
-    if (count > 0) {
-      const rawMeanVx = sumVx / count;
-      const rawMeanVy = sumVy / count;
+    if (sampleCount > 0) {
+      const rawMeanVx = sumVx / sampleCount;
+      const rawMeanVy = sumVy / sampleCount;
 
-      // Heavy low-pass exponential smoothing for macroscopic drift velocity (tau ~ 1.5s)
       this.driftVx = this.driftVx * 0.90 + rawMeanVx * 0.10;
       this.driftVy = this.driftVy * 0.90 + rawMeanVy * 0.10;
-      this.driftSpeed = Math.sqrt(this.driftVx * this.driftVx + this.driftVy * this.driftVy);
+      this.driftSpeed = Math.hypot(this.driftVx, this.driftVy);
       this.driftAngle = Math.atan2(this.driftVy, this.driftVx);
 
-      // Single-pass thermal energy (Verschiebungssatz: sum 0.5*m*(v - v_mean)^2)
-      sumThermalEnergy = Math.max(0, totalKinetic - (rawMeanVx * sumMVx + rawMeanVy * sumMVy) + 0.5 * (rawMeanVx * rawMeanVx + rawMeanVy * rawMeanVy) * sumMass);
-
+      const sumThermal = Math.max(0, sampleKinetic - (rawMeanVx * sumMVx + rawMeanVy * sumMVy) + 0.5 * (rawMeanVx * rawMeanVx + rawMeanVy * rawMeanVy) * sumMass);
       const kB = 35.0;
-      this.temperature = Math.max(5, sumThermalEnergy / (count * kB));
-      this.pressure = ((count / (area || 1)) * kB * this.temperature * 100);
+      this.temperature = Math.max(5, sumThermal / (sampleCount * kB));
+      this.pressure = ((effectiveCount / (area || 1)) * kB * this.temperature * 100);
 
-      // Distinguish genuine bulk flow (trend) from random Brownian / thermal fluctuations:
-      // Thermal speed v_th ~ sqrt(2 * kB * T / m)
       const vThermal = Math.sqrt((2 * kB * this.temperature) / 1.0);
-      const fluctuationThreshold = Math.max(12.0, (vThermal / Math.sqrt(count)) * 0.7);
+      const fluctuationThreshold = Math.max(12.0, (vThermal / Math.sqrt(Math.max(1, effectiveCount))) * 0.7);
 
       if (this.driftSpeed > fluctuationThreshold && this.driftSpeed > 15.0) {
         this.displayDriftSpeed = this.driftSpeed;
@@ -5963,7 +6053,6 @@ class SensorZone {
       this.displayDriftSpeed = 0;
     }
 
-    // Record continuous time history (sampled every ~0.05s)
     if (this.historyTime.length === 0 || currentTime - this.historyTime[this.historyTime.length - 1] >= 0.045) {
       this.historyTime.push(currentTime);
       this.historyTemp.push(this.temperature);
@@ -5973,7 +6062,6 @@ class SensorZone {
       this.historyKineticEnergy.push(this.kineticEnergy);
       this.historyDrift.push(this.displayDriftSpeed);
 
-      // Keep up to 600 points (~30 seconds of high-resolution continuous trace)
       if (this.historyTime.length > 600) {
         this.historyTime.shift();
         this.historyTemp.shift();
@@ -7152,6 +7240,12 @@ class ParticleGPURenderer {
         @location(3) aSpeedNorm: f32
       ) -> VertexOutput {
         var out: VertexOutput;
+        if (aRadius <= 0.0 || aPos.x < -50000.0) {
+          out.position = vec4f(2.0, 2.0, 2.0, 1.0);
+          out.vLocalPos = vec2f(0.0);
+          out.vSpeedNorm = 0.0;
+          return out;
+        }
         out.vLocalPos = aQuad;
         out.vSpeedNorm = aSpeedNorm;
 
@@ -8267,7 +8361,7 @@ const particleComputeWGSL = `
 struct SimParams {
   dt: f32, gravity: f32, gravityEnabled: u32, damping: f32,
   particleCount: u32, maxSpeedReference: f32, wallCount: u32, subSteps: u32,
-  boundsEnabled: u32, cellSize: f32, gridTableSize: u32, pad1: u32,
+  boundsEnabled: u32, cellSize: f32, gridTableSize: u32, sinkCount: u32,
   boundMin: vec2f, boundMax: vec2f,
   simModel: u32, pad2: u32, pad3: u32, pad4: u32,
 };
@@ -8282,6 +8376,12 @@ struct WallData {
   temperature: f32, conductivity: f32, vel: vec2f, pad: vec2f,
 };
 
+struct SinkData {
+  minPos: vec2f, maxPos: vec2f,
+  isActive: u32, direction: u32, tempFilterMode: u32, filterTemperature: f32,
+  pad1: vec2f, pad2: vec2f,
+};
+
 @group(0) @binding(0) var<uniform> params: SimParams;
 @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
 @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
@@ -8289,6 +8389,7 @@ struct WallData {
 @group(0) @binding(4) var<storage, read_write> cellHeads: array<atomic<i32>>;
 @group(0) @binding(5) var<storage, read_write> particleNext: array<i32>;
 @group(0) @binding(6) var<storage, read_write> bestPartners: array<i32>;
+@group(0) @binding(7) var<storage, read> sinks: array<SinkData>;
 
 fn hashCell(cx: i32, cy: i32, tableSize: u32) -> u32 {
   let p1 = 73856093u;
@@ -8313,6 +8414,10 @@ fn cs_build_grid(@builtin(global_invocation_id) global_id: vec3u) {
     return;
   }
   let p = particlesIn[idx];
+  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+    particleNext[idx] = -1;
+    return;
+  }
   let cx = i32(floor(p.pos.x / params.cellSize));
   let cy = i32(floor(p.pos.y / params.cellSize));
   let cellIdx = hashCell(cx, cy, params.gridTableSize);
@@ -8325,6 +8430,10 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
   if (idx >= params.particleCount) { return; }
   let p = particlesIn[idx];
+  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+    bestPartners[idx] = -1;
+    return;
+  }
   let cx = i32(floor(p.pos.x / params.cellSize));
   let cy = i32(floor(p.pos.y / params.cellSize));
 
@@ -8382,6 +8491,10 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
   if (idx >= params.particleCount) { return; }
   var p = particlesIn[idx];
+  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+    particlesOut[idx] = p;
+    return;
+  }
   let startPos = p.pos;
 
   // 1. Gravity acceleration
@@ -8569,6 +8682,35 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     }
   }
 
+  // 4b. Sink (Absorber) Absorption
+  for (var s = 0u; s < params.sinkCount; s++) {
+    let sk = sinks[s];
+    if (sk.isActive == 0u) { continue; }
+    if (p.pos.x >= sk.minPos.x && p.pos.x <= sk.maxPos.x &&
+        p.pos.y >= sk.minPos.y && p.pos.y <= sk.maxPos.y) {
+      var canAbsorb = true;
+      if (sk.direction == 1u && p.vel.x <= 0.0) { canAbsorb = false; }
+      else if (sk.direction == 2u && p.vel.x >= 0.0) { canAbsorb = false; }
+      else if (sk.direction == 3u && p.vel.y <= 0.0) { canAbsorb = false; }
+      else if (sk.direction == 4u && p.vel.y >= 0.0) { canAbsorb = false; }
+
+      if (canAbsorb && sk.tempFilterMode != 0u) {
+        let kB = 35.0;
+        let vSq = dot(p.vel, p.vel);
+        let pTemp = (p.mass * vSq) / (2.0 * kB);
+        if (sk.tempFilterMode == 1u && pTemp < sk.filterTemperature) { canAbsorb = false; }
+        else if (sk.tempFilterMode == 2u && pTemp > sk.filterTemperature) { canAbsorb = false; }
+      }
+
+      if (canAbsorb) {
+        p.pos = vec2f(-99999.0, -99999.0);
+        p.vel = vec2f(0.0, 0.0);
+        p.radius = 0.0;
+        break;
+      }
+    }
+  }
+
   // 5. Bounds (Splash Mode)
   if (params.boundsEnabled != 0u) {
     let r = p.radius;
@@ -8623,6 +8765,9 @@ class ParticleGPUCompute {
     this.particleNextBuffer = null;
     this.bestPartnersBuffer = null;
 
+    this.telemetryStagingBuffer = null;
+    this.isTelemetryPending = false;
+
     this.uniformData = new ArrayBuffer(80);
     this.uniformFloats = new Float32Array(this.uniformData);
     this.uniformU32 = new Uint32Array(this.uniformData);
@@ -8641,50 +8786,18 @@ class ParticleGPUCompute {
   }
 
   _initBuffers() {
-    const device = this.device;
-    const bufferSize = this.capacity * 32;
-
-    this.bufferA = device.createBuffer({
-      label: 'ParticleComputeBufferA',
-      size: bufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    });
-
-    this.bufferB = device.createBuffer({
-      label: 'ParticleComputeBufferB',
-      size: bufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    });
-
-    this.uniformBuffer = device.createBuffer({
-      label: 'ParticleComputeUniforms',
-      size: 80,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-    });
-
-    this.wallsBuffer = device.createBuffer({
-      label: 'ParticleComputeWalls',
-      size: this.maxWalls * 64,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-
-    this.cellHeadsBuffer = device.createBuffer({
-      label: 'ParticleComputeCellHeads',
-      size: this.gridTableSize * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-
-    this.particleNextBuffer = device.createBuffer({
-      label: 'ParticleComputeParticleNext',
-      size: this.capacity * 4,
-      usage: GPUBufferUsage.STORAGE
-    });
-
-    this.bestPartnersBuffer = device.createBuffer({
-      label: 'ParticleComputeBestPartners',
-      size: this.capacity * 4,
-      usage: GPUBufferUsage.STORAGE
-    });
+    const dev = this.device, cap = this.capacity;
+    const make = (label, size, usage) => dev.createBuffer({ label, size, usage });
+    const s = GPUBufferUsage.STORAGE;
+    this.bufferA = make('ComputeBufA', cap * 32, s | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    this.bufferB = make('ComputeBufB', cap * 32, s | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    this.uniformBuffer = make('ComputeUniforms', 80, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    this.wallsBuffer = make('ComputeWalls', this.maxWalls * 64, s | GPUBufferUsage.COPY_DST);
+    this.cellHeadsBuffer = make('ComputeCellHeads', this.gridTableSize * 4, s | GPUBufferUsage.COPY_DST);
+    this.particleNextBuffer = make('ComputeParticleNext', cap * 4, s);
+    this.bestPartnersBuffer = make('ComputeBestPartners', cap * 4, s);
+    this.sinksBuffer = make('ComputeSinks', 64 * 48, s | GPUBufferUsage.COPY_DST);
+    this.telemetryStagingBuffer = make('ComputeTelemetryStaging', 50000 * 32, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST);
   }
 
   _initPipeline() {
@@ -8700,7 +8813,8 @@ class ParticleGPUCompute {
       label: 'ParticleComputeBindGroupLayout',
       entries: [
         entry(0, 'uniform'), entry(1, 'read-only-storage'), entry(2, 'storage'),
-        entry(3, 'read-only-storage'), entry(4, 'storage'), entry(5, 'storage'), entry(6, 'storage')
+        entry(3, 'read-only-storage'), entry(4, 'storage'), entry(5, 'storage'),
+        entry(6, 'storage'), entry(7, 'read-only-storage')
       ]
     });
 
@@ -8726,7 +8840,8 @@ class ParticleGPUCompute {
         { binding: 3, resource: { buffer: this.wallsBuffer } },
         { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
         { binding: 5, resource: { buffer: this.particleNextBuffer } },
-        { binding: 6, resource: { buffer: this.bestPartnersBuffer } }
+        { binding: 6, resource: { buffer: this.bestPartnersBuffer } },
+        { binding: 7, resource: { buffer: this.sinksBuffer } }
       ]
     });
     this.bindGroupAB = makeBG(this.bufferA, this.bufferB, 'ParticleComputeBindGroupAB');
@@ -8775,6 +8890,61 @@ class ParticleGPUCompute {
     this.device.queue.writeBuffer(this.wallsBuffer, 0, data, 0, count * 64);
   }
 
+  uploadSinks(sinks) {
+    if (!this.isSupported) return;
+    const list = sinks || [];
+    const count = Math.min(list.length, 64);
+    this.sinkCount = count;
+    if (count === 0) {
+      const zero = new Uint32Array(12);
+      this.device.queue.writeBuffer(this.sinksBuffer, 0, zero.buffer, 0, 48);
+      return;
+    }
+
+    const data = new ArrayBuffer(count * 48);
+    const f32 = new Float32Array(data);
+    const u32 = new Uint32Array(data);
+
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const s = list[i];
+      f32[ptr + 0] = s.x;
+      f32[ptr + 1] = s.y;
+      f32[ptr + 2] = s.x + s.width;
+      f32[ptr + 3] = s.y + s.height;
+
+      const isUnlimited = !s.maxParticles || s.maxParticles <= 0;
+      const isLimitReached = !isUnlimited && (s.absorbedCount >= s.maxParticles);
+      u32[ptr + 4] = (s.isActive !== false && !isLimitReached) ? 1 : 0;
+
+      let dirCode = 0;
+      if (s.direction === 'right') dirCode = 1;
+      else if (s.direction === 'left') dirCode = 2;
+      else if (s.direction === 'down') dirCode = 3;
+      else if (s.direction === 'up') dirCode = 4;
+      u32[ptr + 5] = dirCode;
+
+      let tempCode = 0;
+      if (s.tempFilterMode === 'above') tempCode = 1;
+      else if (s.tempFilterMode === 'below') tempCode = 2;
+      u32[ptr + 6] = tempCode;
+
+      f32[ptr + 7] = s.filterTemperature || 300;
+      f32[ptr + 8] = 0; f32[ptr + 9] = 0;
+      f32[ptr + 10] = 0; f32[ptr + 11] = 0;
+
+      ptr += 12;
+    }
+    this.device.queue.writeBuffer(this.sinksBuffer, 0, data, 0, count * 48);
+  }
+
+  uploadRawParticleBuffer(compactedFloats, count) {
+    if (!this.isSupported || !compactedFloats) return;
+    this.count = count;
+    this.device.queue.writeBuffer(this.bufferA, 0, compactedFloats.buffer, compactedFloats.byteOffset, count * 32);
+    this.device.queue.writeBuffer(this.bufferB, 0, compactedFloats.buffer, compactedFloats.byteOffset, count * 32);
+  }
+
   _packParticles(particles, startIdx, count) {
     const packed = new Float32Array(count * 8);
     let ptr = 0;
@@ -8796,31 +8966,27 @@ class ParticleGPUCompute {
     if (!this.isSupported || !particles) return;
     this.count = Math.min(particles.length, this.capacity);
     if (this.count === 0) return;
-
     const packed = this._packParticles(particles, 0, this.count);
-    const byteLength = this.count * 32;
-    this.device.queue.writeBuffer(this.bufferA, 0, packed.buffer, 0, byteLength);
-    this.device.queue.writeBuffer(this.bufferB, 0, packed.buffer, 0, byteLength);
-    this.pingPong = 0;
+    this.device.queue.writeBuffer(this.bufferA, 0, packed);
+    this.device.queue.writeBuffer(this.bufferB, 0, packed);
   }
 
   appendParticles(newParticles) {
     if (!this.isSupported || !newParticles || newParticles.length === 0) return;
-    const addCount = Math.min(newParticles.length, this.capacity - this.count);
-    if (addCount <= 0) return;
+    const appendCount = Math.min(newParticles.length, this.capacity - this.count);
+    if (appendCount <= 0) return;
 
-    const packed = this._packParticles(newParticles, 0, addCount);
+    const packed = this._packParticles(newParticles, 0, appendCount);
     const byteOffset = this.count * 32;
-    const byteLength = addCount * 32;
-    this.device.queue.writeBuffer(this.bufferA, byteOffset, packed.buffer, 0, byteLength);
-    this.device.queue.writeBuffer(this.bufferB, byteOffset, packed.buffer, 0, byteLength);
-    this.count += addCount;
+    this.device.queue.writeBuffer(this.bufferA, byteOffset, packed);
+    this.device.queue.writeBuffer(this.bufferB, byteOffset, packed);
+    this.count += appendCount;
   }
 
-  step(dt, gravityEnabled, gravity = 350, damping = 1.0, bounds = null, maxSpeedReference = 380, subSteps = 4, simModel = 0) {
-    if (!this.isSupported || this.count === 0) return null;
+  step(dt, gravityEnabled = false, gravity = 350, damping = 1.0, bounds = null, maxSpeedReference = 380, subSteps = 4, simModel = 0) {
+    if (!this.isSupported || this.count === 0) return this.getOutputBuffer();
 
-    const effectiveSubSteps = Math.max(1, Math.min(16, subSteps || 4));
+    const effectiveSubSteps = Math.max(1, subSteps);
     const subDt = dt / effectiveSubSteps;
 
     const hasBounds = !!(bounds && typeof bounds.minX === 'number' && typeof bounds.maxX === 'number');
@@ -8837,7 +9003,7 @@ class ParticleGPUCompute {
     this.uniformU32[8] = hasBounds ? 1 : 0;
     this.uniformFloats[9] = this.cellSize;
     this.uniformU32[10] = this.gridTableSize;
-    this.uniformU32[11] = 0;
+    this.uniformU32[11] = this.sinkCount || 0;
     this.uniformFloats[12] = hasBounds ? bounds.minX : 0;
     this.uniformFloats[13] = hasBounds ? bounds.minY : 0;
     this.uniformFloats[14] = hasBounds ? bounds.maxX : 2500;
@@ -8903,30 +9069,45 @@ class ParticleGPUCompute {
     return this.count;
   }
 
-  async readbackParticles(maxCount = this.count) {
-    if (!this.isSupported || this.count === 0) return [];
-    const readCount = Math.min(this.count, maxCount);
+  async fetchTelemetry(sampleCap = 50000) {
+    if (!this.isSupported || this.count === 0 || this.isTelemetryPending) return null;
+    const readCount = Math.min(this.count, sampleCap);
     const byteSize = readCount * 32;
 
-    const stagingBuffer = this.device.createBuffer({
-      label: 'ParticleReadbackStaging',
-      size: byteSize,
-      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
-    });
+    if (!this.telemetryStagingBuffer || this.telemetryStagingBuffer.size < byteSize) {
+      if (this.telemetryStagingBuffer) this.telemetryStagingBuffer.destroy();
+      this.telemetryStagingBuffer = this.device.createBuffer({
+        label: 'ComputeTelemetryStaging',
+        size: Math.max(byteSize, 50000 * 32),
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+      });
+    }
 
-    const commandEncoder = this.device.createCommandEncoder({
-      label: 'ParticleReadbackEncoder'
-    });
-    const srcBuffer = this.getOutputBuffer();
-    commandEncoder.copyBufferToBuffer(srcBuffer, 0, stagingBuffer, 0, byteSize);
-    this.device.queue.submit([commandEncoder.finish()]);
+    this.isTelemetryPending = true;
+    const enc = this.device.createCommandEncoder({ label: 'TelemetryEncoder' });
+    enc.copyBufferToBuffer(this.getOutputBuffer(), 0, this.telemetryStagingBuffer, 0, byteSize);
+    this.device.queue.submit([enc.finish()]);
 
-    await stagingBuffer.mapAsync(GPUMapMode.READ);
-    const floats = new Float32Array(stagingBuffer.getMappedRange());
+    try {
+      await this.telemetryStagingBuffer.mapAsync(GPUMapMode.READ);
+      const mapped = this.telemetryStagingBuffer.getMappedRange(0, byteSize);
+      const floats = new Float32Array(mapped.slice(0));
+      this.telemetryStagingBuffer.unmap();
+      this.isTelemetryPending = false;
+      return { floats, count: readCount, totalCount: this.count };
+    } catch (e) {
+      this.isTelemetryPending = false;
+      return null;
+    }
+  }
 
+  async readbackParticles(maxCount = this.count) {
+    const data = await this.fetchTelemetry(maxCount);
+    if (!data) return [];
+    const { floats, count } = data;
     const result = [];
     let ptr = 0;
-    for (let i = 0; i < readCount; i++) {
+    for (let i = 0; i < count; i++) {
       result.push({
         pos: { x: floats[ptr], y: floats[ptr + 1] },
         vel: { x: floats[ptr + 2], y: floats[ptr + 3] },
@@ -8936,9 +9117,6 @@ class ParticleGPUCompute {
       });
       ptr += 8;
     }
-
-    stagingBuffer.unmap();
-    stagingBuffer.destroy();
     return result;
   }
 }
@@ -8998,6 +9176,8 @@ class Engine {
     this.historyVolume = [];
     this.historyCount = [];
     this.historyKineticEnergy = [];
+    this.historyDrift = [];
+    this.latestSpeedSamples = [];
   }
 
   clear() {
@@ -9020,6 +9200,8 @@ class Engine {
     if (this.gpuCompute) {
       this.gpuCompute.count = 0;
     }
+    this.syncWallsToGPU();
+    this.syncSinksToGPU();
     this.totalTime = 0;
     this.historyTime = [];
     this.historyTemp = [];
@@ -9027,6 +9209,8 @@ class Engine {
     this.historyVolume = [];
     this.historyCount = [];
     this.historyKineticEnergy = [];
+    this.historyDrift = [];
+    this.latestSpeedSamples = [];
     if (this.sequencer) {
       this.sequencer.reset();
     }
@@ -9060,8 +9244,14 @@ class Engine {
     return p;
   }
 
-  addSensor(options = {}) {
-    const s = new SensorZone(options);
+  addSensor(x, y, width, height, options = {}) {
+    let opts = options;
+    if (typeof x === 'object' && x !== null) {
+      opts = x;
+    } else if (typeof x === 'number') {
+      opts = { ...options, x, y, width, height };
+    }
+    const s = new SensorZone(opts);
     this.sensors.push(s);
     this.elements.push(s);
     return s;
@@ -9085,6 +9275,7 @@ class Engine {
     const s = new Sink(x, y, width, height, options);
     this.sinks.push(s);
     this.elements.push(s);
+    this.syncSinksToGPU();
     return s;
   }
 
@@ -9292,9 +9483,8 @@ class Engine {
     if (this.particles.length > 0) {
       this.gpuCompute.uploadParticles(this.particles);
     }
-    if (this.walls.length > 0 || this.pistons.length > 0) {
-      this.syncWallsToGPU();
-    }
+    this.syncWallsToGPU();
+    this.syncSinksToGPU();
   }
 
   disableGPUCompute() {
@@ -9359,7 +9549,13 @@ class Engine {
   syncWallsToGPU() {
     if (this.gpuCompute && this.useGPUCompute) {
       const gpuWalls = this.getGPUWalls();
-      this.gpuCompute.uploadWalls(gpuWalls);
+      this.gpuCompute.uploadWalls(gpuWalls || []);
+    }
+  }
+
+  syncSinksToGPU() {
+    if (this.gpuCompute && this.useGPUCompute) {
+      this.gpuCompute.uploadSinks(this.sinks || []);
     }
   }
 
@@ -9398,9 +9594,8 @@ class Engine {
         for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
         for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
 
-        if (this.walls.length > 0 || this.pistons.length > 0) {
-          this.syncWallsToGPU();
-        }
+        this.syncWallsToGPU();
+        this.syncSinksToGPU();
 
         const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
         this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this.subSteps, modelType);
@@ -9928,19 +10123,30 @@ class Engine {
   _updateStats() {
     let totalE = 0;
     let speedSum = 0;
+    let sumVx = 0;
+    let sumVy = 0;
     const count = this.particles.length;
+    const speedSamples = [];
 
     for (let i = 0; i < count; i++) {
-      const spd = this.particles[i].getSpeed();
+      const p = this.particles[i];
+      const spd = p.getSpeed();
       speedSum += spd;
-      totalE += 0.5 * this.particles[i].mass * spd * spd;
+      sumVx += p.vel.x;
+      sumVy += p.vel.y;
+      totalE += 0.5 * p.mass * spd * spd;
+      if (speedSamples.length < 1000) {
+        speedSamples.push(spd);
+      }
     }
 
+    this.latestSpeedSamples = speedSamples;
     this.stats.particleCount = count;
     this.stats.totalKineticEnergy = totalE;
     this.stats.meanSpeed = count > 0 ? speedSum / count : 0;
     const kB = 35.0;
     this.stats.systemTemperature = count > 0 ? totalE / (count * kB) : 0;
+    const globalDrift = count > 0 ? Math.hypot(sumVx / count, sumVy / count) : 0;
 
     // Record continuous time series
     if (this.historyTime && (this.historyTime.length === 0 || this.totalTime - this.historyTime[this.historyTime.length - 1] >= 0.045)) {
@@ -9950,6 +10156,7 @@ class Engine {
       this.historyVolume.push(2500 * 2500);
       this.historyCount.push(count);
       this.historyKineticEnergy.push(totalE);
+      this.historyDrift.push(globalDrift);
 
       if (this.historyTime.length > 600) {
         this.historyTime.shift();
@@ -9958,7 +10165,124 @@ class Engine {
         this.historyVolume.shift();
         this.historyCount.shift();
         this.historyKineticEnergy.shift();
+        this.historyDrift.shift();
       }
+    }
+  }
+
+  updateTelemetryFromGPU(data) {
+    if (!data || !data.floats || data.count === 0) return;
+    const { floats, count, totalCount } = data;
+    const scaleFactor = totalCount / count;
+
+    let totalE = 0;
+    let speedSum = 0;
+    let sumVx = 0;
+    let sumVy = 0;
+    let liveCount = 0;
+    let deadCount = 0;
+    const speedSamples = [];
+    let ptr = 0;
+    let writePtr = 0;
+
+    for (let i = 0; i < count; i++) {
+      const px = floats[ptr];
+      const py = floats[ptr + 1];
+      const vx = floats[ptr + 2];
+      const vy = floats[ptr + 3];
+      const r = floats[ptr + 4];
+      const m = floats[ptr + 5];
+
+      // Culled/absorbed particle check (teleported to x <= -50000 or r <= 0)
+      if (r <= 0.0 || px < -50000.0) {
+        deadCount++;
+        ptr += 8;
+        continue;
+      }
+
+      if (writePtr !== ptr) {
+        for (let j = 0; j < 8; j++) {
+          floats[writePtr + j] = floats[ptr + j];
+        }
+      }
+      writePtr += 8;
+      liveCount++;
+
+      const spd = Math.hypot(vx, vy);
+      speedSum += spd;
+      sumVx += vx;
+      sumVy += vy;
+      totalE += 0.5 * m * (spd * spd);
+      if (speedSamples.length < 1000) {
+        speedSamples.push(spd);
+      }
+      ptr += 8;
+    }
+
+    // Attribute absorbed particles to sinks
+    if (deadCount > 0 && this.sinks && this.sinks.length > 0) {
+      let remainingDead = deadCount;
+      for (let s = 0; s < this.sinks.length && remainingDead > 0; s++) {
+        const sink = this.sinks[s];
+        if (sink.isActive !== false) {
+          if (sink.maxParticles > 0) {
+            const avail = Math.max(0, sink.maxParticles - sink.absorbedCount);
+            const take = Math.min(avail, remainingDead);
+            sink.absorbedCount += take;
+            remainingDead -= take;
+            if (sink.absorbedCount >= sink.maxParticles) {
+              sink.isActive = false;
+            }
+          } else {
+            sink.absorbedCount += remainingDead;
+            remainingDead = 0;
+          }
+        }
+      }
+    }
+
+    // In-place buffer compaction on GPU if sample is complete
+    if (deadCount > 0 && count === totalCount) {
+      const compactedFloats = floats.slice(0, liveCount * 8);
+      if (this.gpuCompute) {
+        this.gpuCompute.uploadRawParticleBuffer(compactedFloats, liveCount);
+      }
+      this.particles.length = liveCount;
+    }
+
+    const currentLiveTotal = Math.round(liveCount * scaleFactor);
+    this.latestSpeedSamples = speedSamples;
+    this.stats.particleCount = currentLiveTotal;
+    this.stats.totalKineticEnergy = totalE * scaleFactor;
+    this.stats.meanSpeed = liveCount > 0 ? speedSum / liveCount : 0;
+    const kB = 35.0;
+    this.stats.systemTemperature = liveCount > 0 ? (totalE / (liveCount * kB)) : 0;
+    const globalDrift = liveCount > 0 ? Math.hypot(sumVx / liveCount, sumVy / liveCount) : 0;
+
+    // Record continuous time series
+    if (this.historyTime && (this.historyTime.length === 0 || this.totalTime - this.historyTime[this.historyTime.length - 1] >= 0.045)) {
+      this.historyTime.push(this.totalTime);
+      this.historyTemp.push(this.stats.systemTemperature);
+      this.historyPressure.push((currentLiveTotal / 2500) * kB * this.stats.systemTemperature * 10);
+      this.historyVolume.push(2500 * 2500);
+      this.historyCount.push(currentLiveTotal);
+      this.historyKineticEnergy.push(this.stats.totalKineticEnergy);
+      this.historyDrift.push(globalDrift);
+
+      if (this.historyTime.length > 600) {
+        this.historyTime.shift();
+        this.historyTemp.shift();
+        this.historyPressure.shift();
+        this.historyVolume.shift();
+        this.historyCount.shift();
+        this.historyKineticEnergy.shift();
+        this.historyDrift.shift();
+      }
+    }
+
+    // Forward telemetry to sensor chambers
+    for (let i = 0; i < this.sensors.length; i++) {
+      this.sensors[i].updateMeasurementsFromGPU(floats, liveCount, scaleFactor, this.totalTime);
     }
   }
 
@@ -10056,6 +10380,9 @@ class Engine {
       this.sequencer.phases = this.sequencer.steps;
     }
 
+    this.syncParticlesToGPU();
+    this.syncWallsToGPU();
+    this.syncSinksToGPU();
     this._updateStats();
   }
 
@@ -10096,6 +10423,7 @@ class Engine {
     if (!particlesToDelete || particlesToDelete.length === 0) return;
     const deleteSet = new Set(Array.isArray(particlesToDelete) ? particlesToDelete : [particlesToDelete]);
     this.particles = this.particles.filter(p => !deleteSet.has(p));
+    this.syncParticlesToGPU();
     this._updateStats();
   }
 
@@ -10765,6 +11093,39 @@ class Renderer {
     const tempText = hasParticles ? ` [${Math.round(sensor.temperature)} K]` : ' (Empty)';
     ctx.fillText(`${sensor.label}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
 
+    // Drift Flow Indicator Arrow (only when macroscopic drift exceeds thermal fluctuation)
+    if (sensor.displayDriftSpeed > 0) {
+      const cx = sensor.x + sensor.width * 0.5;
+      const cy = sensor.y + sensor.height * 0.5;
+      const angle = sensor.driftAngle || 0;
+      const maxDim = Math.min(sensor.width, sensor.height);
+      const arrowLen = Math.min(maxDim * 0.38, Math.max(18, sensor.displayDriftSpeed * 0.45));
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+
+      ctx.strokeStyle = '#22c55e';
+      ctx.fillStyle = '#22c55e';
+      ctx.lineWidth = 2.5;
+
+      // Shaft
+      ctx.beginPath();
+      ctx.moveTo(-arrowLen * 0.5, 0);
+      ctx.lineTo(arrowLen * 0.5, 0);
+      ctx.stroke();
+
+      // Arrow Head
+      ctx.beginPath();
+      ctx.moveTo(arrowLen * 0.5, 0);
+      ctx.lineTo(arrowLen * 0.5 - 7, -4.5);
+      ctx.lineTo(arrowLen * 0.5 - 7, 4.5);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
     ctx.restore();
   }
 
@@ -11083,10 +11444,9 @@ class Renderer {
     } else if (sink.direction === 'up') {
       ctx.moveTo(cx, cy + 8); ctx.lineTo(cx, cy - 8);
       ctx.lineTo(cx - 4, cy - 4); ctx.moveTo(cx, cy - 8); ctx.lineTo(cx + 4, cy - 4);
-    } else { // 360
-      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-      ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy);
-      ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3);
+    } else { // 360: Minus symbol inside circle (Absorber / Sink removes particles)
+      ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+      ctx.moveTo(cx - 4, cy); ctx.lineTo(cx + 4, cy);
     }
     ctx.stroke();
 
@@ -11857,7 +12217,7 @@ class VelHistChart {
     ];
   }
 
-  render(engine) {
+  render(engine, target = 'global') {
     const ctx = this.ctx;
     const w = this.canvas.width;
     const h = this.canvas.height;
@@ -11873,9 +12233,6 @@ class VelHistChart {
     const chartW = w - padLeft - padRight;
     const chartH = h - padTop - padBottom;
 
-    const particles = engine.particles;
-    const N = particles.length;
-
     // Grid lines
     ctx.strokeStyle = '#22262e';
     ctx.lineWidth = 1;
@@ -11886,7 +12243,22 @@ class VelHistChart {
       ctx.stroke();
     }
 
-    if (N === 0) {
+    let speeds = null;
+    if (target && target !== 'global' && target.speedSamples && target.speedSamples.length > 0) {
+      speeds = target.speedSamples;
+    } else if (engine.latestSpeedSamples && engine.latestSpeedSamples.length > 0) {
+      speeds = engine.latestSpeedSamples;
+    } else if (engine.particles && engine.particles.length > 0) {
+      speeds = [];
+      const pts = engine.particles;
+      const step = pts.length > 1000 ? Math.max(1, Math.floor(pts.length / 1000)) : 1;
+      for (let i = 0; i < pts.length; i += step) {
+        const p = pts[i];
+        if (p) speeds.push(typeof p.getSpeed === 'function' ? p.getSpeed() : Math.hypot(p.vel ? p.vel.x : 0, p.vel ? p.vel.y : 0));
+      }
+    }
+
+    if (!speeds || speeds.length === 0) {
       ctx.fillStyle = '#64748b';
       ctx.font = '10px Inter, sans-serif';
       ctx.textAlign = 'center';
@@ -11895,11 +12267,9 @@ class VelHistChart {
     }
 
     const counts = new Array(this.binRanges.length).fill(0);
-    const step = N > 1000 ? Math.max(1, Math.floor(N / 1000)) : 1;
-    for (let i = 0; i < N; i += step) {
-      const p = particles[i];
-      if (!p) continue;
-      const spd = typeof p.getSpeed === 'function' ? p.getSpeed() : Math.hypot(p.vel ? p.vel.x : 0, p.vel ? p.vel.y : 0);
+    const N = speeds.length;
+    for (let i = 0; i < N; i++) {
+      const spd = speeds[i];
       for (let b = 0; b < this.binRanges.length; b++) {
         if (spd >= this.binRanges[b].min && spd < this.binRanges[b].max) {
           counts[b]++;
@@ -11958,15 +12328,24 @@ class ChamberChart {
     ctx.fillStyle = '#101216';
     ctx.fillRect(0, 0, w, h);
 
-    const data = metric === 'temp' ? sensor.historyTemp : sensor.historyPressure;
-    const time = sensor.historyTime;
+    let data = metric === 'temp' ? sensor.historyTemp : sensor.historyPressure;
+    let time = sensor.historyTime;
 
-    if (!data || data.length < 2) {
-      ctx.fillStyle = '#64748b';
-      ctx.font = '10px Inter, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Collecting data...', w / 2, h / 2 + 3);
-      return;
+    if (!data || data.length === 0) {
+      const currentVal = metric === 'temp' ? sensor.temperature : sensor.pressure;
+      if (typeof currentVal === 'number' && !isNaN(currentVal)) {
+        data = [currentVal, currentVal];
+        time = [0, 1.0];
+      } else {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Collecting data...', w / 2, h / 2 + 3);
+        return;
+      }
+    } else if (data.length === 1) {
+      data = [data[0], data[0]];
+      time = [time[0] || 0, (time[0] || 0) + 1.0];
     }
 
     const padL = 34, padR = 10, padT = 8, padB = 16;
@@ -12034,7 +12413,10 @@ class DashboardChart {
       count: 'Particles N(t)',
       kinetic: 'Kinetic Energy E_kin(t) [J]',
       drift: 'Drift Velocity |v_drift|(t) [px/s]',
-      pv: 'P-V Indicator Diagram'
+      pv: 'P-V Indicator Diagram',
+      pt: 'P-T State Diagram',
+      ts: 'T-s State Diagram',
+      hist: 'Velocity Distribution f(v)'
     };
     return `${metricLabels[this.metric] || this.metric} · ${targetName}`;
   }
@@ -12059,59 +12441,178 @@ class DashboardChart {
     const chartW = w - padL - padR;
     const chartH = h - padT - padB;
 
+    // 1. Histogram Metric
+    if (this.metric === 'hist') {
+      const binRanges = [
+        { min: 0, max: 100 },
+        { min: 100, max: 200 },
+        { min: 200, max: 300 },
+        { min: 300, max: 400 },
+        { min: 400, max: 500 },
+        { min: 500, max: 99999 }
+      ];
+      const speeds = [...((this.target === 'global' ? engine.latestSpeedSamples : this.target.speedSamples) || [])];
+      if (speeds.length === 0 && this.target === 'global' && engine.particles && engine.particles.length > 0) {
+        const sampleCount = Math.min(500, engine.particles.length);
+        for (let i = 0; i < sampleCount; i++) {
+          speeds.push(engine.particles[i].getSpeed());
+        }
+      }
+      if (speeds.length === 0) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Collecting velocity data...', w / 2, h / 2);
+        return;
+      }
+      const counts = new Array(binRanges.length).fill(0);
+      for (let i = 0; i < speeds.length; i++) {
+        const s = speeds[i];
+        for (let b = 0; b < binRanges.length; b++) {
+          if (s >= binRanges[b].min && s < binRanges[b].max) {
+            counts[b]++;
+            break;
+          }
+        }
+      }
+      const maxCount = Math.max(1, ...counts);
+      const barW = chartW / binRanges.length;
+      for (let b = 0; b < binRanges.length; b++) {
+        const barH = (counts[b] / maxCount) * chartH;
+        ctx.fillStyle = '#22c55e';
+        ctx.fillRect(padL + b * barW + 2, h - padB - barH, barW - 4, barH);
+      }
+      ctx.strokeStyle = '#242935';
+      ctx.beginPath();
+      ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
+      ctx.stroke();
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '8px JetBrains Mono, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${maxCount}`, padL - 3, padT + 8);
+      ctx.fillText('0', padL - 3, h - padB);
+      return;
+    }
+
+    // 2. State & Indicator Diagrams (P-V, P-T, T-s)
+    if (this.metric === 'pv' || this.metric === 'pt' || this.metric === 'ts') {
+      const isGlobal = this.target === 'global';
+      const pArr = isGlobal ? engine.historyPressure : this.target.historyPressure;
+      const tArr = isGlobal ? engine.historyTemp : this.target.historyTemp;
+      const vArr = isGlobal ? engine.historyVolume : this.target.historyVolume;
+
+      let xArr = [], yArr = [];
+      let strokeCol = '#f59e0b';
+      if (this.metric === 'pv') {
+        xArr = vArr || []; yArr = pArr || []; strokeCol = '#f59e0b';
+      } else if (this.metric === 'pt') {
+        xArr = tArr || []; yArr = pArr || []; strokeCol = '#ec4899';
+      } else if (this.metric === 'ts') {
+        xArr = (vArr && tArr) ? tArr.map((t, idx) => Math.log(Math.max(1, t)) + 0.6 * Math.log(Math.max(1, vArr[idx] || 1))) : [];
+        yArr = tArr || [];
+        strokeCol = '#38bdf8';
+      }
+
+      if (!xArr || xArr.length === 0 || !yArr || yArr.length === 0) {
+        const curP = isGlobal ? ((engine.stats.particleCount / 2500) * 35.0 * engine.stats.systemTemperature * 10) : this.target.pressure;
+        const curT = isGlobal ? engine.stats.systemTemperature : this.target.temperature;
+        const curV = isGlobal ? (2500 * 2500) : this.target.volume;
+        if (this.metric === 'pv') { xArr = [curV, curV]; yArr = [curP, curP]; }
+        else if (this.metric === 'pt') { xArr = [curT, curT]; yArr = [curP, curP]; }
+        else if (this.metric === 'ts') {
+          const curS = Math.log(Math.max(1, curT)) + 0.6 * Math.log(Math.max(1, curV));
+          xArr = [curS, curS]; yArr = [curT, curT];
+        }
+      } else if (xArr.length === 1 && yArr.length === 1) {
+        xArr = [xArr[0], xArr[0]];
+        yArr = [yArr[0], yArr[0]];
+      }
+
+      if (!xArr || xArr.length < 2 || !yArr || yArr.length < 2) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Collecting state points...', w / 2, h / 2);
+        return;
+      }
+
+      let minX = Math.min(...xArr), maxX = Math.max(...xArr);
+      let minY = Math.min(...yArr), maxY = Math.max(...yArr);
+      if (minX === maxX) { minX -= 10; maxX += 10; }
+      if (minY === maxY) { minY -= 10; maxY += 10; }
+
+      ctx.strokeStyle = '#242935';
+      ctx.beginPath();
+      ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
+      ctx.stroke();
+
+      ctx.strokeStyle = strokeCol;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      const len = Math.min(xArr.length, yArr.length);
+      for (let i = 0; i < len; i++) {
+        const x = padL + ((xArr[i] - minX) / (maxX - minX || 1)) * chartW;
+        const y = h - padB - ((yArr[i] - minY) / (maxY - minY || 1)) * chartH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '8px JetBrains Mono, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${Math.round(maxY)}`, padL - 3, padT + 8);
+      ctx.fillText(`${Math.round(minY)}`, padL - 3, h - padB);
+      return;
+    }
+
+    // 3. Time Series Curves
     let timeArr = [];
     let dataArr = [];
     let strokeColor = '#38bdf8';
 
     if (this.target === 'global') {
-      timeArr = engine.historyTime || [];
-      if (this.metric === 'temp') { dataArr = engine.historyTemp || []; strokeColor = '#38bdf8'; }
-      else if (this.metric === 'pressure') { dataArr = engine.historyPressure || []; strokeColor = '#f59e0b'; }
-      else if (this.metric === 'volume') { dataArr = engine.historyVolume || []; strokeColor = '#22c55e'; }
-      else if (this.metric === 'count') { dataArr = engine.historyCount || []; strokeColor = '#a855f7'; }
-      else if (this.metric === 'kinetic') { dataArr = engine.historyKineticEnergy || []; strokeColor = '#ec4899'; }
-      else if (this.metric === 'drift') { dataArr = [0]; strokeColor = '#22c55e'; }
+      timeArr = (engine.historyTime && engine.historyTime.length > 0) ? [...engine.historyTime] : [];
+      if (this.metric === 'temp') { dataArr = [...(engine.historyTemp || [])]; strokeColor = '#38bdf8'; }
+      else if (this.metric === 'pressure') { dataArr = [...(engine.historyPressure || [])]; strokeColor = '#f59e0b'; }
+      else if (this.metric === 'volume') { dataArr = [...(engine.historyVolume || [])]; strokeColor = '#22c55e'; }
+      else if (this.metric === 'count') { dataArr = [...(engine.historyCount || [])]; strokeColor = '#a855f7'; }
+      else if (this.metric === 'kinetic') { dataArr = [...(engine.historyKineticEnergy || [])]; strokeColor = '#ec4899'; }
+      else if (this.metric === 'drift') { dataArr = [...(engine.historyDrift || [])]; strokeColor = '#22c55e'; }
     } else {
       const s = this.target;
-      timeArr = s.historyTime || [];
-      if (this.metric === 'temp') { dataArr = s.historyTemp || []; strokeColor = s.color || '#38bdf8'; }
-      else if (this.metric === 'pressure') { dataArr = s.historyPressure || []; strokeColor = '#f59e0b'; }
-      else if (this.metric === 'volume') { dataArr = s.historyVolume || []; strokeColor = '#22c55e'; }
-      else if (this.metric === 'count') { dataArr = s.historyCount || []; strokeColor = '#a855f7'; }
-      else if (this.metric === 'kinetic') { dataArr = s.historyKineticEnergy || []; strokeColor = '#ec4899'; }
-      else if (this.metric === 'drift') { dataArr = s.historyDrift || []; strokeColor = '#22c55e'; }
-      else if (this.metric === 'pv') {
-        const pArr = s.historyPressure || [];
-        const vArr = s.historyVolume || [];
-        if (pArr.length < 2) {
-          ctx.fillStyle = '#64748b';
-          ctx.font = '10px Inter, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('Collecting P-V loop...', w / 2, h / 2);
-          return;
-        }
-        let minP = Math.min(...pArr), maxP = Math.max(...pArr);
-        let minV = Math.min(...vArr), maxV = Math.max(...vArr);
-        if (minP === maxP) { minP -= 10; maxP += 10; }
-        if (minV === maxV) { minV -= 50; maxV += 50; }
+      timeArr = (s.historyTime && s.historyTime.length > 0) ? [...s.historyTime] : [];
+      if (this.metric === 'temp') { dataArr = [...(s.historyTemp || [])]; strokeColor = s.color || '#38bdf8'; }
+      else if (this.metric === 'pressure') { dataArr = [...(s.historyPressure || [])]; strokeColor = '#f59e0b'; }
+      else if (this.metric === 'volume') { dataArr = [...(s.historyVolume || [])]; strokeColor = '#22c55e'; }
+      else if (this.metric === 'count') { dataArr = [...(s.historyCount || [])]; strokeColor = '#a855f7'; }
+      else if (this.metric === 'kinetic') { dataArr = [...(s.historyKineticEnergy || [])]; strokeColor = '#ec4899'; }
+      else if (this.metric === 'drift') { dataArr = [...(s.historyDrift || [])]; strokeColor = '#22c55e'; }
+    }
 
-        ctx.strokeStyle = '#242935';
-        ctx.beginPath();
-        ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
-        ctx.stroke();
-
-        ctx.strokeStyle = '#f59e0b';
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        for (let i = 0; i < pArr.length; i++) {
-          const x = padL + ((vArr[i] - minV) / (maxV - minV || 1)) * chartW;
-          const y = h - padB - ((pArr[i] - minP) / (maxP - minP || 1)) * chartH;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-        return;
+    if (!dataArr || dataArr.length === 0) {
+      let curVal = 0;
+      if (this.target === 'global') {
+        if (this.metric === 'temp') curVal = engine.stats.systemTemperature;
+        else if (this.metric === 'pressure') curVal = (engine.stats.particleCount / 2500) * 35.0 * engine.stats.systemTemperature * 10;
+        else if (this.metric === 'volume') curVal = 2500 * 2500;
+        else if (this.metric === 'count') curVal = engine.stats.particleCount;
+        else if (this.metric === 'kinetic') curVal = engine.stats.totalKineticEnergy;
+        else if (this.metric === 'drift') curVal = (engine.historyDrift && engine.historyDrift.length > 0) ? engine.historyDrift[0] : 0;
+      } else {
+        const s = this.target;
+        if (this.metric === 'temp') curVal = s.temperature;
+        else if (this.metric === 'pressure') curVal = s.pressure;
+        else if (this.metric === 'volume') curVal = s.volume;
+        else if (this.metric === 'count') curVal = s.particleCount;
+        else if (this.metric === 'kinetic') curVal = s.kineticEnergy;
+        else if (this.metric === 'drift') curVal = s.displayDriftSpeed || 0;
       }
+      dataArr = [curVal, curVal];
+      timeArr = [engine.totalTime || 0, (engine.totalTime || 0) + 1.0];
+    } else if (dataArr.length === 1) {
+      dataArr = [dataArr[0], dataArr[0]];
+      timeArr = [timeArr[0] || 0, (timeArr[0] || 0) + 1.0];
     }
 
     if (!dataArr || dataArr.length < 2) {
@@ -14977,6 +15478,8 @@ const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;
 window.Presets = Presets;
+window.ChamberChart = ChamberChart;
+window.DashboardChart = DashboardChart;
 
 // Asynchronously initialize WebGPU & GPU Compute
 if (gpuCanvas) {
@@ -18318,6 +18821,8 @@ function deleteSelectedItems() {
   closePopup();
   closeContextMenu();
   updateElementsList();
+  engine.syncWallsToGPU();
+  engine.syncSinksToGPU();
 }
 
 // Element Popup Logic
@@ -18611,14 +19116,35 @@ function updateChamberCards() {
               <span class="dot-indicator ${dot}"></span>
               <span>${s.label}</span>
             </div>
-            <span class="chamber-badge" id="badge_${s.id}">-</span>
+            <div class="chamber-header-actions">
+              <button class="btn-chamber-add-chart" data-addchart="${s.id}" title="Add Custom Graph for this Chamber">+ Chart</button>
+              <span class="chamber-badge" id="badge_${s.id}">-</span>
+            </div>
           </div>
           <div class="chamber-card-body">
             <div class="chamber-inline-metrics" id="metrics_${s.id}">
               <span>T: <b class="val-t">-</b></span>
               <span>p: <b class="val-p">-</b></span>
               <span>N: <b class="val-n">-</b></span>
-              <span>Drift: <b class="val-drift">-</b></span>
+            </div>
+            <div class="chamber-drift-row" id="drift_row_${s.id}">
+              <div class="drift-compass-wrap" title="Driftrichtung & Geschwindigkeit">
+                <svg class="drift-compass-svg" width="32" height="32" viewBox="0 0 32 32">
+                  <circle cx="16" cy="16" r="14" fill="#14171d" stroke="#2a303c" stroke-width="1.2"/>
+                  <line x1="16" y1="3" x2="16" y2="5" stroke="#475569" stroke-width="1"/>
+                  <line x1="16" y1="27" x2="16" y2="29" stroke="#475569" stroke-width="1"/>
+                  <line x1="3" y1="16" x2="5" y2="16" stroke="#475569" stroke-width="1"/>
+                  <line x1="27" y1="16" x2="29" y2="16" stroke="#475569" stroke-width="1"/>
+                  <circle class="drift-eq-dot" cx="16" cy="16" r="3" fill="#64748b"/>
+                  <g class="drift-arrow-group" style="transform-origin: 16px 16px; display: none;">
+                    <polygon points="16,5 12,20 16,16 20,20" fill="#22c55e"/>
+                  </g>
+                </svg>
+              </div>
+              <div class="drift-info-wrap">
+                <span class="drift-caption">Drift-Vektor:</span>
+                <span class="drift-speed-text val-drift">0.0 px/s (Gleichgewicht)</span>
+              </div>
             </div>
             <canvas class="chamber-chart-canvas" id="chart_${s.id}" width="320" height="60"></canvas>
           </div>
@@ -18637,6 +19163,14 @@ function updateChamberCards() {
       });
     });
 
+    chamberCardsContainer.querySelectorAll('[data-addchart]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.addchart;
+        openCustomChartModal(id);
+      });
+    });
+
     lastSensorSignature = currentSignature;
   }
 
@@ -18645,8 +19179,9 @@ function updateChamberCards() {
     const s = sensors[i];
     const pFormatted = s.pressure >= 1000 ? `${(s.pressure / 1000).toFixed(1)} kPa` : `${s.pressure.toFixed(0)} Pa`;
     const hasDrift = s.displayDriftSpeed && s.displayDriftSpeed > 0;
-    const driftAngleDeg = hasDrift ? Math.round((s.driftAngle * 180) / Math.PI) : 0;
-    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${driftAngleDeg}°)` : '0.0 (Equilibrium)';
+    const driftAngleDeg = hasDrift ? Math.round((s.driftAngle * 180) / Math.PI) + 90 : 0;
+    const rawCompassDeg = (driftAngleDeg - 90 + 360) % 360;
+    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${rawCompassDeg}°)` : '0.0 px/s (Gleichgewicht)';
 
     const badge = document.getElementById(`badge_${s.id}`);
     if (badge) badge.textContent = `${Math.round(s.temperature)} K | ${s.particleCount} N`;
@@ -18659,10 +19194,31 @@ function updateChamberCards() {
       if (elP) elP.textContent = pFormatted;
       const elN = metrics.querySelector('.val-n');
       if (elN) elN.textContent = s.particleCount;
-      const elDrift = metrics.querySelector('.val-drift');
-      if (elDrift) {
-        elDrift.textContent = driftText;
-        elDrift.style.color = hasDrift ? '#22c55e' : 'var(--text-dim)';
+    }
+
+    const driftRow = document.getElementById(`drift_row_${s.id}`);
+    if (driftRow) {
+      const eqDot = driftRow.querySelector('.drift-eq-dot');
+      const arrowGroup = driftRow.querySelector('.drift-arrow-group');
+      const speedText = driftRow.querySelector('.val-drift');
+
+      if (hasDrift) {
+        if (eqDot) eqDot.style.display = 'none';
+        if (arrowGroup) {
+          arrowGroup.style.display = 'block';
+          arrowGroup.style.transform = `rotate(${driftAngleDeg}deg)`;
+        }
+        if (speedText) {
+          speedText.textContent = driftText;
+          speedText.style.color = '#22c55e';
+        }
+      } else {
+        if (eqDot) eqDot.style.display = 'block';
+        if (arrowGroup) arrowGroup.style.display = 'none';
+        if (speedText) {
+          speedText.textContent = '0.0 px/s (Gleichgewicht)';
+          speedText.style.color = 'var(--text-dim)';
+        }
       }
     }
 
@@ -18761,12 +19317,15 @@ function renderLiveToolPreviews() {
 // ============================================================================
 let customChartCounter = 1;
 
-function openCustomChartModal() {
+function openCustomChartModal(targetId = null) {
   if (!selectChartTarget) return;
   selectChartTarget.innerHTML = `
     <option value="global">Global System</option>
     ${engine.sensors.map(s => `<option value="${s.id}">${s.label || 'Chamber'}</option>`).join('')}
   `;
+  if (targetId && typeof targetId === 'string') {
+    selectChartTarget.value = targetId;
+  }
   chartModal.style.display = 'flex';
 }
 
@@ -19142,6 +19701,11 @@ function animate(now) {
   // Throttled Chart Updates (~15 Hz) to keep UI and Render loop at max FPS
   chartTimer += dt;
   if (chartTimer >= 0.066) {
+    if (engine.useGPUCompute && engine.gpuCompute && engine.gpuCompute.count > 0) {
+      engine.gpuCompute.fetchTelemetry(50000).then(data => {
+        if (data) engine.updateTelemetryFromGPU(data);
+      });
+    }
     tempChart.render(engine);
     velChart.render(engine);
 

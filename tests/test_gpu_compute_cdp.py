@@ -265,6 +265,125 @@ def run_test():
                 const negRes = await window.gpuCompute.readbackParticles(2);
                 const negCollisionBounced = (negRes[0].vel.x < 0) && (negRes[1].vel.x > 0);
 
+                // 8. Test GPU Telemetry Readback, Sensor Zone Metrics, Drift Compass, and Dashboard Chart
+                window.engine.clear();
+                window.engine.useGPUCompute = true;
+                window.engine.enableGPUCompute(window.gpuCompute);
+                const sensor = window.engine.addSensor(300, 300, 200, 200, { label: 'TestChamber' });
+                
+                const driftPts = [];
+                for (let i = 0; i < 300; i++) {
+                    driftPts.push({
+                        pos: { x: 320 + (i % 15) * 10, y: 320 + Math.floor(i / 15) * 8 },
+                        vel: { x: 150 + Math.random() * 20, y: Math.random() * 10 },
+                        radius: 3.5,
+                        mass: 1.0
+                    });
+                }
+                window.engine.particles = driftPts;
+                window.engine.syncParticlesToGPU();
+                for (let i = 0; i < 10; i++) {
+                    window.engine.step(0.016);
+                }
+
+                const telem = await window.gpuCompute.fetchTelemetry(50000);
+                let telemSuccess = false;
+                if (telem) {
+                    window.engine.updateTelemetryFromGPU(telem);
+                    telemSuccess = true;
+                }
+
+                const telemStats = {
+                    hasTelem: telemSuccess,
+                    sysTemp: window.engine.stats.systemTemperature,
+                    sysEnergy: window.engine.stats.totalKineticEnergy,
+                    sysSpeed: window.engine.stats.meanSpeed,
+                    sensorCount: sensor.particleCount,
+                    sensorTemp: sensor.temperature,
+                    sensorPressure: sensor.pressure,
+                    sensorDriftSpeed: sensor.displayDriftSpeed,
+                    hasSpeedSamples: !!(sensor.speedSamples && sensor.speedSamples.length > 0)
+                };
+
+                // 9. Test GPU Sink (Absorber) Absorption & Compaction
+                window.engine.clear();
+                window.engine.useGPUCompute = true;
+                window.engine.enableGPUCompute(window.gpuCompute);
+                
+                const testSink = window.engine.addSink(400, 400, 100, 100, { maxParticles: 50 });
+                const sinkPts = [];
+                // 25 particles placed inside the sink
+                for (let i = 0; i < 25; i++) {
+                    sinkPts.push({
+                        pos: { x: 420 + (i % 5) * 10, y: 420 + Math.floor(i / 5) * 10 },
+                        vel: { x: 50, y: 0 },
+                        radius: 3.5,
+                        mass: 1.0
+                    });
+                }
+                // 15 particles placed outside the sink
+                for (let i = 0; i < 15; i++) {
+                    sinkPts.push({
+                        pos: { x: 100 + i * 10, y: 100 },
+                        vel: { x: 0, y: 0 },
+                        radius: 3.5,
+                        mass: 1.0
+                    });
+                }
+                window.engine.particles = sinkPts;
+                window.engine.syncParticlesToGPU();
+                window.engine.syncSinksToGPU();
+
+                // Run steps on GPU so sink absorbs inside particles
+                for (let i = 0; i < 5; i++) {
+                    window.engine.step(0.016);
+                }
+
+                const sinkTelem = await window.gpuCompute.fetchTelemetry(50000);
+                if (sinkTelem) {
+                    window.engine.updateTelemetryFromGPU(sinkTelem);
+                }
+
+                const sinkAbsorbedCount = testSink.absorbedCount;
+                const particleCountAfterAbsorb = window.engine.stats.particleCount;
+
+                // Delete the sink and verify particles in that area are NO LONGER absorbed
+                window.engine.sinks = [];
+                window.engine.syncSinksToGPU();
+
+                const newPtsInArea = [];
+                for (let i = 0; i < 10; i++) {
+                    newPtsInArea.push({
+                        pos: { x: 420 + i * 5, y: 420 },
+                        vel: { x: 10, y: 0 },
+                        radius: 3.5,
+                        mass: 1.0
+                    });
+                }
+                window.engine.particles = newPtsInArea;
+                window.engine.syncParticlesToGPU();
+
+                for (let i = 0; i < 5; i++) {
+                    window.engine.step(0.016);
+                }
+
+                const postDeleteTelem = await window.gpuCompute.fetchTelemetry(50000);
+                if (postDeleteTelem) {
+                    window.engine.updateTelemetryFromGPU(postDeleteTelem);
+                }
+                const particleCountAfterDelete = window.engine.stats.particleCount;
+
+                // 10. Test Drift Chart & History Rendering
+                const dummyCanvas = document.createElement('canvas');
+                dummyCanvas.width = 200; dummyCanvas.height = 100;
+                const globalDriftChart = new window.DashboardChart('d1', 'global', 'drift', dummyCanvas);
+                globalDriftChart.render(window.engine);
+
+                const chamberDriftChart = new window.DashboardChart('d2', sensor, 'drift', dummyCanvas);
+                chamberDriftChart.render(window.engine);
+
+                const hasGlobalDriftHistory = !!(window.engine.historyDrift && window.engine.historyDrift.length > 0);
+
                 return {
                     success: true,
                     count: 50000,
@@ -283,6 +402,11 @@ def run_test():
                     denseFrozen,
                     denseMeanSpeed,
                     negCollisionBounced,
+                    telemStats,
+                    sinkAbsorbedCount,
+                    particleCountAfterAbsorb,
+                    particleCountAfterDelete,
+                    hasGlobalDriftHistory,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -320,7 +444,25 @@ def run_test():
         assert val.get('denseMeanSpeed', 0) > 120, f"Dense gas mean speed {val.get('denseMeanSpeed')} is too low (expected > 120, MB eq is ~128.4)"
         assert val.get('negCollisionBounced') == True, "Particles at negative coordinates failed to collide/bounce on GPU!"
 
-        print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter & Energy Conservation tests PASSED!")
+        # Telemetry & Sensor Zone assertions
+        telem = val.get('telemStats', {})
+        assert telem.get('hasTelem') == True, "Failed to fetch GPU telemetry"
+        assert telem.get('sysTemp', 0) > 0, f"System temperature is {telem.get('sysTemp')}, expected > 0"
+        assert telem.get('sysEnergy', 0) > 0, f"System kinetic energy is {telem.get('sysEnergy')}, expected > 0"
+        assert telem.get('sysSpeed', 0) > 0, f"System mean speed is {telem.get('sysSpeed')}, expected > 0"
+        assert telem.get('sensorCount', 0) > 0, f"Sensor particle count is {telem.get('sensorCount')}, expected > 0"
+        assert telem.get('sensorTemp', 0) > 0, f"Sensor temperature is {telem.get('sensorTemp')}, expected > 0"
+        assert telem.get('sensorPressure', 0) > 0, f"Sensor pressure is {telem.get('sensorPressure')}, expected > 0"
+        assert telem.get('sensorDriftSpeed', 0) > 0, f"Sensor macroscopic drift speed is {telem.get('sensorDriftSpeed')}, expected > 0"
+        assert telem.get('hasSpeedSamples') == True, "Sensor speedSamples not recorded for velocity histograms"
+
+        # Sink absorption & Drift chart assertions
+        assert val.get('sinkAbsorbedCount') == 25, f"Expected 25 particles absorbed by GPU sink, got {val.get('sinkAbsorbedCount')}"
+        assert val.get('particleCountAfterAbsorb') == 15, f"Expected 15 live particles remaining, got {val.get('particleCountAfterAbsorb')}"
+        assert val.get('particleCountAfterDelete') == 10, f"Expected 10 particles to survive after sink deletion, got {val.get('particleCountAfterDelete')}"
+        assert val.get('hasGlobalDriftHistory') == True, "Global drift velocity was not recorded into engine.historyDrift"
+
+        print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter, Telemetry & Sensor Zone tests PASSED!")
 
     finally:
         proc.terminate()

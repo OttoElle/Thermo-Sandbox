@@ -311,6 +311,57 @@
   - Added test in `tests/test_gpu_compute_cdp.py` verifying head-on collisions and elastic scatter at negative coordinates ($x = -1200\text{ px}$).
   - All 6 stages in `tests/verify_all.py` pass 100%. All source files strictly under 350 lines (`ParticleGPUCompute.js`: 345 lines, `ParticleGPUComputeShader.js`: 334 lines).
 
+### X. WebGPU Telemetry & Chamber Analytics (Sensor Zones, Drift Compass & Custom Multi-Chart Dashboard)
+- [x] **1. WebGPU Asynchronous Telemetry Staging (`ParticleGPUCompute.js`)**:
+  - Implemented reusable persistent `telemetryStagingBuffer` and non-blocking `fetchTelemetry(sampleCap = 50000)`.
+  - Maps GPU compute output to CPU memory space via `mapAsync(GPUMapMode.READ)` without stalling the WebGPU pipeline or creating GC thrashing.
+  - Throttled at ~15 Hz in `main.js` animation loop, consuming $< 25\text{ MB/s}$ PCIe transfer while maintaining 60 FPS locked rendering.
+- [x] **2. Global System Telemetry & Continuous History Distribution (`Engine.js`)**:
+  - Implemented `updateTelemetryFromGPU(data)` computing system particle count $N$, kinetic energy $E_\text{kin}$, mean speed $\langle v \rangle$, and temperature $T = \frac{E_\text{kin}}{N \cdot k_B}$.
+  - Maintained `latestSpeedSamples` buffer for live velocity histogram analysis in both CPU and GPU modes.
+  - Automatically records continuous time series in `historyTime`, `historyTemp`, `historyPressure`, `historyVolume`, `historyCount`, and `historyKineticEnergy`.
+  - Dispatches telemetry data to all active `SensorZone` instances.
+- [x] **3. Chamber Sensor Analytics & Fluctuation Filtering (`SensorZone.js`)**:
+  - Implemented `updateMeasurementsFromGPU(floats, count, scaleFactor, currentTime)` with spatial bounding filter and single-pass metrics extraction.
+  - Macroscopic drift velocity exponential moving average filter ($\tau \approx 1.5\text{ s}$) compared against thermal Brownian fluctuations ($v_\text{th} / \sqrt{N}$). Clamps to 0.0 during thermodynamic equilibrium to eliminate arrow jitter.
+  - Stores chamber `speedSamples` for chamber-specific Maxwell-Boltzmann velocity distributions.
+- [x] **4. Drift Compass Dial Widget & Canvas Vector Overlay**:
+  - **Sidebar Chamber Card**: Dynamic 32x32 SVG compass dial with cardinal ticks. In equilibrium, displays calm center equilibrium ring with "0.0 px/s (Gleichgewicht)". When macroscopic drift occurs, renders rotating directional needle ($\theta + 90^\circ$) with live speed and heading in vibrant `#22c55e`.
+  - **Canvas Overlay (`Renderer.js`)**: `drawSensor` renders centered flow vector arrow scaled to drift magnitude and aligned with $\theta$.
+- [x] **5. Custom Multi-Chart Dashboard & Quick Chamber Integration**:
+  - Added "+ Chart" quick-add button on each chamber card header, opening `chartModal` with target pre-selected.
+  - Expanded `DashboardChart` (`ChamberChart.js`) and `VelHistChart` (`VelHistChart.js`) with support for:
+    - Time-series: $T(t)$, $P(t)$, $V(t)$, $N(t)$, $E_\text{kin}(t)$, $|v_\text{drift}|(t)$.
+    - State & Indicator Diagrams: $P$-$V$ indicator loops, $P$-$T$ state diagrams, $T$-$s$ entropy diagrams.
+    - Maxwell-Boltzmann velocity histograms $f(v)$ for the Global System or any individual Chamber.
+- [x] **6. Automated Verification & Code Quality**:
+  - Added Section 8 to `tests/test_gpu_compute_cdp.py` validating telemetry readback, sensor counts, temperature, pressure, macroscopic drift, and speed sample arrays.
+  - 100% pass across all 6 verification stages in `tests/verify_all.py`.
+  - All source files strictly comply with line limits (`ParticleGPUCompute.js`: 312 lines, `SensorZone.js`: 182 lines, `ChamberChart.js`: 260 lines, `VelHistChart.js`: 105 lines).
+
+### Y. GPU Particle Absorber (Sink) & Real-Time Drift Telemetry Charts
+- [x] **1. WebGPU Particle Absorber (Sink) in Compute Shader (`ParticleGPUComputeShader.js` & `ParticleGPUCompute.js`)**:
+  - Implemented `struct SinkData { minPos, maxPos, isActive, direction, tempFilterMode, filterTemperature, pad1, pad2 }` in WGSL with 48-byte 8-byte alignment.
+  - Added storage buffer binding `@group(0) @binding(7) var<storage, read> sinks: array<SinkData>;` and uniform `sinkCount: u32`.
+  - In compute shader `cs_integrate`: added sink collision and absorption checking directional filters (right/left/down/up/360) and thermal filters (above/below setpoint).
+  - Absorbed particles are immediately retired (`pos = (-99999, -99999)`, `vel = (0, 0)`, `radius = 0.0`), immediately bypassing the spatial hash grid and collision pairs (`cs_build_grid`, `cs_find_pairs`).
+  - Added vertex shader culling in `ParticleGPURenderer.js` (`radius <= 0.0 || pos.x < -50000.0 -> vec4f(2.0, 2.0, 2.0, 1.0)`).
+- [x] **2. GPU Buffer Compaction & Particle Count Synchronization (`Engine.js`)**:
+  - `updateTelemetryFromGPU`: Filters dead particles, attributes absorbed count to active sinks, and executes in-place compaction.
+  - Calls `gpuCompute.uploadRawParticleBuffer(compactedFloats, liveCount)` and synchronizes `engine.particles.length = liveCount` and `engine.stats.particleCount = liveCount`.
+- [x] **3. Global Drift Velocity & Time-Series History (`Engine.js` & `ChamberChart.js`)**:
+  - Added continuous macroscopic drift calculation across live particles: $|v_\text{drift}| = \sqrt{(\sum v_x / N)^2 + (\sum v_y / N)^2}$ and recorded into `engine.historyDrift`.
+  - Fixed "Collecting data..." freeze in `DashboardChart`:
+    - Linked `metric === 'drift'` for global target directly to `engine.historyDrift`.
+    - Implemented immediate 1-point and 0-point baseline extrapolation across `[t, t + 1.0]` for all time-series and state diagrams, guaranteeing graphs render live data immediately even when paused or at $t = 0$.
+    - Added particle speed sample fallback in velocity histograms on frame 0.
+- [x] **4. Absorber Deletion GPU Synchronization & Minus Symbol (`ParticleGPUCompute.js`, `Engine.js`, `Renderer.js`, `index.html`)**:
+  - **Deletion Synchronization**: Fixed ghost absorption by removing `sinks.length > 0` condition in `Engine.step()` and making `syncSinksToGPU()` unconditional. `uploadSinks` now explicitly zeroes out the first sink slot in GPU buffer when `count === 0` and sets `this.sinkCount = 0`. Also added immediate GPU sync on `deleteSelectedItems()`, `Engine.clear()`, `_applyState()`, `Engine.addSink()`, and `deleteParticles()`.
+  - **Minus Symbol (`Renderer.js` & `index.html`)**: Replaced vertical cross-hair stroke in 360 mode (`(+)`) with a clean minus sign inside the circle (`(-)`) so the absorber clearly denotes removal/subtraction of particles rather than addition. Updated ribbon toolbar icon SVG to match.
+- [x] **5. Comprehensive Automated Verification**:
+  - Added automated tests in `tests/test_gpu_compute_cdp.py` validating GPU sink absorption (25 inside particles absorbed, 15 outside particles preserved), GPU buffer compaction, immediate non-absorption upon sink deletion (10/10 particles survive in the same area), global drift history recording, and drift chart rendering.
+  - 100% pass across all 6 verification stages in `tests/verify_all.py`.
+
 ---
 
 ## 3. Next Session Starting Tasks

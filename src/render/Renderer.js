@@ -629,6 +629,39 @@ export class Renderer {
     const tempText = hasParticles ? ` [${Math.round(sensor.temperature)} K]` : ' (Empty)';
     ctx.fillText(`${sensor.label}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
 
+    // Drift Flow Indicator Arrow (only when macroscopic drift exceeds thermal fluctuation)
+    if (sensor.displayDriftSpeed > 0) {
+      const cx = sensor.x + sensor.width * 0.5;
+      const cy = sensor.y + sensor.height * 0.5;
+      const angle = sensor.driftAngle || 0;
+      const maxDim = Math.min(sensor.width, sensor.height);
+      const arrowLen = Math.min(maxDim * 0.38, Math.max(18, sensor.displayDriftSpeed * 0.45));
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+
+      ctx.strokeStyle = '#22c55e';
+      ctx.fillStyle = '#22c55e';
+      ctx.lineWidth = 2.5;
+
+      // Shaft
+      ctx.beginPath();
+      ctx.moveTo(-arrowLen * 0.5, 0);
+      ctx.lineTo(arrowLen * 0.5, 0);
+      ctx.stroke();
+
+      // Arrow Head
+      ctx.beginPath();
+      ctx.moveTo(arrowLen * 0.5, 0);
+      ctx.lineTo(arrowLen * 0.5 - 7, -4.5);
+      ctx.lineTo(arrowLen * 0.5 - 7, 4.5);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
     ctx.restore();
   }
 
@@ -947,10 +980,9 @@ export class Renderer {
     } else if (sink.direction === 'up') {
       ctx.moveTo(cx, cy + 8); ctx.lineTo(cx, cy - 8);
       ctx.lineTo(cx - 4, cy - 4); ctx.moveTo(cx, cy - 8); ctx.lineTo(cx + 4, cy - 4);
-    } else { // 360
-      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-      ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy);
-      ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3);
+    } else { // 360: Minus symbol inside circle (Absorber / Sink removes particles)
+      ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+      ctx.moveTo(cx - 4, cy); ctx.lineTo(cx + 4, cy);
     }
     ctx.stroke();
 

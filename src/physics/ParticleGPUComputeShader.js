@@ -2,7 +2,7 @@ export const particleComputeWGSL = `
 struct SimParams {
   dt: f32, gravity: f32, gravityEnabled: u32, damping: f32,
   particleCount: u32, maxSpeedReference: f32, wallCount: u32, subSteps: u32,
-  boundsEnabled: u32, cellSize: f32, gridTableSize: u32, pad1: u32,
+  boundsEnabled: u32, cellSize: f32, gridTableSize: u32, sinkCount: u32,
   boundMin: vec2f, boundMax: vec2f,
   simModel: u32, pad2: u32, pad3: u32, pad4: u32,
 };
@@ -17,6 +17,12 @@ struct WallData {
   temperature: f32, conductivity: f32, vel: vec2f, pad: vec2f,
 };
 
+struct SinkData {
+  minPos: vec2f, maxPos: vec2f,
+  isActive: u32, direction: u32, tempFilterMode: u32, filterTemperature: f32,
+  pad1: vec2f, pad2: vec2f,
+};
+
 @group(0) @binding(0) var<uniform> params: SimParams;
 @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
 @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
@@ -24,6 +30,7 @@ struct WallData {
 @group(0) @binding(4) var<storage, read_write> cellHeads: array<atomic<i32>>;
 @group(0) @binding(5) var<storage, read_write> particleNext: array<i32>;
 @group(0) @binding(6) var<storage, read_write> bestPartners: array<i32>;
+@group(0) @binding(7) var<storage, read> sinks: array<SinkData>;
 
 fn hashCell(cx: i32, cy: i32, tableSize: u32) -> u32 {
   let p1 = 73856093u;
@@ -48,6 +55,10 @@ fn cs_build_grid(@builtin(global_invocation_id) global_id: vec3u) {
     return;
   }
   let p = particlesIn[idx];
+  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+    particleNext[idx] = -1;
+    return;
+  }
   let cx = i32(floor(p.pos.x / params.cellSize));
   let cy = i32(floor(p.pos.y / params.cellSize));
   let cellIdx = hashCell(cx, cy, params.gridTableSize);
@@ -60,6 +71,10 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
   if (idx >= params.particleCount) { return; }
   let p = particlesIn[idx];
+  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+    bestPartners[idx] = -1;
+    return;
+  }
   let cx = i32(floor(p.pos.x / params.cellSize));
   let cy = i32(floor(p.pos.y / params.cellSize));
 
@@ -117,6 +132,10 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
   if (idx >= params.particleCount) { return; }
   var p = particlesIn[idx];
+  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+    particlesOut[idx] = p;
+    return;
+  }
   let startPos = p.pos;
 
   // 1. Gravity acceleration
@@ -300,6 +319,35 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
       let vn = dot(vRel, norm);
       if (vn < 0.0) {
         p.vel -= 2.0 * vn * norm;
+      }
+    }
+  }
+
+  // 4b. Sink (Absorber) Absorption
+  for (var s = 0u; s < params.sinkCount; s++) {
+    let sk = sinks[s];
+    if (sk.isActive == 0u) { continue; }
+    if (p.pos.x >= sk.minPos.x && p.pos.x <= sk.maxPos.x &&
+        p.pos.y >= sk.minPos.y && p.pos.y <= sk.maxPos.y) {
+      var canAbsorb = true;
+      if (sk.direction == 1u && p.vel.x <= 0.0) { canAbsorb = false; }
+      else if (sk.direction == 2u && p.vel.x >= 0.0) { canAbsorb = false; }
+      else if (sk.direction == 3u && p.vel.y <= 0.0) { canAbsorb = false; }
+      else if (sk.direction == 4u && p.vel.y >= 0.0) { canAbsorb = false; }
+
+      if (canAbsorb && sk.tempFilterMode != 0u) {
+        let kB = 35.0;
+        let vSq = dot(p.vel, p.vel);
+        let pTemp = (p.mass * vSq) / (2.0 * kB);
+        if (sk.tempFilterMode == 1u && pTemp < sk.filterTemperature) { canAbsorb = false; }
+        else if (sk.tempFilterMode == 2u && pTemp > sk.filterTemperature) { canAbsorb = false; }
+      }
+
+      if (canAbsorb) {
+        p.pos = vec2f(-99999.0, -99999.0);
+        p.vel = vec2f(0.0, 0.0);
+        p.radius = 0.0;
+        break;
       }
     }
   }

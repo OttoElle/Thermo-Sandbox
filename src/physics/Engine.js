@@ -68,6 +68,8 @@ export class Engine {
     this.historyVolume = [];
     this.historyCount = [];
     this.historyKineticEnergy = [];
+    this.historyDrift = [];
+    this.latestSpeedSamples = [];
   }
 
   clear() {
@@ -90,6 +92,8 @@ export class Engine {
     if (this.gpuCompute) {
       this.gpuCompute.count = 0;
     }
+    this.syncWallsToGPU();
+    this.syncSinksToGPU();
     this.totalTime = 0;
     this.historyTime = [];
     this.historyTemp = [];
@@ -97,6 +101,8 @@ export class Engine {
     this.historyVolume = [];
     this.historyCount = [];
     this.historyKineticEnergy = [];
+    this.historyDrift = [];
+    this.latestSpeedSamples = [];
     if (this.sequencer) {
       this.sequencer.reset();
     }
@@ -130,8 +136,14 @@ export class Engine {
     return p;
   }
 
-  addSensor(options = {}) {
-    const s = new SensorZone(options);
+  addSensor(x, y, width, height, options = {}) {
+    let opts = options;
+    if (typeof x === 'object' && x !== null) {
+      opts = x;
+    } else if (typeof x === 'number') {
+      opts = { ...options, x, y, width, height };
+    }
+    const s = new SensorZone(opts);
     this.sensors.push(s);
     this.elements.push(s);
     return s;
@@ -155,6 +167,7 @@ export class Engine {
     const s = new Sink(x, y, width, height, options);
     this.sinks.push(s);
     this.elements.push(s);
+    this.syncSinksToGPU();
     return s;
   }
 
@@ -362,9 +375,8 @@ export class Engine {
     if (this.particles.length > 0) {
       this.gpuCompute.uploadParticles(this.particles);
     }
-    if (this.walls.length > 0 || this.pistons.length > 0) {
-      this.syncWallsToGPU();
-    }
+    this.syncWallsToGPU();
+    this.syncSinksToGPU();
   }
 
   disableGPUCompute() {
@@ -429,7 +441,13 @@ export class Engine {
   syncWallsToGPU() {
     if (this.gpuCompute && this.useGPUCompute) {
       const gpuWalls = this.getGPUWalls();
-      this.gpuCompute.uploadWalls(gpuWalls);
+      this.gpuCompute.uploadWalls(gpuWalls || []);
+    }
+  }
+
+  syncSinksToGPU() {
+    if (this.gpuCompute && this.useGPUCompute) {
+      this.gpuCompute.uploadSinks(this.sinks || []);
     }
   }
 
@@ -468,9 +486,8 @@ export class Engine {
         for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
         for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
 
-        if (this.walls.length > 0 || this.pistons.length > 0) {
-          this.syncWallsToGPU();
-        }
+        this.syncWallsToGPU();
+        this.syncSinksToGPU();
 
         const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
         this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this.subSteps, modelType);
@@ -998,19 +1015,30 @@ export class Engine {
   _updateStats() {
     let totalE = 0;
     let speedSum = 0;
+    let sumVx = 0;
+    let sumVy = 0;
     const count = this.particles.length;
+    const speedSamples = [];
 
     for (let i = 0; i < count; i++) {
-      const spd = this.particles[i].getSpeed();
+      const p = this.particles[i];
+      const spd = p.getSpeed();
       speedSum += spd;
-      totalE += 0.5 * this.particles[i].mass * spd * spd;
+      sumVx += p.vel.x;
+      sumVy += p.vel.y;
+      totalE += 0.5 * p.mass * spd * spd;
+      if (speedSamples.length < 1000) {
+        speedSamples.push(spd);
+      }
     }
 
+    this.latestSpeedSamples = speedSamples;
     this.stats.particleCount = count;
     this.stats.totalKineticEnergy = totalE;
     this.stats.meanSpeed = count > 0 ? speedSum / count : 0;
     const kB = 35.0;
     this.stats.systemTemperature = count > 0 ? totalE / (count * kB) : 0;
+    const globalDrift = count > 0 ? Math.hypot(sumVx / count, sumVy / count) : 0;
 
     // Record continuous time series
     if (this.historyTime && (this.historyTime.length === 0 || this.totalTime - this.historyTime[this.historyTime.length - 1] >= 0.045)) {
@@ -1020,6 +1048,7 @@ export class Engine {
       this.historyVolume.push(2500 * 2500);
       this.historyCount.push(count);
       this.historyKineticEnergy.push(totalE);
+      this.historyDrift.push(globalDrift);
 
       if (this.historyTime.length > 600) {
         this.historyTime.shift();
@@ -1028,7 +1057,124 @@ export class Engine {
         this.historyVolume.shift();
         this.historyCount.shift();
         this.historyKineticEnergy.shift();
+        this.historyDrift.shift();
       }
+    }
+  }
+
+  updateTelemetryFromGPU(data) {
+    if (!data || !data.floats || data.count === 0) return;
+    const { floats, count, totalCount } = data;
+    const scaleFactor = totalCount / count;
+
+    let totalE = 0;
+    let speedSum = 0;
+    let sumVx = 0;
+    let sumVy = 0;
+    let liveCount = 0;
+    let deadCount = 0;
+    const speedSamples = [];
+    let ptr = 0;
+    let writePtr = 0;
+
+    for (let i = 0; i < count; i++) {
+      const px = floats[ptr];
+      const py = floats[ptr + 1];
+      const vx = floats[ptr + 2];
+      const vy = floats[ptr + 3];
+      const r = floats[ptr + 4];
+      const m = floats[ptr + 5];
+
+      // Culled/absorbed particle check (teleported to x <= -50000 or r <= 0)
+      if (r <= 0.0 || px < -50000.0) {
+        deadCount++;
+        ptr += 8;
+        continue;
+      }
+
+      if (writePtr !== ptr) {
+        for (let j = 0; j < 8; j++) {
+          floats[writePtr + j] = floats[ptr + j];
+        }
+      }
+      writePtr += 8;
+      liveCount++;
+
+      const spd = Math.hypot(vx, vy);
+      speedSum += spd;
+      sumVx += vx;
+      sumVy += vy;
+      totalE += 0.5 * m * (spd * spd);
+      if (speedSamples.length < 1000) {
+        speedSamples.push(spd);
+      }
+      ptr += 8;
+    }
+
+    // Attribute absorbed particles to sinks
+    if (deadCount > 0 && this.sinks && this.sinks.length > 0) {
+      let remainingDead = deadCount;
+      for (let s = 0; s < this.sinks.length && remainingDead > 0; s++) {
+        const sink = this.sinks[s];
+        if (sink.isActive !== false) {
+          if (sink.maxParticles > 0) {
+            const avail = Math.max(0, sink.maxParticles - sink.absorbedCount);
+            const take = Math.min(avail, remainingDead);
+            sink.absorbedCount += take;
+            remainingDead -= take;
+            if (sink.absorbedCount >= sink.maxParticles) {
+              sink.isActive = false;
+            }
+          } else {
+            sink.absorbedCount += remainingDead;
+            remainingDead = 0;
+          }
+        }
+      }
+    }
+
+    // In-place buffer compaction on GPU if sample is complete
+    if (deadCount > 0 && count === totalCount) {
+      const compactedFloats = floats.slice(0, liveCount * 8);
+      if (this.gpuCompute) {
+        this.gpuCompute.uploadRawParticleBuffer(compactedFloats, liveCount);
+      }
+      this.particles.length = liveCount;
+    }
+
+    const currentLiveTotal = Math.round(liveCount * scaleFactor);
+    this.latestSpeedSamples = speedSamples;
+    this.stats.particleCount = currentLiveTotal;
+    this.stats.totalKineticEnergy = totalE * scaleFactor;
+    this.stats.meanSpeed = liveCount > 0 ? speedSum / liveCount : 0;
+    const kB = 35.0;
+    this.stats.systemTemperature = liveCount > 0 ? (totalE / (liveCount * kB)) : 0;
+    const globalDrift = liveCount > 0 ? Math.hypot(sumVx / liveCount, sumVy / liveCount) : 0;
+
+    // Record continuous time series
+    if (this.historyTime && (this.historyTime.length === 0 || this.totalTime - this.historyTime[this.historyTime.length - 1] >= 0.045)) {
+      this.historyTime.push(this.totalTime);
+      this.historyTemp.push(this.stats.systemTemperature);
+      this.historyPressure.push((currentLiveTotal / 2500) * kB * this.stats.systemTemperature * 10);
+      this.historyVolume.push(2500 * 2500);
+      this.historyCount.push(currentLiveTotal);
+      this.historyKineticEnergy.push(this.stats.totalKineticEnergy);
+      this.historyDrift.push(globalDrift);
+
+      if (this.historyTime.length > 600) {
+        this.historyTime.shift();
+        this.historyTemp.shift();
+        this.historyPressure.shift();
+        this.historyVolume.shift();
+        this.historyCount.shift();
+        this.historyKineticEnergy.shift();
+        this.historyDrift.shift();
+      }
+    }
+
+    // Forward telemetry to sensor chambers
+    for (let i = 0; i < this.sensors.length; i++) {
+      this.sensors[i].updateMeasurementsFromGPU(floats, liveCount, scaleFactor, this.totalTime);
     }
   }
 
@@ -1126,6 +1272,9 @@ export class Engine {
       this.sequencer.phases = this.sequencer.steps;
     }
 
+    this.syncParticlesToGPU();
+    this.syncWallsToGPU();
+    this.syncSinksToGPU();
     this._updateStats();
   }
 
@@ -1166,6 +1315,7 @@ export class Engine {
     if (!particlesToDelete || particlesToDelete.length === 0) return;
     const deleteSet = new Set(Array.isArray(particlesToDelete) ? particlesToDelete : [particlesToDelete]);
     this.particles = this.particles.filter(p => !deleteSet.has(p));
+    this.syncParticlesToGPU();
     this._updateStats();
   }
 

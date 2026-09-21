@@ -12,7 +12,7 @@ export class VelHistChart {
     ];
   }
 
-  render(engine) {
+  render(engine, target = 'global') {
     const ctx = this.ctx;
     const w = this.canvas.width;
     const h = this.canvas.height;
@@ -28,9 +28,6 @@ export class VelHistChart {
     const chartW = w - padLeft - padRight;
     const chartH = h - padTop - padBottom;
 
-    const particles = engine.particles;
-    const N = particles.length;
-
     // Grid lines
     ctx.strokeStyle = '#22262e';
     ctx.lineWidth = 1;
@@ -41,7 +38,22 @@ export class VelHistChart {
       ctx.stroke();
     }
 
-    if (N === 0) {
+    let speeds = null;
+    if (target && target !== 'global' && target.speedSamples && target.speedSamples.length > 0) {
+      speeds = target.speedSamples;
+    } else if (engine.latestSpeedSamples && engine.latestSpeedSamples.length > 0) {
+      speeds = engine.latestSpeedSamples;
+    } else if (engine.particles && engine.particles.length > 0) {
+      speeds = [];
+      const pts = engine.particles;
+      const step = pts.length > 1000 ? Math.max(1, Math.floor(pts.length / 1000)) : 1;
+      for (let i = 0; i < pts.length; i += step) {
+        const p = pts[i];
+        if (p) speeds.push(typeof p.getSpeed === 'function' ? p.getSpeed() : Math.hypot(p.vel ? p.vel.x : 0, p.vel ? p.vel.y : 0));
+      }
+    }
+
+    if (!speeds || speeds.length === 0) {
       ctx.fillStyle = '#64748b';
       ctx.font = '10px Inter, sans-serif';
       ctx.textAlign = 'center';
@@ -50,11 +62,9 @@ export class VelHistChart {
     }
 
     const counts = new Array(this.binRanges.length).fill(0);
-    const step = N > 1000 ? Math.max(1, Math.floor(N / 1000)) : 1;
-    for (let i = 0; i < N; i += step) {
-      const p = particles[i];
-      if (!p) continue;
-      const spd = typeof p.getSpeed === 'function' ? p.getSpeed() : Math.hypot(p.vel ? p.vel.x : 0, p.vel ? p.vel.y : 0);
+    const N = speeds.length;
+    for (let i = 0; i < N; i++) {
+      const spd = speeds[i];
       for (let b = 0; b < this.binRanges.length; b++) {
         if (spd >= this.binRanges[b].min && spd < this.binRanges[b].max) {
           counts[b]++;

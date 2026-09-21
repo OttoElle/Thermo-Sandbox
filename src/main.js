@@ -164,6 +164,8 @@ const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;
 window.Presets = Presets;
+window.ChamberChart = ChamberChart;
+window.DashboardChart = DashboardChart;
 
 // Asynchronously initialize WebGPU & GPU Compute
 if (gpuCanvas) {
@@ -3505,6 +3507,8 @@ function deleteSelectedItems() {
   closePopup();
   closeContextMenu();
   updateElementsList();
+  engine.syncWallsToGPU();
+  engine.syncSinksToGPU();
 }
 
 // Element Popup Logic
@@ -3798,14 +3802,35 @@ function updateChamberCards() {
               <span class="dot-indicator ${dot}"></span>
               <span>${s.label}</span>
             </div>
-            <span class="chamber-badge" id="badge_${s.id}">-</span>
+            <div class="chamber-header-actions">
+              <button class="btn-chamber-add-chart" data-addchart="${s.id}" title="Add Custom Graph for this Chamber">+ Chart</button>
+              <span class="chamber-badge" id="badge_${s.id}">-</span>
+            </div>
           </div>
           <div class="chamber-card-body">
             <div class="chamber-inline-metrics" id="metrics_${s.id}">
               <span>T: <b class="val-t">-</b></span>
               <span>p: <b class="val-p">-</b></span>
               <span>N: <b class="val-n">-</b></span>
-              <span>Drift: <b class="val-drift">-</b></span>
+            </div>
+            <div class="chamber-drift-row" id="drift_row_${s.id}">
+              <div class="drift-compass-wrap" title="Driftrichtung & Geschwindigkeit">
+                <svg class="drift-compass-svg" width="32" height="32" viewBox="0 0 32 32">
+                  <circle cx="16" cy="16" r="14" fill="#14171d" stroke="#2a303c" stroke-width="1.2"/>
+                  <line x1="16" y1="3" x2="16" y2="5" stroke="#475569" stroke-width="1"/>
+                  <line x1="16" y1="27" x2="16" y2="29" stroke="#475569" stroke-width="1"/>
+                  <line x1="3" y1="16" x2="5" y2="16" stroke="#475569" stroke-width="1"/>
+                  <line x1="27" y1="16" x2="29" y2="16" stroke="#475569" stroke-width="1"/>
+                  <circle class="drift-eq-dot" cx="16" cy="16" r="3" fill="#64748b"/>
+                  <g class="drift-arrow-group" style="transform-origin: 16px 16px; display: none;">
+                    <polygon points="16,5 12,20 16,16 20,20" fill="#22c55e"/>
+                  </g>
+                </svg>
+              </div>
+              <div class="drift-info-wrap">
+                <span class="drift-caption">Drift-Vektor:</span>
+                <span class="drift-speed-text val-drift">0.0 px/s (Gleichgewicht)</span>
+              </div>
             </div>
             <canvas class="chamber-chart-canvas" id="chart_${s.id}" width="320" height="60"></canvas>
           </div>
@@ -3824,6 +3849,14 @@ function updateChamberCards() {
       });
     });
 
+    chamberCardsContainer.querySelectorAll('[data-addchart]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.addchart;
+        openCustomChartModal(id);
+      });
+    });
+
     lastSensorSignature = currentSignature;
   }
 
@@ -3832,8 +3865,9 @@ function updateChamberCards() {
     const s = sensors[i];
     const pFormatted = s.pressure >= 1000 ? `${(s.pressure / 1000).toFixed(1)} kPa` : `${s.pressure.toFixed(0)} Pa`;
     const hasDrift = s.displayDriftSpeed && s.displayDriftSpeed > 0;
-    const driftAngleDeg = hasDrift ? Math.round((s.driftAngle * 180) / Math.PI) : 0;
-    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${driftAngleDeg}°)` : '0.0 (Equilibrium)';
+    const driftAngleDeg = hasDrift ? Math.round((s.driftAngle * 180) / Math.PI) + 90 : 0;
+    const rawCompassDeg = (driftAngleDeg - 90 + 360) % 360;
+    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${rawCompassDeg}°)` : '0.0 px/s (Gleichgewicht)';
 
     const badge = document.getElementById(`badge_${s.id}`);
     if (badge) badge.textContent = `${Math.round(s.temperature)} K | ${s.particleCount} N`;
@@ -3846,10 +3880,31 @@ function updateChamberCards() {
       if (elP) elP.textContent = pFormatted;
       const elN = metrics.querySelector('.val-n');
       if (elN) elN.textContent = s.particleCount;
-      const elDrift = metrics.querySelector('.val-drift');
-      if (elDrift) {
-        elDrift.textContent = driftText;
-        elDrift.style.color = hasDrift ? '#22c55e' : 'var(--text-dim)';
+    }
+
+    const driftRow = document.getElementById(`drift_row_${s.id}`);
+    if (driftRow) {
+      const eqDot = driftRow.querySelector('.drift-eq-dot');
+      const arrowGroup = driftRow.querySelector('.drift-arrow-group');
+      const speedText = driftRow.querySelector('.val-drift');
+
+      if (hasDrift) {
+        if (eqDot) eqDot.style.display = 'none';
+        if (arrowGroup) {
+          arrowGroup.style.display = 'block';
+          arrowGroup.style.transform = `rotate(${driftAngleDeg}deg)`;
+        }
+        if (speedText) {
+          speedText.textContent = driftText;
+          speedText.style.color = '#22c55e';
+        }
+      } else {
+        if (eqDot) eqDot.style.display = 'block';
+        if (arrowGroup) arrowGroup.style.display = 'none';
+        if (speedText) {
+          speedText.textContent = '0.0 px/s (Gleichgewicht)';
+          speedText.style.color = 'var(--text-dim)';
+        }
       }
     }
 
@@ -3948,12 +4003,15 @@ function renderLiveToolPreviews() {
 // ============================================================================
 let customChartCounter = 1;
 
-function openCustomChartModal() {
+function openCustomChartModal(targetId = null) {
   if (!selectChartTarget) return;
   selectChartTarget.innerHTML = `
     <option value="global">Global System</option>
     ${engine.sensors.map(s => `<option value="${s.id}">${s.label || 'Chamber'}</option>`).join('')}
   `;
+  if (targetId && typeof targetId === 'string') {
+    selectChartTarget.value = targetId;
+  }
   chartModal.style.display = 'flex';
 }
 
@@ -4329,6 +4387,11 @@ function animate(now) {
   // Throttled Chart Updates (~15 Hz) to keep UI and Render loop at max FPS
   chartTimer += dt;
   if (chartTimer >= 0.066) {
+    if (engine.useGPUCompute && engine.gpuCompute && engine.gpuCompute.count > 0) {
+      engine.gpuCompute.fetchTelemetry(50000).then(data => {
+        if (data) engine.updateTelemetryFromGPU(data);
+      });
+    }
     tempChart.render(engine);
     velChart.render(engine);
 

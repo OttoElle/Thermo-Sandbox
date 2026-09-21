@@ -49,55 +49,72 @@ export class SensorZone {
   }
 
   updateMeasurements(particles, currentTime = 0) {
-    let count = 0;
-    let sumVx = 0;
-    let sumVy = 0;
-    let sumMVx = 0;
-    let sumMVy = 0;
-    let sumMass = 0;
-    let totalKinetic = 0;
-    let sumThermalEnergy = 0;
-
+    let sampleCount = 0, sumVx = 0, sumVy = 0, sumMVx = 0, sumMVy = 0, sumMass = 0, sampleKinetic = 0;
+    const speedSamples = [];
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
       if (this.contains(p.pos)) {
-        count++;
-        sumVx += p.vel.x;
-        sumVy += p.vel.y;
-        sumMVx += p.mass * p.vel.x;
-        sumMVy += p.mass * p.vel.y;
+        sampleCount++;
+        sumVx += p.vel.x; sumVy += p.vel.y;
+        sumMVx += p.mass * p.vel.x; sumMVy += p.mass * p.vel.y;
         sumMass += p.mass;
-        totalKinetic += 0.5 * p.mass * p.getSpeedSq();
+        const spdSq = p.getSpeedSq();
+        sampleKinetic += 0.5 * p.mass * spdSq;
+        if (speedSamples.length < 500) speedSamples.push(Math.sqrt(spdSq));
       }
     }
+    this._processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, 1.0, currentTime, speedSamples);
+  }
 
-    this.particleCount = count;
+  updateMeasurementsFromGPU(floats, count, scaleFactor = 1.0, currentTime = 0) {
+    let sampleCount = 0, sumVx = 0, sumVy = 0, sumMVx = 0, sumMVy = 0, sumMass = 0, sampleKinetic = 0;
+    const speedSamples = [];
+    const minX = this.x, maxX = this.x + this.width;
+    const minY = this.y, maxY = this.y + this.height;
+
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const px = floats[ptr], py = floats[ptr + 1];
+      if (px >= minX && px <= maxX && py >= minY && py <= maxY) {
+        sampleCount++;
+        const vx = floats[ptr + 2], vy = floats[ptr + 3], m = floats[ptr + 5];
+        sumVx += vx; sumVy += vy;
+        sumMVx += m * vx; sumMVy += m * vy;
+        sumMass += m;
+        const spdSq = vx * vx + vy * vy;
+        sampleKinetic += 0.5 * m * spdSq;
+        if (speedSamples.length < 500) speedSamples.push(Math.sqrt(spdSq));
+      }
+      ptr += 8;
+    }
+    this._processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, scaleFactor, currentTime, speedSamples);
+  }
+
+  _processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, scaleFactor = 1.0, currentTime = 0, speedSamples = []) {
+    const effectiveCount = Math.round(sampleCount * scaleFactor);
+    this.particleCount = effectiveCount;
     const area = this.getArea();
     this.volume = area;
-    this.density = area > 0 ? (count / area) * 1000 : 0;
-    this.kineticEnergy = totalKinetic;
+    this.density = area > 0 ? (effectiveCount / area) * 1000 : 0;
+    this.kineticEnergy = sampleKinetic * scaleFactor;
+    this.speedSamples = speedSamples;
 
-    if (count > 0) {
-      const rawMeanVx = sumVx / count;
-      const rawMeanVy = sumVy / count;
+    if (sampleCount > 0) {
+      const rawMeanVx = sumVx / sampleCount;
+      const rawMeanVy = sumVy / sampleCount;
 
-      // Heavy low-pass exponential smoothing for macroscopic drift velocity (tau ~ 1.5s)
       this.driftVx = this.driftVx * 0.90 + rawMeanVx * 0.10;
       this.driftVy = this.driftVy * 0.90 + rawMeanVy * 0.10;
-      this.driftSpeed = Math.sqrt(this.driftVx * this.driftVx + this.driftVy * this.driftVy);
+      this.driftSpeed = Math.hypot(this.driftVx, this.driftVy);
       this.driftAngle = Math.atan2(this.driftVy, this.driftVx);
 
-      // Single-pass thermal energy (Verschiebungssatz: sum 0.5*m*(v - v_mean)^2)
-      sumThermalEnergy = Math.max(0, totalKinetic - (rawMeanVx * sumMVx + rawMeanVy * sumMVy) + 0.5 * (rawMeanVx * rawMeanVx + rawMeanVy * rawMeanVy) * sumMass);
-
+      const sumThermal = Math.max(0, sampleKinetic - (rawMeanVx * sumMVx + rawMeanVy * sumMVy) + 0.5 * (rawMeanVx * rawMeanVx + rawMeanVy * rawMeanVy) * sumMass);
       const kB = 35.0;
-      this.temperature = Math.max(5, sumThermalEnergy / (count * kB));
-      this.pressure = ((count / (area || 1)) * kB * this.temperature * 100);
+      this.temperature = Math.max(5, sumThermal / (sampleCount * kB));
+      this.pressure = ((effectiveCount / (area || 1)) * kB * this.temperature * 100);
 
-      // Distinguish genuine bulk flow (trend) from random Brownian / thermal fluctuations:
-      // Thermal speed v_th ~ sqrt(2 * kB * T / m)
       const vThermal = Math.sqrt((2 * kB * this.temperature) / 1.0);
-      const fluctuationThreshold = Math.max(12.0, (vThermal / Math.sqrt(count)) * 0.7);
+      const fluctuationThreshold = Math.max(12.0, (vThermal / Math.sqrt(Math.max(1, effectiveCount))) * 0.7);
 
       if (this.driftSpeed > fluctuationThreshold && this.driftSpeed > 15.0) {
         this.displayDriftSpeed = this.driftSpeed;
@@ -111,7 +128,6 @@ export class SensorZone {
       this.displayDriftSpeed = 0;
     }
 
-    // Record continuous time history (sampled every ~0.05s)
     if (this.historyTime.length === 0 || currentTime - this.historyTime[this.historyTime.length - 1] >= 0.045) {
       this.historyTime.push(currentTime);
       this.historyTemp.push(this.temperature);
@@ -121,7 +137,6 @@ export class SensorZone {
       this.historyKineticEnergy.push(this.kineticEnergy);
       this.historyDrift.push(this.displayDriftSpeed);
 
-      // Keep up to 600 points (~30 seconds of high-resolution continuous trace)
       if (this.historyTime.length > 600) {
         this.historyTime.shift();
         this.historyTemp.shift();

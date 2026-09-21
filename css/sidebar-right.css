@@ -273,6 +273,76 @@
   color: var(--text-muted);
 }
 
+.chamber-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-chamber-add-chart {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: var(--accent-blue);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-chamber-add-chart:hover {
+  background: rgba(56, 189, 248, 0.25);
+  border-color: var(--accent-blue);
+}
+
+.chamber-drift-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  background-color: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+}
+
+.drift-compass-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.drift-compass-svg {
+  display: block;
+}
+
+.drift-arrow-group {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.drift-info-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.drift-caption {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.drift-speed-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: color 0.15s;
+}
+
 .chamber-card-body {
   display: none;
   padding: 8px 10px;

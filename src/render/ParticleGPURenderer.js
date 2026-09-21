@@ -159,6 +159,12 @@ export class ParticleGPURenderer {
         @location(3) aSpeedNorm: f32
       ) -> VertexOutput {
         var out: VertexOutput;
+        if (aRadius <= 0.0 || aPos.x < -50000.0) {
+          out.position = vec4f(2.0, 2.0, 2.0, 1.0);
+          out.vLocalPos = vec2f(0.0);
+          out.vSpeedNorm = 0.0;
+          return out;
+        }
         out.vLocalPos = aQuad;
         out.vSpeedNorm = aSpeedNorm;
 

@@ -23,6 +23,9 @@ export class ParticleGPUCompute {
     this.particleNextBuffer = null;
     this.bestPartnersBuffer = null;
 
+    this.telemetryStagingBuffer = null;
+    this.isTelemetryPending = false;
+
     this.uniformData = new ArrayBuffer(80);
     this.uniformFloats = new Float32Array(this.uniformData);
     this.uniformU32 = new Uint32Array(this.uniformData);
@@ -41,50 +44,18 @@ export class ParticleGPUCompute {
   }
 
   _initBuffers() {
-    const device = this.device;
-    const bufferSize = this.capacity * 32;
-
-    this.bufferA = device.createBuffer({
-      label: 'ParticleComputeBufferA',
-      size: bufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    });
-
-    this.bufferB = device.createBuffer({
-      label: 'ParticleComputeBufferB',
-      size: bufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    });
-
-    this.uniformBuffer = device.createBuffer({
-      label: 'ParticleComputeUniforms',
-      size: 80,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-    });
-
-    this.wallsBuffer = device.createBuffer({
-      label: 'ParticleComputeWalls',
-      size: this.maxWalls * 64,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-
-    this.cellHeadsBuffer = device.createBuffer({
-      label: 'ParticleComputeCellHeads',
-      size: this.gridTableSize * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-
-    this.particleNextBuffer = device.createBuffer({
-      label: 'ParticleComputeParticleNext',
-      size: this.capacity * 4,
-      usage: GPUBufferUsage.STORAGE
-    });
-
-    this.bestPartnersBuffer = device.createBuffer({
-      label: 'ParticleComputeBestPartners',
-      size: this.capacity * 4,
-      usage: GPUBufferUsage.STORAGE
-    });
+    const dev = this.device, cap = this.capacity;
+    const make = (label, size, usage) => dev.createBuffer({ label, size, usage });
+    const s = GPUBufferUsage.STORAGE;
+    this.bufferA = make('ComputeBufA', cap * 32, s | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    this.bufferB = make('ComputeBufB', cap * 32, s | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    this.uniformBuffer = make('ComputeUniforms', 80, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    this.wallsBuffer = make('ComputeWalls', this.maxWalls * 64, s | GPUBufferUsage.COPY_DST);
+    this.cellHeadsBuffer = make('ComputeCellHeads', this.gridTableSize * 4, s | GPUBufferUsage.COPY_DST);
+    this.particleNextBuffer = make('ComputeParticleNext', cap * 4, s);
+    this.bestPartnersBuffer = make('ComputeBestPartners', cap * 4, s);
+    this.sinksBuffer = make('ComputeSinks', 64 * 48, s | GPUBufferUsage.COPY_DST);
+    this.telemetryStagingBuffer = make('ComputeTelemetryStaging', 50000 * 32, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST);
   }
 
   _initPipeline() {
@@ -100,7 +71,8 @@ export class ParticleGPUCompute {
       label: 'ParticleComputeBindGroupLayout',
       entries: [
         entry(0, 'uniform'), entry(1, 'read-only-storage'), entry(2, 'storage'),
-        entry(3, 'read-only-storage'), entry(4, 'storage'), entry(5, 'storage'), entry(6, 'storage')
+        entry(3, 'read-only-storage'), entry(4, 'storage'), entry(5, 'storage'),
+        entry(6, 'storage'), entry(7, 'read-only-storage')
       ]
     });
 
@@ -126,7 +98,8 @@ export class ParticleGPUCompute {
         { binding: 3, resource: { buffer: this.wallsBuffer } },
         { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
         { binding: 5, resource: { buffer: this.particleNextBuffer } },
-        { binding: 6, resource: { buffer: this.bestPartnersBuffer } }
+        { binding: 6, resource: { buffer: this.bestPartnersBuffer } },
+        { binding: 7, resource: { buffer: this.sinksBuffer } }
       ]
     });
     this.bindGroupAB = makeBG(this.bufferA, this.bufferB, 'ParticleComputeBindGroupAB');
@@ -175,6 +148,61 @@ export class ParticleGPUCompute {
     this.device.queue.writeBuffer(this.wallsBuffer, 0, data, 0, count * 64);
   }
 
+  uploadSinks(sinks) {
+    if (!this.isSupported) return;
+    const list = sinks || [];
+    const count = Math.min(list.length, 64);
+    this.sinkCount = count;
+    if (count === 0) {
+      const zero = new Uint32Array(12);
+      this.device.queue.writeBuffer(this.sinksBuffer, 0, zero.buffer, 0, 48);
+      return;
+    }
+
+    const data = new ArrayBuffer(count * 48);
+    const f32 = new Float32Array(data);
+    const u32 = new Uint32Array(data);
+
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const s = list[i];
+      f32[ptr + 0] = s.x;
+      f32[ptr + 1] = s.y;
+      f32[ptr + 2] = s.x + s.width;
+      f32[ptr + 3] = s.y + s.height;
+
+      const isUnlimited = !s.maxParticles || s.maxParticles <= 0;
+      const isLimitReached = !isUnlimited && (s.absorbedCount >= s.maxParticles);
+      u32[ptr + 4] = (s.isActive !== false && !isLimitReached) ? 1 : 0;
+
+      let dirCode = 0;
+      if (s.direction === 'right') dirCode = 1;
+      else if (s.direction === 'left') dirCode = 2;
+      else if (s.direction === 'down') dirCode = 3;
+      else if (s.direction === 'up') dirCode = 4;
+      u32[ptr + 5] = dirCode;
+
+      let tempCode = 0;
+      if (s.tempFilterMode === 'above') tempCode = 1;
+      else if (s.tempFilterMode === 'below') tempCode = 2;
+      u32[ptr + 6] = tempCode;
+
+      f32[ptr + 7] = s.filterTemperature || 300;
+      f32[ptr + 8] = 0; f32[ptr + 9] = 0;
+      f32[ptr + 10] = 0; f32[ptr + 11] = 0;
+
+      ptr += 12;
+    }
+    this.device.queue.writeBuffer(this.sinksBuffer, 0, data, 0, count * 48);
+  }
+
+  uploadRawParticleBuffer(compactedFloats, count) {
+    if (!this.isSupported || !compactedFloats) return;
+    this.count = count;
+    this.device.queue.writeBuffer(this.bufferA, 0, compactedFloats.buffer, compactedFloats.byteOffset, count * 32);
+    this.device.queue.writeBuffer(this.bufferB, 0, compactedFloats.buffer, compactedFloats.byteOffset, count * 32);
+  }
+
   _packParticles(particles, startIdx, count) {
     const packed = new Float32Array(count * 8);
     let ptr = 0;
@@ -196,31 +224,27 @@ export class ParticleGPUCompute {
     if (!this.isSupported || !particles) return;
     this.count = Math.min(particles.length, this.capacity);
     if (this.count === 0) return;
-
     const packed = this._packParticles(particles, 0, this.count);
-    const byteLength = this.count * 32;
-    this.device.queue.writeBuffer(this.bufferA, 0, packed.buffer, 0, byteLength);
-    this.device.queue.writeBuffer(this.bufferB, 0, packed.buffer, 0, byteLength);
-    this.pingPong = 0;
+    this.device.queue.writeBuffer(this.bufferA, 0, packed);
+    this.device.queue.writeBuffer(this.bufferB, 0, packed);
   }
 
   appendParticles(newParticles) {
     if (!this.isSupported || !newParticles || newParticles.length === 0) return;
-    const addCount = Math.min(newParticles.length, this.capacity - this.count);
-    if (addCount <= 0) return;
+    const appendCount = Math.min(newParticles.length, this.capacity - this.count);
+    if (appendCount <= 0) return;
 
-    const packed = this._packParticles(newParticles, 0, addCount);
+    const packed = this._packParticles(newParticles, 0, appendCount);
     const byteOffset = this.count * 32;
-    const byteLength = addCount * 32;
-    this.device.queue.writeBuffer(this.bufferA, byteOffset, packed.buffer, 0, byteLength);
-    this.device.queue.writeBuffer(this.bufferB, byteOffset, packed.buffer, 0, byteLength);
-    this.count += addCount;
+    this.device.queue.writeBuffer(this.bufferA, byteOffset, packed);
+    this.device.queue.writeBuffer(this.bufferB, byteOffset, packed);
+    this.count += appendCount;
   }
 
-  step(dt, gravityEnabled, gravity = 350, damping = 1.0, bounds = null, maxSpeedReference = 380, subSteps = 4, simModel = 0) {
-    if (!this.isSupported || this.count === 0) return null;
+  step(dt, gravityEnabled = false, gravity = 350, damping = 1.0, bounds = null, maxSpeedReference = 380, subSteps = 4, simModel = 0) {
+    if (!this.isSupported || this.count === 0) return this.getOutputBuffer();
 
-    const effectiveSubSteps = Math.max(1, Math.min(16, subSteps || 4));
+    const effectiveSubSteps = Math.max(1, subSteps);
     const subDt = dt / effectiveSubSteps;
 
     const hasBounds = !!(bounds && typeof bounds.minX === 'number' && typeof bounds.maxX === 'number');
@@ -237,7 +261,7 @@ export class ParticleGPUCompute {
     this.uniformU32[8] = hasBounds ? 1 : 0;
     this.uniformFloats[9] = this.cellSize;
     this.uniformU32[10] = this.gridTableSize;
-    this.uniformU32[11] = 0;
+    this.uniformU32[11] = this.sinkCount || 0;
     this.uniformFloats[12] = hasBounds ? bounds.minX : 0;
     this.uniformFloats[13] = hasBounds ? bounds.minY : 0;
     this.uniformFloats[14] = hasBounds ? bounds.maxX : 2500;
@@ -303,30 +327,45 @@ export class ParticleGPUCompute {
     return this.count;
   }
 
-  async readbackParticles(maxCount = this.count) {
-    if (!this.isSupported || this.count === 0) return [];
-    const readCount = Math.min(this.count, maxCount);
+  async fetchTelemetry(sampleCap = 50000) {
+    if (!this.isSupported || this.count === 0 || this.isTelemetryPending) return null;
+    const readCount = Math.min(this.count, sampleCap);
     const byteSize = readCount * 32;
 
-    const stagingBuffer = this.device.createBuffer({
-      label: 'ParticleReadbackStaging',
-      size: byteSize,
-      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
-    });
+    if (!this.telemetryStagingBuffer || this.telemetryStagingBuffer.size < byteSize) {
+      if (this.telemetryStagingBuffer) this.telemetryStagingBuffer.destroy();
+      this.telemetryStagingBuffer = this.device.createBuffer({
+        label: 'ComputeTelemetryStaging',
+        size: Math.max(byteSize, 50000 * 32),
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+      });
+    }
 
-    const commandEncoder = this.device.createCommandEncoder({
-      label: 'ParticleReadbackEncoder'
-    });
-    const srcBuffer = this.getOutputBuffer();
-    commandEncoder.copyBufferToBuffer(srcBuffer, 0, stagingBuffer, 0, byteSize);
-    this.device.queue.submit([commandEncoder.finish()]);
+    this.isTelemetryPending = true;
+    const enc = this.device.createCommandEncoder({ label: 'TelemetryEncoder' });
+    enc.copyBufferToBuffer(this.getOutputBuffer(), 0, this.telemetryStagingBuffer, 0, byteSize);
+    this.device.queue.submit([enc.finish()]);
 
-    await stagingBuffer.mapAsync(GPUMapMode.READ);
-    const floats = new Float32Array(stagingBuffer.getMappedRange());
+    try {
+      await this.telemetryStagingBuffer.mapAsync(GPUMapMode.READ);
+      const mapped = this.telemetryStagingBuffer.getMappedRange(0, byteSize);
+      const floats = new Float32Array(mapped.slice(0));
+      this.telemetryStagingBuffer.unmap();
+      this.isTelemetryPending = false;
+      return { floats, count: readCount, totalCount: this.count };
+    } catch (e) {
+      this.isTelemetryPending = false;
+      return null;
+    }
+  }
 
+  async readbackParticles(maxCount = this.count) {
+    const data = await this.fetchTelemetry(maxCount);
+    if (!data) return [];
+    const { floats, count } = data;
     const result = [];
     let ptr = 0;
-    for (let i = 0; i < readCount; i++) {
+    for (let i = 0; i < count; i++) {
       result.push({
         pos: { x: floats[ptr], y: floats[ptr + 1] },
         vel: { x: floats[ptr + 2], y: floats[ptr + 3] },
@@ -336,9 +375,6 @@ export class ParticleGPUCompute {
       });
       ptr += 8;
     }
-
-    stagingBuffer.unmap();
-    stagingBuffer.destroy();
     return result;
   }
 }
