@@ -1331,6 +1331,17 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
     const driftText = (item.displayDriftSpeed && item.displayDriftSpeed > 0)
       ? `${item.displayDriftSpeed.toFixed(1)} px/s (${Math.round((item.driftAngle * 180) / Math.PI)}°)`
       : '0.0 px/s (Equilibrium)';
+    const boundPistonId = item.pistonBinding?.pistonId || '';
+    const boundEdge = item.pistonBinding?.edge || 'right';
+    const lockCross = item.pistonBinding ? (item.pistonBinding.lockCrossDimension !== false) : true;
+
+    let pistonOptions = `<option value="">None (Unbound / Static)</option>`;
+    for (let pIdx = 0; pIdx < engine.pistons.length; pIdx++) {
+      const p = engine.pistons[pIdx];
+      const pName = p.label ? `${p.label} (Piston ${pIdx + 1})` : `Piston ${pIdx + 1}`;
+      pistonOptions += `<option value="${p.id}" ${boundPistonId === p.id ? 'selected' : ''}>${pName}</option>`;
+    }
+
     bodyContainer.innerHTML = `
       <div class="field-row">
         <div class="field-label"><span>Chamber Name</span></div>
@@ -1340,11 +1351,89 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
         <div class="field-label"><span>Border & Chart Color</span></div>
         <input type="color" id="${idPrefix}sensColor" value="${item.color || '#38bdf8'}" class="styled-select" style="width:54px; height:26px; padding:1px; cursor:pointer;">
       </div>
+      <div class="field-row" style="margin-top:4px;">
+        <div class="field-label"><span>Piston Binding 🔗</span></div>
+        <select id="${idPrefix}pistonBindSelect" class="styled-select" style="width:100%;">
+          ${pistonOptions}
+        </select>
+      </div>
+      <div id="${idPrefix}pistonBindControls" style="display:${boundPistonId ? 'block' : 'none'}; margin-top:4px;">
+        <div class="field-row">
+          <div class="field-label"><span>Bound Chamber Edge</span></div>
+          <select id="${idPrefix}pistonEdgeSelect" class="styled-select" style="width:100%;">
+            <option value="right" ${boundEdge === 'right' ? 'selected' : ''}>Right Edge (Left of Piston)</option>
+            <option value="left" ${boundEdge === 'left' ? 'selected' : ''}>Left Edge (Right of Piston)</option>
+            <option value="bottom" ${boundEdge === 'bottom' ? 'selected' : ''}>Bottom Edge (Above Piston)</option>
+            <option value="top" ${boundEdge === 'top' ? 'selected' : ''}>Top Edge (Below Piston)</option>
+          </select>
+        </div>
+        <div class="field-row" style="margin-top:4px; display:flex; align-items:center; justify-content:space-between;">
+          <label style="font-size:11px; color:#cbd5e1; cursor:pointer; display:flex; align-items:center; gap:6px;">
+            <input type="checkbox" id="${idPrefix}lockCrossDim" ${lockCross ? 'checked' : ''} style="cursor:pointer;">
+            <span>Lock Span to Piston</span>
+          </label>
+          <button id="${idPrefix}btnAutoSnap" class="btn-tool-secondary" style="font-size:10px; padding:2px 8px; cursor:pointer;">Snap Now</button>
+        </div>
+      </div>
       <div class="stat-card" style="margin-top:6px;">
         <span class="stat-label">Net Drift Trend ⟨v_drift⟩</span>
         <span class="stat-value" style="font-size:12px; color:#22c55e;">${driftText}</span>
       </div>
     `;
+
+    const bindSelect = document.getElementById(`${idPrefix}pistonBindSelect`);
+    const edgeSelect = document.getElementById(`${idPrefix}pistonEdgeSelect`);
+    const lockCrossCheckbox = document.getElementById(`${idPrefix}lockCrossDim`);
+    const btnAutoSnap = document.getElementById(`${idPrefix}btnAutoSnap`);
+    const controlsDiv = document.getElementById(`${idPrefix}pistonBindControls`);
+
+    const refreshBinding = () => {
+      const pid = bindSelect?.value;
+      if (!pid) {
+        item.unbindPiston();
+        if (controlsDiv) controlsDiv.style.display = 'none';
+      } else {
+        const p = engine.getPistonById(pid);
+        if (p) {
+          const edge = edgeSelect?.value || 'right';
+          const lock = lockCrossCheckbox ? lockCrossCheckbox.checked : true;
+          item.bindToPiston(p, edge, lock);
+          if (controlsDiv) controlsDiv.style.display = 'block';
+        }
+      }
+      updateElementsList();
+      updatePopupPosition();
+    };
+
+    bindSelect?.addEventListener('change', () => {
+      const pid = bindSelect.value;
+      if (pid) {
+        const p = engine.getPistonById(pid);
+        if (p) {
+          const sMidX = item.x + item.width * 0.5;
+          const sMidY = item.y + item.height * 0.5;
+          let bestEdge = 'right';
+          if (p.orientation === 'horizontal') {
+            bestEdge = (sMidX < p.x) ? 'right' : 'left';
+          } else {
+            bestEdge = (sMidY < p.y) ? 'bottom' : 'top';
+          }
+          if (edgeSelect) edgeSelect.value = bestEdge;
+        }
+      }
+      refreshBinding();
+    });
+
+    edgeSelect?.addEventListener('change', refreshBinding);
+    lockCrossCheckbox?.addEventListener('change', refreshBinding);
+    btnAutoSnap?.addEventListener('click', () => {
+      const p = engine.getPistonById(bindSelect?.value);
+      if (p) {
+        item.updateBoundsFromPiston(p);
+        updatePopupPosition();
+      }
+    });
+
     document.getElementById(`${idPrefix}sensName`)?.addEventListener('input', (e) => {
       item.label = e.target.value.trim() || 'Chamber';
       updateElementsList();
@@ -3054,6 +3143,16 @@ window.addEventListener('mousemove', (e) => {
         if (newW >= 20) { item.x = coords.snapX; item.width = newW; }
         item.height = Math.max(20, coords.snapY - item.y);
       }
+      if (item instanceof SensorZone) {
+        item.volume = item.width * item.height;
+        if (item.pistonBinding && item.pistonBinding.pistonId) {
+          const pb = item.pistonBinding;
+          if (pb.edge === 'right') pb.fixedOpposite = item.x;
+          else if (pb.edge === 'left') pb.fixedOpposite = item.x + item.width;
+          else if (pb.edge === 'bottom') pb.fixedOpposite = item.y;
+          else if (pb.edge === 'top') pb.fixedOpposite = item.y + item.height;
+        }
+      }
     }
     updatePopupPosition();
     return;
@@ -3101,6 +3200,7 @@ window.addEventListener('mouseup', (e) => {
 
   const wasDraggingHandle = !!draggingHandle;
   const wasMovingSelection = isMovingSelection;
+  const draggedHandleItem = draggingHandle?.item;
 
   if (draggingHandle) draggingHandle = null;
   if (isMovingSelection) isMovingSelection = false;
@@ -3110,6 +3210,24 @@ window.addEventListener('mouseup', (e) => {
   renderer.draftInfo = null;
 
   if (wasDraggingHandle || wasMovingSelection) {
+    if (draggedHandleItem instanceof SensorZone && !draggedHandleItem.pistonBinding) {
+      const snap = findPistonSnap(draggedHandleItem.x, draggedHandleItem.y, draggedHandleItem.width, draggedHandleItem.height);
+      if (snap) {
+        draggedHandleItem.bindToPiston(snap.piston, snap.edge, true);
+        updateElementsList();
+      }
+    } else if (wasMovingSelection) {
+      selectedItems.forEach(it => {
+        if (it instanceof SensorZone && !it.pistonBinding) {
+          const snap = findPistonSnap(it.x, it.y, it.width, it.height);
+          if (snap) {
+            it.bindToPiston(snap.piston, snap.edge, true);
+          }
+        }
+      });
+      updateElementsList();
+    }
+    updatePopupPosition();
     return;
   }
 
@@ -3298,6 +3416,10 @@ window.addEventListener('mouseup', (e) => {
         x: minX, y: minY, width: w, height: h,
         color: toolConfigs.sensor.color || '#38bdf8'
       });
+      const snap = findPistonSnap(minX, minY, w, h);
+      if (snap) {
+        sZone.bindToPiston(snap.piston, snap.edge, true);
+      }
       selectedItems = [sZone];
       updateElementsList();
     }
@@ -3305,6 +3427,46 @@ window.addEventListener('mouseup', (e) => {
 
   dragStartWorld = null;
 });
+
+// Piston Snap Detector for Sensor Chambers
+function findPistonSnap(x, y, width, height, threshold = 22) {
+  if (!engine.pistons || engine.pistons.length === 0) return null;
+  const cLeft = x, cRight = x + width, cTop = y, cBottom = y + height;
+  let best = null;
+  let minDiff = threshold + 1;
+
+  for (let i = 0; i < engine.pistons.length; i++) {
+    const p = engine.pistons[i];
+    const pb = p.getBounds();
+
+    if (p.orientation === 'horizontal') {
+      const yOverlap = (cTop <= pb.bottom + threshold && cBottom >= pb.top - threshold);
+      const dRight = Math.abs(cRight - pb.left);
+      if (yOverlap && dRight < minDiff) {
+        minDiff = dRight;
+        best = { piston: p, edge: 'right', snappedCoord: pb.left };
+      }
+      const dLeft = Math.abs(cLeft - pb.right);
+      if (yOverlap && dLeft < minDiff) {
+        minDiff = dLeft;
+        best = { piston: p, edge: 'left', snappedCoord: pb.right };
+      }
+    } else { // vertical
+      const xOverlap = (cLeft <= pb.right + threshold && cRight >= pb.left - threshold);
+      const dBottom = Math.abs(cBottom - pb.top);
+      if (xOverlap && dBottom < minDiff) {
+        minDiff = dBottom;
+        best = { piston: p, edge: 'bottom', snappedCoord: pb.top };
+      }
+      const dTop = Math.abs(cTop - pb.bottom);
+      if (xOverlap && dTop < minDiff) {
+        minDiff = dTop;
+        best = { piston: p, edge: 'top', snappedCoord: pb.bottom };
+      }
+    }
+  }
+  return best;
+}
 
 // Circle Wall Generator
 function createCircleWall(center, radius) {
@@ -3489,6 +3651,17 @@ function deleteSelectedItems() {
   engine.textLabels = engine.textLabels.filter(l => !deleteSet.has(l));
   engine.particleGroups = (engine.particleGroups || []).filter(g => !deleteSet.has(g));
   engine.elements = (engine.elements || []).filter(el => !deleteSet.has(el));
+
+  // Unbind any sensors bound to pistons being deleted
+  const deletedPistons = selectedItems.filter(item => item instanceof Piston);
+  if (deletedPistons.length > 0) {
+    const deletedPistonIds = new Set(deletedPistons.map(p => p.id));
+    engine.sensors.forEach(s => {
+      if (s.pistonBinding && deletedPistonIds.has(s.pistonBinding.pistonId)) {
+        s.unbindPiston();
+      }
+    });
+  }
 
   // Delete particles belonging to deleted groups
   const groupsToDelete = Array.from(deleteSet).filter(item => item instanceof ParticleGroup);

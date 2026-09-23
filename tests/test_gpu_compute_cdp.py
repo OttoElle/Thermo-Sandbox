@@ -384,6 +384,41 @@ def run_test():
 
                 const hasGlobalDriftHistory = !!(window.engine.historyDrift && window.engine.historyDrift.length > 0);
 
+                // 11. Test Piston-Sensor Dynamic Boundary Binding & Volume Tracking
+                const testPiston = window.engine.addPiston({
+                    x: 500, y: 300, width: 28, height: 120,
+                    orientation: 'horizontal',
+                    mode: 'motorized',
+                    frequency: 1.0,
+                    minPos: 350,
+                    maxPos: 650
+                });
+                const boundSensor = window.engine.addSensor({
+                    x: 200, y: 240, width: 286, height: 120,
+                    label: 'BoundChamber'
+                });
+                boundSensor.bindToPiston(testPiston, 'right', true);
+                const initialSensorWidth = boundSensor.width;
+
+                for (let s = 0; s < 25; s++) {
+                    window.engine.step(0.016);
+                }
+
+                const steppedSensorWidth = boundSensor.width;
+                const steppedPistonLeftFace = testPiston.x - testPiston.width * 0.5;
+                const widthFollowedPiston = Math.abs((boundSensor.x + boundSensor.width) - steppedPistonLeftFace) < 1.0;
+                const volumeChanged = (boundSensor.volume !== initialSensorWidth * 120);
+
+                // Test P-V Dashboard Chart rendering and work badge
+                const pvCanvas = document.createElement('canvas');
+                pvCanvas.width = 240; pvCanvas.height = 140;
+                const pvChart = new window.DashboardChart('pv1', boundSensor, 'pv', pvCanvas);
+                pvChart.render(window.engine);
+
+                // Test unbinding
+                boundSensor.unbindPiston();
+                const isUnbound = (boundSensor.pistonBinding === null);
+
                 return {
                     success: true,
                     count: 50000,
@@ -407,6 +442,9 @@ def run_test():
                     particleCountAfterAbsorb,
                     particleCountAfterDelete,
                     hasGlobalDriftHistory,
+                    widthFollowedPiston,
+                    volumeChanged,
+                    isUnbound,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -461,6 +499,11 @@ def run_test():
         assert val.get('particleCountAfterAbsorb') == 15, f"Expected 15 live particles remaining, got {val.get('particleCountAfterAbsorb')}"
         assert val.get('particleCountAfterDelete') == 10, f"Expected 10 particles to survive after sink deletion, got {val.get('particleCountAfterDelete')}"
         assert val.get('hasGlobalDriftHistory') == True, "Global drift velocity was not recorded into engine.historyDrift"
+
+        # Piston-Sensor dynamic boundary assertions
+        assert val.get('widthFollowedPiston') == True, "Bound sensor chamber width failed to follow piston left face!"
+        assert val.get('volumeChanged') == True, "Bound sensor chamber volume did not dynamically change as piston moved!"
+        assert val.get('isUnbound') == True, "Sensor unbindPiston failed to clear pistonBinding!"
 
         print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter, Telemetry & Sensor Zone tests PASSED!")
 

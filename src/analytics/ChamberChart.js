@@ -230,19 +230,57 @@ export class DashboardChart {
       ctx.lineWidth = 1.6;
       ctx.beginPath();
       const len = Math.min(xArr.length, yArr.length);
+      let workIntegral = 0;
       for (let i = 0; i < len; i++) {
         const x = padL + ((xArr[i] - minX) / (maxX - minX || 1)) * chartW;
         const y = h - padB - ((yArr[i] - minY) / (maxY - minY || 1)) * chartH;
         if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        else {
+          ctx.lineTo(x, y);
+          const avgP = (yArr[i] + yArr[i - 1]) * 0.5;
+          const dV = xArr[i] - xArr[i - 1];
+          workIntegral -= avgP * dV;
+        }
       }
       ctx.stroke();
 
+      // Live state marker on latest coordinate
+      if (len > 0) {
+        const lastX = padL + ((xArr[len - 1] - minX) / (maxX - minX || 1)) * chartW;
+        const lastY = h - padB - ((yArr[len - 1] - minY) / (maxY - minY || 1)) * chartH;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      // Work badge for thermodynamic cycle
+      if (this.metric === 'pv') {
+        const workJ = workIntegral * 1e-4;
+        let workStr = `${workJ.toFixed(1)} J`;
+        if (Math.abs(workJ) >= 1000) workStr = `${(workJ / 1000).toFixed(2)} kJ`;
+        else if (Math.abs(workJ) < 0.1 && Math.abs(workJ) > 0.0001) workStr = `${(workJ * 1000).toFixed(0)} mJ`;
+        
+        ctx.font = 'bold 9px JetBrains Mono, monospace';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = workJ >= 0 ? '#22c55e' : '#38bdf8';
+        ctx.fillText(`W = ${workJ > 0 ? '+' : ''}${workStr}`, w - padR, padT + 8);
+      }
+
+      // Axis labels
       ctx.fillStyle = '#94a3b8';
       ctx.font = '8px JetBrains Mono, monospace';
       ctx.textAlign = 'right';
       ctx.fillText(`${Math.round(maxY)}`, padL - 3, padT + 8);
       ctx.fillText(`${Math.round(minY)}`, padL - 3, h - padB);
+
+      ctx.textAlign = 'left';
+      ctx.fillText(`V:${Math.round(minX)}`, padL + 2, h - 4);
+      ctx.textAlign = 'right';
+      ctx.fillText(`${Math.round(maxX)}`, w - padR, h - 4);
       return;
     }
 

@@ -5958,6 +5958,18 @@ class SensorZone {
     this.historyCount = [];
     this.historyKineticEnergy = [];
     this.historyDrift = [];
+
+    // Piston Binding for Dynamic Chamber Expansion / Compression
+    if (options.pistonBinding) {
+      this.pistonBinding = {
+        pistonId: options.pistonBinding.pistonId || null,
+        edge: options.pistonBinding.edge || 'right',
+        lockCrossDimension: options.pistonBinding.lockCrossDimension !== false,
+        fixedOpposite: options.pistonBinding.fixedOpposite !== undefined ? options.pistonBinding.fixedOpposite : null
+      };
+    } else {
+      this.pistonBinding = null;
+    }
   }
 
   contains(pos) {
@@ -6088,6 +6100,77 @@ class SensorZone {
     this.displayDriftSpeed = 0;
   }
 
+  bindToPiston(piston, edge = 'right', lockCrossDimension = true) {
+    if (!piston) {
+      this.unbindPiston();
+      return;
+    }
+    let fixedOpposite = null;
+    if (edge === 'right') {
+      fixedOpposite = this.x;
+    } else if (edge === 'left') {
+      fixedOpposite = this.x + this.width;
+    } else if (edge === 'bottom') {
+      fixedOpposite = this.y;
+    } else if (edge === 'top') {
+      fixedOpposite = this.y + this.height;
+    }
+
+    this.pistonBinding = {
+      pistonId: piston.id,
+      edge,
+      lockCrossDimension,
+      fixedOpposite
+    };
+    this.updateBoundsFromPiston(piston);
+  }
+
+  unbindPiston() {
+    this.pistonBinding = null;
+  }
+
+  updateBoundsFromPiston(piston) {
+    if (!this.pistonBinding || !this.pistonBinding.pistonId || !piston) return;
+    const pb = this.pistonBinding;
+    const pBounds = piston.getBounds();
+
+    if (piston.orientation === 'horizontal') {
+      if (pb.edge === 'right') {
+        // Chamber is to the left of piston; its right edge matches the piston's left face
+        const targetRight = pBounds.left;
+        this.width = Math.max(15, targetRight - this.x);
+      } else if (pb.edge === 'left') {
+        // Chamber is to the right of piston; its left edge matches the piston's right face
+        const fixedRight = (pb.fixedOpposite !== null && pb.fixedOpposite !== undefined) ? pb.fixedOpposite : (this.x + this.width);
+        const targetLeft = pBounds.right;
+        this.x = targetLeft;
+        this.width = Math.max(15, fixedRight - targetLeft);
+      }
+      if (pb.lockCrossDimension !== false) {
+        this.y = pBounds.top;
+        this.height = piston.height;
+      }
+    } else { // vertical orientation
+      if (pb.edge === 'bottom') {
+        // Chamber is above piston; its bottom edge matches the piston's top face
+        const targetBottom = pBounds.top;
+        this.height = Math.max(15, targetBottom - this.y);
+      } else if (pb.edge === 'top') {
+        // Chamber is below piston; its top edge matches the piston's bottom face
+        const fixedBottom = (pb.fixedOpposite !== null && pb.fixedOpposite !== undefined) ? pb.fixedOpposite : (this.y + this.height);
+        const targetTop = pBounds.bottom;
+        this.y = targetTop;
+        this.height = Math.max(15, fixedBottom - targetTop);
+      }
+      if (pb.lockCrossDimension !== false) {
+        this.x = pBounds.left;
+        this.width = piston.width;
+      }
+    }
+
+    this.volume = this.width * this.height;
+  }
+
   toJSON() {
     return {
       id: this.id,
@@ -6096,7 +6179,8 @@ class SensorZone {
       y: this.y,
       width: this.width,
       height: this.height,
-      color: this.color
+      color: this.color,
+      pistonBinding: this.pistonBinding ? { ...this.pistonBinding } : null
     };
   }
 
@@ -9244,6 +9328,25 @@ class Engine {
     return p;
   }
 
+  getPistonById(id) {
+    if (!id) return null;
+    return this.pistons.find(p => p.id === id) || null;
+  }
+
+  updateBoundSensors() {
+    for (let i = 0; i < this.sensors.length; i++) {
+      const s = this.sensors[i];
+      if (s.pistonBinding && s.pistonBinding.pistonId) {
+        const p = this.getPistonById(s.pistonBinding.pistonId);
+        if (p) {
+          s.updateBoundsFromPiston(p);
+        } else {
+          s.unbindPiston();
+        }
+      }
+    }
+  }
+
   addSensor(x, y, width, height, options = {}) {
     let opts = options;
     if (typeof x === 'object' && x !== null) {
@@ -9593,6 +9696,7 @@ class Engine {
         for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
         for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
         for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+        this.updateBoundSensors();
 
         this.syncWallsToGPU();
         this.syncSinksToGPU();
@@ -9647,6 +9751,7 @@ class Engine {
     for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
     for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
     for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+    this.updateBoundSensors();
     for (let i = 0; i < this.sensors.length; i++) this.sensors[i].updateMeasurements(this.particles, this.totalTime);
 
     this._updateStats();
@@ -10281,6 +10386,7 @@ class Engine {
     }
 
     // Forward telemetry to sensor chambers
+    this.updateBoundSensors();
     for (let i = 0; i < this.sensors.length; i++) {
       this.sensors[i].updateMeasurementsFromGPU(floats, liveCount, scaleFactor, this.totalTime);
     }
@@ -11086,12 +11192,39 @@ class Renderer {
     ctx.strokeRect(sensor.x, sensor.y, sensor.width, sensor.height);
     ctx.setLineDash([]);
 
+    // Bound Piston Edge Glow Indicator
+    if (sensor.pistonBinding && sensor.pistonBinding.pistonId) {
+      const edge = sensor.pistonBinding.edge;
+      ctx.save();
+      ctx.strokeStyle = dedicatedColor;
+      ctx.shadowColor = dedicatedColor;
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      if (edge === 'right') {
+        ctx.moveTo(sensor.x + sensor.width, sensor.y);
+        ctx.lineTo(sensor.x + sensor.width, sensor.y + sensor.height);
+      } else if (edge === 'left') {
+        ctx.moveTo(sensor.x, sensor.y);
+        ctx.lineTo(sensor.x, sensor.y + sensor.height);
+      } else if (edge === 'bottom') {
+        ctx.moveTo(sensor.x, sensor.y + sensor.height);
+        ctx.lineTo(sensor.x + sensor.width, sensor.y + sensor.height);
+      } else if (edge === 'top') {
+        ctx.moveTo(sensor.x, sensor.y);
+        ctx.lineTo(sensor.x + sensor.width, sensor.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Header label with chamber name in dedicated color and live temperature
     ctx.fillStyle = isSelected ? '#ffffff' : dedicatedColor;
     ctx.font = 'bold 11.5px Inter, sans-serif';
     ctx.textAlign = 'center';
+    const bindTag = (sensor.pistonBinding && sensor.pistonBinding.pistonId) ? ' 🔗' : '';
     const tempText = hasParticles ? ` [${Math.round(sensor.temperature)} K]` : ' (Empty)';
-    ctx.fillText(`${sensor.label}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
+    ctx.fillText(`${sensor.label}${bindTag}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
 
     // Drift Flow Indicator Arrow (only when macroscopic drift exceeds thermal fluctuation)
     if (sensor.displayDriftSpeed > 0) {
@@ -12550,19 +12683,57 @@ class DashboardChart {
       ctx.lineWidth = 1.6;
       ctx.beginPath();
       const len = Math.min(xArr.length, yArr.length);
+      let workIntegral = 0;
       for (let i = 0; i < len; i++) {
         const x = padL + ((xArr[i] - minX) / (maxX - minX || 1)) * chartW;
         const y = h - padB - ((yArr[i] - minY) / (maxY - minY || 1)) * chartH;
         if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        else {
+          ctx.lineTo(x, y);
+          const avgP = (yArr[i] + yArr[i - 1]) * 0.5;
+          const dV = xArr[i] - xArr[i - 1];
+          workIntegral -= avgP * dV;
+        }
       }
       ctx.stroke();
 
+      // Live state marker on latest coordinate
+      if (len > 0) {
+        const lastX = padL + ((xArr[len - 1] - minX) / (maxX - minX || 1)) * chartW;
+        const lastY = h - padB - ((yArr[len - 1] - minY) / (maxY - minY || 1)) * chartH;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      // Work badge for thermodynamic cycle
+      if (this.metric === 'pv') {
+        const workJ = workIntegral * 1e-4;
+        let workStr = `${workJ.toFixed(1)} J`;
+        if (Math.abs(workJ) >= 1000) workStr = `${(workJ / 1000).toFixed(2)} kJ`;
+        else if (Math.abs(workJ) < 0.1 && Math.abs(workJ) > 0.0001) workStr = `${(workJ * 1000).toFixed(0)} mJ`;
+        
+        ctx.font = 'bold 9px JetBrains Mono, monospace';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = workJ >= 0 ? '#22c55e' : '#38bdf8';
+        ctx.fillText(`W = ${workJ > 0 ? '+' : ''}${workStr}`, w - padR, padT + 8);
+      }
+
+      // Axis labels
       ctx.fillStyle = '#94a3b8';
       ctx.font = '8px JetBrains Mono, monospace';
       ctx.textAlign = 'right';
       ctx.fillText(`${Math.round(maxY)}`, padL - 3, padT + 8);
       ctx.fillText(`${Math.round(minY)}`, padL - 3, h - padB);
+
+      ctx.textAlign = 'left';
+      ctx.fillText(`V:${Math.round(minX)}`, padL + 2, h - 4);
+      ctx.textAlign = 'right';
+      ctx.fillText(`${Math.round(maxX)}`, w - padR, h - 4);
       return;
     }
 
@@ -16645,6 +16816,17 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
     const driftText = (item.displayDriftSpeed && item.displayDriftSpeed > 0)
       ? `${item.displayDriftSpeed.toFixed(1)} px/s (${Math.round((item.driftAngle * 180) / Math.PI)}°)`
       : '0.0 px/s (Equilibrium)';
+    const boundPistonId = item.pistonBinding?.pistonId || '';
+    const boundEdge = item.pistonBinding?.edge || 'right';
+    const lockCross = item.pistonBinding ? (item.pistonBinding.lockCrossDimension !== false) : true;
+
+    let pistonOptions = `<option value="">None (Unbound / Static)</option>`;
+    for (let pIdx = 0; pIdx < engine.pistons.length; pIdx++) {
+      const p = engine.pistons[pIdx];
+      const pName = p.label ? `${p.label} (Piston ${pIdx + 1})` : `Piston ${pIdx + 1}`;
+      pistonOptions += `<option value="${p.id}" ${boundPistonId === p.id ? 'selected' : ''}>${pName}</option>`;
+    }
+
     bodyContainer.innerHTML = `
       <div class="field-row">
         <div class="field-label"><span>Chamber Name</span></div>
@@ -16654,11 +16836,89 @@ function renderItemAccordionBody(item, bodyContainer, itemIndex) {
         <div class="field-label"><span>Border & Chart Color</span></div>
         <input type="color" id="${idPrefix}sensColor" value="${item.color || '#38bdf8'}" class="styled-select" style="width:54px; height:26px; padding:1px; cursor:pointer;">
       </div>
+      <div class="field-row" style="margin-top:4px;">
+        <div class="field-label"><span>Piston Binding 🔗</span></div>
+        <select id="${idPrefix}pistonBindSelect" class="styled-select" style="width:100%;">
+          ${pistonOptions}
+        </select>
+      </div>
+      <div id="${idPrefix}pistonBindControls" style="display:${boundPistonId ? 'block' : 'none'}; margin-top:4px;">
+        <div class="field-row">
+          <div class="field-label"><span>Bound Chamber Edge</span></div>
+          <select id="${idPrefix}pistonEdgeSelect" class="styled-select" style="width:100%;">
+            <option value="right" ${boundEdge === 'right' ? 'selected' : ''}>Right Edge (Left of Piston)</option>
+            <option value="left" ${boundEdge === 'left' ? 'selected' : ''}>Left Edge (Right of Piston)</option>
+            <option value="bottom" ${boundEdge === 'bottom' ? 'selected' : ''}>Bottom Edge (Above Piston)</option>
+            <option value="top" ${boundEdge === 'top' ? 'selected' : ''}>Top Edge (Below Piston)</option>
+          </select>
+        </div>
+        <div class="field-row" style="margin-top:4px; display:flex; align-items:center; justify-content:space-between;">
+          <label style="font-size:11px; color:#cbd5e1; cursor:pointer; display:flex; align-items:center; gap:6px;">
+            <input type="checkbox" id="${idPrefix}lockCrossDim" ${lockCross ? 'checked' : ''} style="cursor:pointer;">
+            <span>Lock Span to Piston</span>
+          </label>
+          <button id="${idPrefix}btnAutoSnap" class="btn-tool-secondary" style="font-size:10px; padding:2px 8px; cursor:pointer;">Snap Now</button>
+        </div>
+      </div>
       <div class="stat-card" style="margin-top:6px;">
         <span class="stat-label">Net Drift Trend ⟨v_drift⟩</span>
         <span class="stat-value" style="font-size:12px; color:#22c55e;">${driftText}</span>
       </div>
     `;
+
+    const bindSelect = document.getElementById(`${idPrefix}pistonBindSelect`);
+    const edgeSelect = document.getElementById(`${idPrefix}pistonEdgeSelect`);
+    const lockCrossCheckbox = document.getElementById(`${idPrefix}lockCrossDim`);
+    const btnAutoSnap = document.getElementById(`${idPrefix}btnAutoSnap`);
+    const controlsDiv = document.getElementById(`${idPrefix}pistonBindControls`);
+
+    const refreshBinding = () => {
+      const pid = bindSelect?.value;
+      if (!pid) {
+        item.unbindPiston();
+        if (controlsDiv) controlsDiv.style.display = 'none';
+      } else {
+        const p = engine.getPistonById(pid);
+        if (p) {
+          const edge = edgeSelect?.value || 'right';
+          const lock = lockCrossCheckbox ? lockCrossCheckbox.checked : true;
+          item.bindToPiston(p, edge, lock);
+          if (controlsDiv) controlsDiv.style.display = 'block';
+        }
+      }
+      updateElementsList();
+      updatePopupPosition();
+    };
+
+    bindSelect?.addEventListener('change', () => {
+      const pid = bindSelect.value;
+      if (pid) {
+        const p = engine.getPistonById(pid);
+        if (p) {
+          const sMidX = item.x + item.width * 0.5;
+          const sMidY = item.y + item.height * 0.5;
+          let bestEdge = 'right';
+          if (p.orientation === 'horizontal') {
+            bestEdge = (sMidX < p.x) ? 'right' : 'left';
+          } else {
+            bestEdge = (sMidY < p.y) ? 'bottom' : 'top';
+          }
+          if (edgeSelect) edgeSelect.value = bestEdge;
+        }
+      }
+      refreshBinding();
+    });
+
+    edgeSelect?.addEventListener('change', refreshBinding);
+    lockCrossCheckbox?.addEventListener('change', refreshBinding);
+    btnAutoSnap?.addEventListener('click', () => {
+      const p = engine.getPistonById(bindSelect?.value);
+      if (p) {
+        item.updateBoundsFromPiston(p);
+        updatePopupPosition();
+      }
+    });
+
     document.getElementById(`${idPrefix}sensName`)?.addEventListener('input', (e) => {
       item.label = e.target.value.trim() || 'Chamber';
       updateElementsList();
@@ -18368,6 +18628,16 @@ window.addEventListener('mousemove', (e) => {
         if (newW >= 20) { item.x = coords.snapX; item.width = newW; }
         item.height = Math.max(20, coords.snapY - item.y);
       }
+      if (item instanceof SensorZone) {
+        item.volume = item.width * item.height;
+        if (item.pistonBinding && item.pistonBinding.pistonId) {
+          const pb = item.pistonBinding;
+          if (pb.edge === 'right') pb.fixedOpposite = item.x;
+          else if (pb.edge === 'left') pb.fixedOpposite = item.x + item.width;
+          else if (pb.edge === 'bottom') pb.fixedOpposite = item.y;
+          else if (pb.edge === 'top') pb.fixedOpposite = item.y + item.height;
+        }
+      }
     }
     updatePopupPosition();
     return;
@@ -18415,6 +18685,7 @@ window.addEventListener('mouseup', (e) => {
 
   const wasDraggingHandle = !!draggingHandle;
   const wasMovingSelection = isMovingSelection;
+  const draggedHandleItem = draggingHandle?.item;
 
   if (draggingHandle) draggingHandle = null;
   if (isMovingSelection) isMovingSelection = false;
@@ -18424,6 +18695,24 @@ window.addEventListener('mouseup', (e) => {
   renderer.draftInfo = null;
 
   if (wasDraggingHandle || wasMovingSelection) {
+    if (draggedHandleItem instanceof SensorZone && !draggedHandleItem.pistonBinding) {
+      const snap = findPistonSnap(draggedHandleItem.x, draggedHandleItem.y, draggedHandleItem.width, draggedHandleItem.height);
+      if (snap) {
+        draggedHandleItem.bindToPiston(snap.piston, snap.edge, true);
+        updateElementsList();
+      }
+    } else if (wasMovingSelection) {
+      selectedItems.forEach(it => {
+        if (it instanceof SensorZone && !it.pistonBinding) {
+          const snap = findPistonSnap(it.x, it.y, it.width, it.height);
+          if (snap) {
+            it.bindToPiston(snap.piston, snap.edge, true);
+          }
+        }
+      });
+      updateElementsList();
+    }
+    updatePopupPosition();
     return;
   }
 
@@ -18612,6 +18901,10 @@ window.addEventListener('mouseup', (e) => {
         x: minX, y: minY, width: w, height: h,
         color: toolConfigs.sensor.color || '#38bdf8'
       });
+      const snap = findPistonSnap(minX, minY, w, h);
+      if (snap) {
+        sZone.bindToPiston(snap.piston, snap.edge, true);
+      }
       selectedItems = [sZone];
       updateElementsList();
     }
@@ -18619,6 +18912,46 @@ window.addEventListener('mouseup', (e) => {
 
   dragStartWorld = null;
 });
+
+// Piston Snap Detector for Sensor Chambers
+function findPistonSnap(x, y, width, height, threshold = 22) {
+  if (!engine.pistons || engine.pistons.length === 0) return null;
+  const cLeft = x, cRight = x + width, cTop = y, cBottom = y + height;
+  let best = null;
+  let minDiff = threshold + 1;
+
+  for (let i = 0; i < engine.pistons.length; i++) {
+    const p = engine.pistons[i];
+    const pb = p.getBounds();
+
+    if (p.orientation === 'horizontal') {
+      const yOverlap = (cTop <= pb.bottom + threshold && cBottom >= pb.top - threshold);
+      const dRight = Math.abs(cRight - pb.left);
+      if (yOverlap && dRight < minDiff) {
+        minDiff = dRight;
+        best = { piston: p, edge: 'right', snappedCoord: pb.left };
+      }
+      const dLeft = Math.abs(cLeft - pb.right);
+      if (yOverlap && dLeft < minDiff) {
+        minDiff = dLeft;
+        best = { piston: p, edge: 'left', snappedCoord: pb.right };
+      }
+    } else { // vertical
+      const xOverlap = (cLeft <= pb.right + threshold && cRight >= pb.left - threshold);
+      const dBottom = Math.abs(cBottom - pb.top);
+      if (xOverlap && dBottom < minDiff) {
+        minDiff = dBottom;
+        best = { piston: p, edge: 'bottom', snappedCoord: pb.top };
+      }
+      const dTop = Math.abs(cTop - pb.bottom);
+      if (xOverlap && dTop < minDiff) {
+        minDiff = dTop;
+        best = { piston: p, edge: 'top', snappedCoord: pb.bottom };
+      }
+    }
+  }
+  return best;
+}
 
 // Circle Wall Generator
 function createCircleWall(center, radius) {
@@ -18803,6 +19136,17 @@ function deleteSelectedItems() {
   engine.textLabels = engine.textLabels.filter(l => !deleteSet.has(l));
   engine.particleGroups = (engine.particleGroups || []).filter(g => !deleteSet.has(g));
   engine.elements = (engine.elements || []).filter(el => !deleteSet.has(el));
+
+  // Unbind any sensors bound to pistons being deleted
+  const deletedPistons = selectedItems.filter(item => item instanceof Piston);
+  if (deletedPistons.length > 0) {
+    const deletedPistonIds = new Set(deletedPistons.map(p => p.id));
+    engine.sensors.forEach(s => {
+      if (s.pistonBinding && deletedPistonIds.has(s.pistonBinding.pistonId)) {
+        s.unbindPiston();
+      }
+    });
+  }
 
   // Delete particles belonging to deleted groups
   const groupsToDelete = Array.from(deleteSet).filter(item => item instanceof ParticleGroup);

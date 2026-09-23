@@ -136,6 +136,25 @@ export class Engine {
     return p;
   }
 
+  getPistonById(id) {
+    if (!id) return null;
+    return this.pistons.find(p => p.id === id) || null;
+  }
+
+  updateBoundSensors() {
+    for (let i = 0; i < this.sensors.length; i++) {
+      const s = this.sensors[i];
+      if (s.pistonBinding && s.pistonBinding.pistonId) {
+        const p = this.getPistonById(s.pistonBinding.pistonId);
+        if (p) {
+          s.updateBoundsFromPiston(p);
+        } else {
+          s.unbindPiston();
+        }
+      }
+    }
+  }
+
   addSensor(x, y, width, height, options = {}) {
     let opts = options;
     if (typeof x === 'object' && x !== null) {
@@ -485,6 +504,7 @@ export class Engine {
         for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
         for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
         for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+        this.updateBoundSensors();
 
         this.syncWallsToGPU();
         this.syncSinksToGPU();
@@ -539,6 +559,7 @@ export class Engine {
     for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
     for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
     for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
+    this.updateBoundSensors();
     for (let i = 0; i < this.sensors.length; i++) this.sensors[i].updateMeasurements(this.particles, this.totalTime);
 
     this._updateStats();
@@ -1173,6 +1194,7 @@ export class Engine {
     }
 
     // Forward telemetry to sensor chambers
+    this.updateBoundSensors();
     for (let i = 0; i < this.sensors.length; i++) {
       this.sensors[i].updateMeasurementsFromGPU(floats, liveCount, scaleFactor, this.totalTime);
     }

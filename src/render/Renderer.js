@@ -622,12 +622,39 @@ export class Renderer {
     ctx.strokeRect(sensor.x, sensor.y, sensor.width, sensor.height);
     ctx.setLineDash([]);
 
+    // Bound Piston Edge Glow Indicator
+    if (sensor.pistonBinding && sensor.pistonBinding.pistonId) {
+      const edge = sensor.pistonBinding.edge;
+      ctx.save();
+      ctx.strokeStyle = dedicatedColor;
+      ctx.shadowColor = dedicatedColor;
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      if (edge === 'right') {
+        ctx.moveTo(sensor.x + sensor.width, sensor.y);
+        ctx.lineTo(sensor.x + sensor.width, sensor.y + sensor.height);
+      } else if (edge === 'left') {
+        ctx.moveTo(sensor.x, sensor.y);
+        ctx.lineTo(sensor.x, sensor.y + sensor.height);
+      } else if (edge === 'bottom') {
+        ctx.moveTo(sensor.x, sensor.y + sensor.height);
+        ctx.lineTo(sensor.x + sensor.width, sensor.y + sensor.height);
+      } else if (edge === 'top') {
+        ctx.moveTo(sensor.x, sensor.y);
+        ctx.lineTo(sensor.x + sensor.width, sensor.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Header label with chamber name in dedicated color and live temperature
     ctx.fillStyle = isSelected ? '#ffffff' : dedicatedColor;
     ctx.font = 'bold 11.5px Inter, sans-serif';
     ctx.textAlign = 'center';
+    const bindTag = (sensor.pistonBinding && sensor.pistonBinding.pistonId) ? ' 🔗' : '';
     const tempText = hasParticles ? ` [${Math.round(sensor.temperature)} K]` : ' (Empty)';
-    ctx.fillText(`${sensor.label}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
+    ctx.fillText(`${sensor.label}${bindTag}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
 
     // Drift Flow Indicator Arrow (only when macroscopic drift exceeds thermal fluctuation)
     if (sensor.displayDriftSpeed > 0) {

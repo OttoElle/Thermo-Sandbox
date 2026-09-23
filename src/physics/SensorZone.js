@@ -33,6 +33,18 @@ export class SensorZone {
     this.historyCount = [];
     this.historyKineticEnergy = [];
     this.historyDrift = [];
+
+    // Piston Binding for Dynamic Chamber Expansion / Compression
+    if (options.pistonBinding) {
+      this.pistonBinding = {
+        pistonId: options.pistonBinding.pistonId || null,
+        edge: options.pistonBinding.edge || 'right',
+        lockCrossDimension: options.pistonBinding.lockCrossDimension !== false,
+        fixedOpposite: options.pistonBinding.fixedOpposite !== undefined ? options.pistonBinding.fixedOpposite : null
+      };
+    } else {
+      this.pistonBinding = null;
+    }
   }
 
   contains(pos) {
@@ -163,6 +175,77 @@ export class SensorZone {
     this.displayDriftSpeed = 0;
   }
 
+  bindToPiston(piston, edge = 'right', lockCrossDimension = true) {
+    if (!piston) {
+      this.unbindPiston();
+      return;
+    }
+    let fixedOpposite = null;
+    if (edge === 'right') {
+      fixedOpposite = this.x;
+    } else if (edge === 'left') {
+      fixedOpposite = this.x + this.width;
+    } else if (edge === 'bottom') {
+      fixedOpposite = this.y;
+    } else if (edge === 'top') {
+      fixedOpposite = this.y + this.height;
+    }
+
+    this.pistonBinding = {
+      pistonId: piston.id,
+      edge,
+      lockCrossDimension,
+      fixedOpposite
+    };
+    this.updateBoundsFromPiston(piston);
+  }
+
+  unbindPiston() {
+    this.pistonBinding = null;
+  }
+
+  updateBoundsFromPiston(piston) {
+    if (!this.pistonBinding || !this.pistonBinding.pistonId || !piston) return;
+    const pb = this.pistonBinding;
+    const pBounds = piston.getBounds();
+
+    if (piston.orientation === 'horizontal') {
+      if (pb.edge === 'right') {
+        // Chamber is to the left of piston; its right edge matches the piston's left face
+        const targetRight = pBounds.left;
+        this.width = Math.max(15, targetRight - this.x);
+      } else if (pb.edge === 'left') {
+        // Chamber is to the right of piston; its left edge matches the piston's right face
+        const fixedRight = (pb.fixedOpposite !== null && pb.fixedOpposite !== undefined) ? pb.fixedOpposite : (this.x + this.width);
+        const targetLeft = pBounds.right;
+        this.x = targetLeft;
+        this.width = Math.max(15, fixedRight - targetLeft);
+      }
+      if (pb.lockCrossDimension !== false) {
+        this.y = pBounds.top;
+        this.height = piston.height;
+      }
+    } else { // vertical orientation
+      if (pb.edge === 'bottom') {
+        // Chamber is above piston; its bottom edge matches the piston's top face
+        const targetBottom = pBounds.top;
+        this.height = Math.max(15, targetBottom - this.y);
+      } else if (pb.edge === 'top') {
+        // Chamber is below piston; its top edge matches the piston's bottom face
+        const fixedBottom = (pb.fixedOpposite !== null && pb.fixedOpposite !== undefined) ? pb.fixedOpposite : (this.y + this.height);
+        const targetTop = pBounds.bottom;
+        this.y = targetTop;
+        this.height = Math.max(15, fixedBottom - targetTop);
+      }
+      if (pb.lockCrossDimension !== false) {
+        this.x = pBounds.left;
+        this.width = piston.width;
+      }
+    }
+
+    this.volume = this.width * this.height;
+  }
+
   toJSON() {
     return {
       id: this.id,
@@ -171,7 +254,8 @@ export class SensorZone {
       y: this.y,
       width: this.width,
       height: this.height,
-      color: this.color
+      color: this.color,
+      pistonBinding: this.pistonBinding ? { ...this.pistonBinding } : null
     };
   }
 
