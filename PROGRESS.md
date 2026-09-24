@@ -362,10 +362,35 @@
   - Added automated tests in `tests/test_gpu_compute_cdp.py` validating GPU sink absorption (25 inside particles absorbed, 15 outside particles preserved), GPU buffer compaction, immediate non-absorption upon sink deletion (10/10 particles survive in the same area), global drift history recording, and drift chart rendering.
   - 100% pass across all 6 verification stages in `tests/verify_all.py`.
 
+### Z. Dynamische Sensor-Chamber Kolbenbindung & P-V-Arbeitsberechnung (Thermodynamische Kreisprozess-Auswertung)
+- [x] **1. Sensor-Chamber Piston Binding Geometrie & Datenstruktur (`SensorZone.js`)**:
+  - `pistonBinding` Datenstruktur implementiert (`pistonId`, `edge: 'right' | 'left' | 'top' | 'bottom'`, `lockCrossDimension`, `fixedOpposite`).
+  - Methoden `bindToPiston(piston, edge, lockCrossDimension)`, `unbindPiston()` und `updateBoundsFromPiston(piston)`.
+  - Dynamische Anpassung von Kammerbreite/-höhe und Live-Volumen $V(t) = \text{width} \cdot \text{height}$ an die Kolbenfläche mit Minimum-Clearance-Clamping ($15\,\text{px}$).
+  - Vollständige Serialisierung in `toJSON()` und Deserialisierung in `fromJSON()`.
+- [x] **2. Simulation-Loop & GPU-Synchronisation (`Engine.js`)**:
+  - `getPistonById(id)` Lookup-Helper hinzugefügt.
+  - `updateBoundSensors()` synchronisiert die Geometrie aller gebundenen Kammern unmittelbar nach Kolbenbewegungen im CPU-Substep-Zweig, im WebGPU-Compute-Zweig und vor der Weiterleitung der GPU-Telemetrie (`readGPUBufferTelemetry`).
+- [x] **3. Thermodynamische Kreisprozess-Arbeit ($W = -\int P \, dV$) & Indikatordiagramm (`ChamberChart.js`)**:
+  - Trapezförmige numerische Integration der mechanischen Volumenarbeit $W = -\sum_{i=1}^{N-1} \frac{P_i + P_{i-1}}{2} (V_i - V_{i-1})$ im $P$-$V$-Diagramm.
+  - Dynamischer Arbeits-Badge oben rechts im Chart ($W = \pm\text{X.X J}$ / $\text{mJ}$ / $\text{kJ}$) mit Farbcodierung (Grün für abgegebene Netto-Arbeit, Blau für Kompression).
+  - Live-Zustandspunkt $(V(t), P(t))$ mit pulsierender Markierung auf der $P$-$V$-Kurve sowie Volumen-Achsenbeschriftung ($V_\text{min}$, $V_\text{max}$).
+- [x] **4. Visuelle Indikatoren auf dem Canvas (`Renderer.js`)**:
+  - Leuchtende Akzentlinie entlang der gekoppelten Kante bündig an der Kolbenfläche (`shadowBlur = 10`, `lineWidth = 3.5`).
+  - Koppel-Symbol (`🔗`) im Kammer-Header-Label (`Kammer A 🔗 [300 K]`).
+- [x] **5. Interaktives Einrasten & UI-Inspektor (`main.js`)**:
+  - Chamber-Popup mit „Piston Binding“-Dropdown, Kanten-/Flächen-Auswahl, Checkbox „Lock Span to Piston“ und „Snap Now“-Aktion.
+  - Interaktives Einrasten (`findPistonSnap`) beim Zeichnen neuer Kammern oder beim Ziehen von Griffen/Verschieben auf dem Canvas ($\sim 20\,\text{px}$ Fangradius).
+  - Dynamische Aktualisierung der Gegenkante (`fixedOpposite`) beim Resizen der festen Seite.
+  - Sauberes Entkoppeln beim Löschen von Kolben in `deleteSelectedItems()`.
+- [x] **6. Automatische Verifikation (`tests/test_gpu_compute_cdp.py`)**:
+  - Abschnitt 11 verifiziert motorisierte Kolbenoszillation, synchrone Kantenverfolgung (`widthFollowedPiston: true`), dynamische Volumenänderung (`volumeChanged: true`), Entkopplung (`isUnbound: true`) und $P$-$V$-Chart-Rendering.
+  - 100% Erfolgsquote über alle 6 Verifikationsstufen in `tests/verify_all.py`.
+
 ---
 
-## 3. Next Session Starting Tasks
-- [ ] Add CSV export for chamber and dashboard time-series telemetry data.
-- [ ] Add interactive particle inspector (click single particle to track trajectory and velocity history).
-- [ ] GPU thermal boundaries & heat exchange for porous matrices (Regenerator/HeatExchanger).
+## 3. Nächste Schritte (Next Session Starting Tasks)
+- [ ] **CSV- & JSON-Export für Chamber- & Dashboard-Telemetriedaten**: Export von Zeitreihen ($T(t), P(t), V(t), W_\text{net}$) als CSV/JSON für externe thermodynamische Auswertungen (z. B. Python/Excel).
+- [ ] **Interaktiver Partikel-Inspektor**: Klick auf ein einzelnes Partikel zur Verfolgung von Trajektorie, Kollisionshistorie und Geschwindigkeitsvektor.
+- [ ] **GPU-Thermische Grenzflächen für poröse Medien**: WebGPU-Shader-Integration für volumetrischen Wärmeaustausch in Regeneratoren und Wärmetauschern (`RegeneratorMatrix` / `HeatExchanger`).
 

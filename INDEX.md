@@ -60,7 +60,7 @@
 - **Regulator.js**: Particle population regulator maintaining setpoint N with configurable hysteresis deadband.
 - **Emitter.js**: Directional & radial particle generator with velocity and temperature distribution control.
 - **Sink.js**: Vacuum particle removal absorber with absorption efficiency.
-- **SensorZone.js**: Spatial measurement chamber computing real-time T, P, V, N, and filtered drift velocity with single-pass variance.
+- **SensorZone.js**: Spatial measurement chamber computing real-time T, P, V, N, dynamic piston face binding, and filtered drift velocity with single-pass variance.
 - **TextLabel.js**: Canvas text annotations and formula labels.
 - **Engine.js**: Core simulation coordinator running numerical integration, zero-allocation in-place compaction, analytical Lennard-Jones, gravity, cycle sequencer execution, GPU compute coordination, Continuous Collision Detection (CCD), and state save/restore.
 
@@ -70,7 +70,7 @@
 - **Renderer.js**: Dual-layer canvas coordinator orchestrating WebGPU hardware-accelerated particle passes on `#gpuCanvas` and interactive CAD geometry/UI overlay on 2D `#simCanvas`.
 
 ## src/analytics/ (Telemetry & Charts)
-- **ChamberChart.js**: Multi-metric chamber telemetry renderer and dynamic DashboardChart graph engine.
+- **ChamberChart.js**: Multi-metric chamber telemetry renderer, dynamic DashboardChart graph engine, and thermodynamic cycle work integration (W = -∫ P dV).
 - **TempTimeChart.js**: Global system continuous temperature history curve.
 - **VelHistChart.js**: Real-time velocity distribution histogram with theoretical Maxwell-Boltzmann curve.
 - **MaxwellBoltzmann.js**: Maxwell-Boltzmann probability distribution functions for comparison.
