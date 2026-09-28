@@ -2,8 +2,12 @@ import { particleComputeWGSL, GPU_LAYOUT } from './ParticleGPUComputeShader.js';
 
 // Bindings each entry point statically uses (pipelines use layout: 'auto').
 const PIPELINE_BINDINGS = {
-  clear: [0, 4],
-  build: [0, 1, 4, 5],
+  clearCells: [0, 8, 10],
+  countCells: [0, 1, 5, 10],
+  scanBlocks: [4, 11],
+  scanTotals: [0, 11],
+  scanAdd: [4, 11],
+  scatter: [0, 1, 2, 4, 5, 8],
   pairs: [0, 1, 4, 5],
   integrate: [0, 1, 2, 3, 4, 5, 6, 7, 8],
   telemetry: [0, 1, 7, 9],
@@ -13,6 +17,13 @@ const PIPELINE_BINDINGS = {
 };
 
 const MAX_STAGING_BUFFERS = 3;
+
+function segmentPointDistance(a, b, px, py) {
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const lenSq = abx * abx + aby * aby;
+  const t = lenSq > 1e-9 ? Math.max(0, Math.min(1, ((px - a.x) * abx + (py - a.y) * aby) / lenSq)) : 0;
+  return Math.hypot(a.x + t * abx - px, a.y + t * aby - py);
+}
 const HISTORY_CAPACITY = 16384;
 
 /**
@@ -41,7 +52,7 @@ export class ParticleGPUCompute {
     this.regeneratorSlotBase = []; // first thermalTemps slot per regenerator, -1 if not uploaded
     this.pingPong = 0; // 0: A is in, B is out; 1: B is in, A is out
 
-    this.gridTableSize = 131072;
+    this.gridTableSize = GPU_LAYOUT.MIN_GRID_TABLE; // resized per frame, see _gridTableSizeFor()
     this.cellSize = 16.0;
 
     this.epoch = 0;
@@ -50,7 +61,7 @@ export class ParticleGPUCompute {
     this._pending = new Float32Array(1024 * GPU_LAYOUT.PARTICLE_FLOATS);
     this._pendingCount = 0;
 
-    this.uniformData = new ArrayBuffer(80);
+    this.uniformData = new ArrayBuffer(112);
     this.uniformFloats = new Float32Array(this.uniformData);
     this.uniformU32 = new Uint32Array(this.uniformData);
     this._params = {
@@ -66,6 +77,9 @@ export class ParticleGPUCompute {
     this._zoneF32 = new Float32Array(this._zoneData);
     this._zoneU32 = new Uint32Array(this._zoneData);
     this._thermalTemps = new Float32Array(GPU_LAYOUT.MAX_SLICES);
+    // Wall broadphase grid (see _updateWallGrid); W = 0 means test every wall
+    this._wallGrid = { W: 0, H: 0, cell: 1, originX: 0, originY: 0, globalCount: 0 };
+    this._wallGridSignature = null;
 
     this._statBytes = GPU_LAYOUT.STAT_WORDS * 4;
     this._counterBytes = GPU_LAYOUT.COUNTER_WORDS * 4;
@@ -87,11 +101,12 @@ export class ParticleGPUCompute {
     const particleUsage = s | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
     this.bufferA = make('ComputeBufA', cap * 32, particleUsage);
     this.bufferB = make('ComputeBufB', cap * 32, particleUsage);
-    this.uniformBuffer = make('ComputeUniforms', 80, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    this.uniformBuffer = make('ComputeUniforms', 112, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.wallsBuffer = make('ComputeWalls', this.maxWalls * 64, s | GPUBufferUsage.COPY_DST);
-    this.cellHeadsBuffer = make('ComputeCellHeads', this.gridTableSize * 4, s | GPUBufferUsage.COPY_DST);
+    this.cellBuffer = make('ComputeGridCells', GPU_LAYOUT.MAX_GRID_TABLE * 2 * 4, s);
+    this.blockSumsBuffer = make('ComputeScanBlockSums', GPU_LAYOUT.MAX_SCAN_BLOCKS * 4, s);
     this.gridLinksBuffer = make('ComputeGridLinks', cap * 2 * 4, s);
-    this.thermalTempsBuffer = make('ComputeThermalTemps', GPU_LAYOUT.MAX_SLICES * 4, s | GPUBufferUsage.COPY_DST);
+    this.auxBuffer = make('ComputeAux', GPU_LAYOUT.AUX_WORDS * 4, s | GPUBufferUsage.COPY_DST);
     this.zonesBuffer = make('ComputeZones', this._zoneData.byteLength, s | GPUBufferUsage.COPY_DST);
     this.countersBuffer = make('ComputeCounters', this._counterBytes, s | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
     this.statsBuffer = make('ComputeStats', this._statBytes, s | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
@@ -109,8 +124,12 @@ export class ParticleGPUCompute {
       label: `ParticleCompute_${entryPoint}`, layout: 'auto', compute: { module, entryPoint }
     });
     this.pipelines = {
-      clear: makePipe('cs_clear_grid'),
-      build: makePipe('cs_build_grid'),
+      clearCells: makePipe('cs_clear_cells'),
+      countCells: makePipe('cs_count_cells'),
+      scanBlocks: makePipe('cs_scan_blocks'),
+      scanTotals: makePipe('cs_scan_totals'),
+      scanAdd: makePipe('cs_scan_add'),
+      scatter: makePipe('cs_scatter'),
       pairs: makePipe('cs_find_pairs'),
       integrate: makePipe('cs_integrate'),
       telemetry: makePipe('cs_telemetry'),
@@ -119,20 +138,34 @@ export class ParticleGPUCompute {
       compactTail: makePipe('cs_compact_tail')
     };
     // One bind group set per ping-pong direction: [A->B, B->A]
+    // PIPELINE_BINDINGS must match each entry point's auto layout exactly; a
+    // mismatch silently turns every dispatch into a no-op, so surface it here.
+    device.pushErrorScope('validation');
     this.bindGroups = [
       this._makeBindGroups(this.bufferA, this.bufferB),
       this._makeBindGroups(this.bufferB, this.bufferA)
     ];
+    device.popErrorScope().then(err => {
+      if (err) console.error(`ParticleGPUCompute pipeline/bind group setup: ${err.message}`);
+    });
   }
 
-  _makeBindGroups(inBuf, outBuf) {
-    const resources = {
-      0: this.uniformBuffer, 1: inBuf, 2: outBuf, 3: this.wallsBuffer,
-      4: this.cellHeadsBuffer, 5: this.gridLinksBuffer, 6: this.thermalTempsBuffer,
-      7: this.zonesBuffer, 8: this.countersBuffer, 9: this.statsBuffer
+  // `cur` holds the particle state between substeps; `other` receives the
+  // cell-sorted copy that pairs/integrate read before writing back to `cur`.
+  _makeBindGroups(cur, other) {
+    const shared = {
+      0: this.uniformBuffer, 3: this.wallsBuffer, 4: this.cellBuffer, 5: this.gridLinksBuffer,
+      6: this.auxBuffer, 7: this.zonesBuffer, 8: this.countersBuffer, 9: this.statsBuffer,
+      10: this.cellBuffer, 11: this.blockSumsBuffer
+    };
+    const io = {
+      countCells: [cur, null], scatter: [cur, other], pairs: [other, null], integrate: [other, cur],
+      telemetry: [cur, null], compact: [cur, other], compactTail: [null, other]
     };
     const groups = {};
     for (const name of Object.keys(PIPELINE_BINDINGS)) {
+      const [inBuf, outBuf] = io[name] || [null, null];
+      const resources = Object.assign({ 1: inBuf, 2: outBuf }, shared);
       groups[name] = this.device.createBindGroup({
         label: `ParticleCompute_${name}`,
         layout: this.pipelines[name].getBindGroupLayout(0),
@@ -140,6 +173,13 @@ export class ParticleGPUCompute {
       });
     }
     return groups;
+  }
+
+  // Power of two >= 2 * slots so buckets stay short, clamped to the table limits.
+  _gridTableSizeFor(count) {
+    let size = GPU_LAYOUT.MIN_GRID_TABLE;
+    while (size < count * 2 && size < GPU_LAYOUT.MAX_GRID_TABLE) size *= 2;
+    return size;
   }
 
   _currentBindGroups() {
@@ -202,6 +242,88 @@ export class ParticleGPUCompute {
       ptr += 16;
     }
     this.device.queue.writeBuffer(this.wallsBuffer, 0, this._wallData, 0, count * 64);
+    this._updateWallGrid(walls, count);
+  }
+
+  // Rebuilds the wall broadphase when the static wall geometry or the set of
+  // dynamic segments changed. Dynamic segments ('dynamic: true': piston faces,
+  // throttle wings) go into a global list tested by every particle.
+  _updateWallGrid(walls, count) {
+    const L = GPU_LAYOUT;
+    let h = count >>> 0;
+    const mix = (v) => { h = Math.imul(h ^ (Math.round(v * 16) | 0), 16777619) >>> 0; };
+    for (let i = 0; i < count; i++) {
+      const w = walls[i];
+      if (w.dynamic) { mix(-1 - i); continue; }
+      mix(w.p1.x); mix(w.p1.y); mix(w.p2.x); mix(w.p2.y); mix(w.thickness !== undefined ? w.thickness : 4);
+    }
+    if (h === this._wallGridSignature) return;
+    this._wallGridSignature = h;
+
+    const global = [];
+    const statics = [];
+    for (let i = 0; i < count; i++) (walls[i].dynamic ? global : statics).push(i);
+    const pad = (w) => L.WALL_GRID_MARGIN + (w.thickness !== undefined ? w.thickness : 4) * 0.5;
+
+    const grid = this._wallGrid;
+    grid.globalCount = global.length;
+    if (statics.length === 0) {
+      Object.assign(grid, { W: 1, H: 1, cell: 1, originX: -1e9, originY: -1e9 });
+      const ranges = new Uint32Array([global.length, 0]);
+      this.device.queue.writeBuffer(this.auxBuffer, L.AUX_RANGE_BASE * 4, ranges);
+      if (global.length) this.device.queue.writeBuffer(this.auxBuffer, L.AUX_LIST_BASE * 4, new Uint32Array(global));
+      return;
+    }
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const i of statics) {
+      const w = walls[i], r = pad(w);
+      minX = Math.min(minX, w.p1.x - r, w.p2.x - r); maxX = Math.max(maxX, w.p1.x + r, w.p2.x + r);
+      minY = Math.min(minY, w.p1.y - r, w.p2.y - r); maxY = Math.max(maxY, w.p1.y + r, w.p2.y + r);
+    }
+    const dim = L.MAX_WALL_GRID_DIM;
+    const cell = Math.max(32, Math.max(maxX - minX, maxY - minY) / (dim - 0.5));
+    const W = Math.min(dim, Math.max(1, Math.ceil((maxX - minX) / cell)));
+    const H = Math.min(dim, Math.max(1, Math.ceil((maxY - minY) / cell)));
+
+    // A wall goes into every cell whose centre lies within pad + half diagonal of it
+    const halfDiag = cell * Math.SQRT1_2;
+    const cells = Array.from({ length: W * H }, () => []);
+    let refs = 0;
+    for (const i of statics) {
+      const w = walls[i], r = pad(w);
+      const gx0 = Math.max(0, Math.floor((Math.min(w.p1.x, w.p2.x) - r - minX) / cell));
+      const gx1 = Math.min(W - 1, Math.floor((Math.max(w.p1.x, w.p2.x) + r - minX) / cell));
+      const gy0 = Math.max(0, Math.floor((Math.min(w.p1.y, w.p2.y) - r - minY) / cell));
+      const gy1 = Math.min(H - 1, Math.floor((Math.max(w.p1.y, w.p2.y) + r - minY) / cell));
+      for (let gy = gy0; gy <= gy1; gy++) {
+        for (let gx = gx0; gx <= gx1; gx++) {
+          const cx = minX + (gx + 0.5) * cell, cy = minY + (gy + 0.5) * cell;
+          if (segmentPointDistance(w.p1, w.p2, cx, cy) <= r + halfDiag) {
+            cells[gx + gy * W].push(i);
+            refs++;
+          }
+        }
+      }
+    }
+    if (global.length + refs > L.MAX_WALL_REFS) {
+      Object.assign(grid, { W: 0, H: 0 }); // too many references: test every wall
+      return;
+    }
+
+    const ranges = new Uint32Array(2 * W * H);
+    const list = new Uint32Array(global.length + refs);
+    list.set(global);
+    let offset = global.length;
+    for (let c = 0; c < cells.length; c++) {
+      ranges[2 * c] = offset;
+      ranges[2 * c + 1] = cells[c].length;
+      list.set(cells[c], offset);
+      offset += cells[c].length;
+    }
+    Object.assign(grid, { W, H, cell, originX: minX, originY: minY });
+    this.device.queue.writeBuffer(this.auxBuffer, L.AUX_RANGE_BASE * 4, ranges);
+    this.device.queue.writeBuffer(this.auxBuffer, L.AUX_LIST_BASE * 4, list);
   }
 
   _writeZone(slot, x, y, w, h, active, direction, tempFilterMode, filterTemperature, maxCount) {
@@ -278,7 +400,7 @@ export class ParticleGPUCompute {
     this.thermalZoneCount = zone;
 
     this.device.queue.writeBuffer(this.zonesBuffer, 0, this._zoneData);
-    if (slot > 0) this.device.queue.writeBuffer(this.thermalTempsBuffer, 0, temps, 0, slot);
+    if (slot > 0) this.device.queue.writeBuffer(this.auxBuffer, 0, temps, 0, slot);
     if (regulatorQuota) {
       this.device.queue.writeBuffer(this.countersBuffer, L.REG_QUOTA_BASE * 4,
         regulatorQuota.buffer, regulatorQuota.byteOffset, L.MAX_REGULATORS * 4);
@@ -370,6 +492,7 @@ export class ParticleGPUCompute {
 
   _writeUniforms() {
     const P = this._params;
+    this.gridTableSize = this._gridTableSizeFor(this.count);
     const bounds = P.bounds;
     const hasBounds = !!(bounds && typeof bounds.minX === 'number' && typeof bounds.maxX === 'number');
     const subSteps = Math.max(1, P.subSteps | 0);
@@ -393,6 +516,16 @@ export class ParticleGPUCompute {
     this.uniformU32[17] = this.regulatorCount;
     this.uniformU32[18] = this.sensorCount;
     this.uniformU32[19] = this.thermalZoneCount;
+    // Square-ish table: width = 2^ceil(log2(size) / 2)
+    this.uniformU32[20] = 1 << Math.ceil(Math.log2(this.gridTableSize) / 2);
+    const wg = this._wallGrid;
+    this.uniformU32[21] = wg.W;
+    this.uniformU32[22] = wg.H;
+    this.uniformFloats[23] = wg.cell;
+    this.uniformFloats[24] = wg.originX;
+    this.uniformFloats[25] = wg.originY;
+    this.uniformFloats[26] = GPU_LAYOUT.WALL_GRID_MARGIN;
+    this.uniformU32[27] = wg.globalCount;
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
   }
 
@@ -402,22 +535,28 @@ export class ParticleGPUCompute {
 
     this._writeUniforms();
     const effectiveSubSteps = Math.max(1, subSteps | 0);
-    const clearGridWorkgroups = Math.ceil(this.gridTableSize / GPU_LAYOUT.WG);
+    const cellWorkgroups = Math.ceil(this.gridTableSize / GPU_LAYOUT.WG);
+    const scanBlocks = this.gridTableSize / GPU_LAYOUT.SCAN_BLOCK;
     const particleWorkgroups = Math.ceil(this.count / GPU_LAYOUT.WG);
 
     this.device.queue.writeBuffer(this.countersBuffer, GPU_LAYOUT.SUBSTEP_IDX * 4, new Uint32Array(1));
     const encoder = this.device.createCommandEncoder({ label: 'ParticleComputeEncoder' });
     // A single pass: WebGPU synchronizes storage writes between dispatches.
     const pass = encoder.beginComputePass({ label: 'ParticleComputeSubSteps' });
+    const bg = this._currentBindGroups();
+    const dispatch = (name, workgroups) => {
+      pass.setPipeline(this.pipelines[name]);
+      pass.setBindGroup(0, bg[name]);
+      pass.dispatchWorkgroups(workgroups);
+    };
     for (let s = 0; s < effectiveSubSteps; s++) {
-      const bg = this._currentBindGroups();
-      pass.setPipeline(this.pipelines.clear);
-      pass.setBindGroup(0, bg.clear);
-      pass.dispatchWorkgroups(clearGridWorkgroups);
-
-      pass.setPipeline(this.pipelines.build);
-      pass.setBindGroup(0, bg.build);
-      pass.dispatchWorkgroups(particleWorkgroups);
+      // Cell-sorted grid: count -> prefix scan -> scatter into `other` in bucket order
+      dispatch('clearCells', cellWorkgroups);
+      dispatch('countCells', particleWorkgroups);
+      dispatch('scanBlocks', scanBlocks);
+      dispatch('scanTotals', 1);
+      dispatch('scanAdd', scanBlocks);
+      dispatch('scatter', particleWorkgroups);
 
       pass.setPipeline(this.pipelines.pairs);
       pass.setBindGroup(0, bg.pairs);
@@ -430,8 +569,6 @@ export class ParticleGPUCompute {
       pass.setPipeline(this.pipelines.advance);
       pass.setBindGroup(0, bg.advance);
       pass.dispatchWorkgroups(1);
-
-      this.pingPong = 1 - this.pingPong;
     }
     pass.end();
     this.device.queue.submit([encoder.finish()]);

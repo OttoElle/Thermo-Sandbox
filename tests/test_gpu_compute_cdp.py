@@ -536,7 +536,14 @@ def run_test():
                 E.spawnGasRaster(110, 110, 380, 120, 300, 1.0, 600);
                 E.syncParticlesToGPU();
                 await run(150);
-                const blockTemp = block.temperature;
+                // Time-average: the block temperature fluctuates with individual hits
+                let blockTempSum = 0;
+                for (let i = 0; i < 60; i++) {
+                    E.step(0.016);
+                    if (i % 2 === 1) await E.awaitGPUTelemetry();
+                    blockTempSum += block.temperature;
+                }
+                const blockTemp = blockTempSum / 60;
                 const blockInside = await countWhere(p => p.pos.x > 252 && p.pos.x < 348 && p.pos.y > 252 && p.pos.y < 348);
 
                 // 13d. Permeable heat exchanger drives the gas towards its temperature
@@ -576,6 +583,33 @@ def run_test():
                 }
                 const motorSpeedRatio = motorMaxSpeed / motorPeakSpeed;
                 const motorLeaked = await countWhere(p => p.pos.x > motor.x + motor.width / 2);
+
+                // 14. Wall broadphase: many closed pillars (grid path) + a fast stream
+                // (reach beyond the grid margin -> brute-force fallback); nothing may tunnel
+                E.clear();
+                makeBox(100, 100, 1100, 1100);
+                const pillars = [];
+                for (let r = 0; r < 10; r++) {
+                    for (let c = 0; c < 10; c++) {
+                        const px = 170 + c * 95, py = 170 + r * 95, s = 24;
+                        E.addWall(px, py, px + s, py, { thickness: 2 });
+                        E.addWall(px + s, py, px + s, py + s, { thickness: 2 });
+                        E.addWall(px + s, py + s, px, py + s, { thickness: 2 });
+                        E.addWall(px, py + s, px, py, { thickness: 2 });
+                        pillars.push([px, py, s]);
+                    }
+                }
+                E.spawnGasRaster(110, 110, 980, 50, 1500, 1.0, 600);
+                for (let i = 0; i < 200; i++) {
+                    E.addParticle(120 + (i % 20) * 45, 1085 - Math.floor(i / 20) * 2, 700 * ((i % 3) - 1), -2600, 1.0);
+                }
+                E.syncParticlesToGPU();
+                E.syncWallsToGPU();
+                const gridActive = E.gpuCompute._wallGrid.W > 0;
+                await run(180);
+                const insidePillar = (p) => pillars.some(([px, py, s]) => p.pos.x > px + 1 && p.pos.x < px + s - 1 && p.pos.y > py + 1 && p.pos.y < py + s - 1);
+                const pillarsPenetrated = await countWhere(insidePillar);
+                const pillarBoxEscaped = await countWhere(p => p.pos.x < 97 || p.pos.x > 1103 || p.pos.y < 97 || p.pos.y > 1103);
 
                 return {
                     success: true,
@@ -622,6 +656,9 @@ def run_test():
                     regenGasT,
                     motorSpeedRatio,
                     motorLeaked,
+                    gridActive,
+                    pillarsPenetrated,
+                    pillarBoxEscaped,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -707,6 +744,11 @@ def run_test():
         assert val.get('regenGasT', 1e9) < 880, f"Regenerator matrix did not cool the gas (T = {val.get('regenGasT')})"
         assert val.get('motorSpeedRatio', 99) <= 1.1, f"Motorized piston exceeded its peak speed by {val.get('motorSpeedRatio')}x (teleport)"
         assert val.get('motorLeaked', 99) <= 5, f"{val.get('motorLeaked')} particles slipped past the moving piston face"
+
+        # Wall broadphase
+        assert val.get('gridActive') == True, "Wall broadphase grid was not built for the pillar field"
+        assert val.get('pillarsPenetrated') == 0, f"{val.get('pillarsPenetrated')} particles tunneled into closed pillars"
+        assert val.get('pillarBoxEscaped') == 0, f"{val.get('pillarBoxEscaped')} particles escaped the box"
 
         print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter, Telemetry & Sensor Zone tests PASSED!")
 

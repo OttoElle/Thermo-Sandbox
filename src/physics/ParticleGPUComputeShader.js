@@ -30,7 +30,24 @@ export const GPU_LAYOUT = (() => {
   L.REG_QUOTA_BASE = L.SINK_ABS_BASE + L.MAX_SINKS;
   L.COMPACT_IDX = L.REG_QUOTA_BASE + L.MAX_REGULATORS;
   L.SUBSTEP_IDX = L.COMPACT_IDX + 1; // index of the running substep within a frame
-  L.COUNTER_WORDS = L.SUBSTEP_IDX + 1;
+  L.DEAD_IDX = L.SUBSTEP_IDX + 1;    // dead particles scattered to the tail this substep
+  L.COUNTER_WORDS = L.DEAD_IDX + 1;
+
+  // Cell-sorted grid: hash table of 2 words per bucket [start, count], sized
+  // per frame to the next power of two >= 2 * particles (multiple of SCAN_BLOCK).
+  L.SCAN_BLOCK = 1024;
+  L.MIN_GRID_TABLE = 65536;
+  L.MAX_GRID_TABLE = 2097152;
+  L.MAX_SCAN_BLOCKS = L.MAX_GRID_TABLE / L.SCAN_BLOCK;
+
+  // Aux buffer: [thermal slice temperatures (f32 bits)][wall grid ranges][wall index list]
+  L.MAX_WALL_GRID_DIM = 128;
+  L.MAX_WALL_CELLS = L.MAX_WALL_GRID_DIM * L.MAX_WALL_GRID_DIM;
+  L.MAX_WALL_REFS = 65536;
+  L.WALL_GRID_MARGIN = 24;   // px: max particle radius + move per substep served by the grid
+  L.AUX_RANGE_BASE = L.MAX_SLICES;
+  L.AUX_LIST_BASE = L.AUX_RANGE_BASE + 2 * L.MAX_WALL_CELLS;
+  L.AUX_WORDS = L.AUX_LIST_BASE + L.MAX_WALL_REFS;
 
   L.ZONE_SINK_BASE = 0;
   L.ZONE_REG_BASE = L.MAX_SINKS;
@@ -56,6 +73,8 @@ struct SimParams {
   boundsEnabled: u32, cellSize: f32, gridTableSize: u32, sinkCount: u32,
   boundMin: vec2f, boundMax: vec2f,
   simModel: u32, regulatorCount: u32, sensorCount: u32, thermalZoneCount: u32,
+  gridWidth: u32, wallGridW: u32, wallGridH: u32, wallGridCell: f32,
+  wallGridOrigin: vec2f, wallGridMargin: f32, globalWallCount: u32,
 };
 
 struct Particle {
@@ -71,7 +90,7 @@ struct WallData {
 // Axis-aligned zone shared by sinks, regulators, sensor chambers and thermal
 // zones. Thermal zones reuse fields: direction = slice axis (0: y, 1: x),
 // tempFilterMode = slice count, filterTemperature = conductivity,
-// maxCount = first slot in thermalTemps, pad0 = 1 if slice heat is recorded.
+// maxCount = first temperature slot in aux, pad0 = 1 if slice heat is recorded.
 struct ZoneData {
   minPos: vec2f, maxPos: vec2f,
   isActive: u32, direction: u32, tempFilterMode: u32, filterTemperature: f32,
@@ -83,7 +102,12 @@ const WG_SIZE: u32 = ${L.WG}u;
 const WALL_EV_STRIDE: u32 = ${L.WALL_EV_STRIDE}u;
 const SLICE_EV_STRIDE: u32 = ${L.SLICE_EV_STRIDE}u;
 const SLICE_HEAT_BASE: u32 = ${L.SLICE_HEAT_BASE}u;
-const PARTNER_BASE: u32 = ${L.CAPACITY}u;
+const RANK_BASE: u32 = ${L.CAPACITY}u;
+const NO_INDEX: u32 = 0xFFFFFFFFu;
+const DEAD_IDX: u32 = ${L.DEAD_IDX}u;
+const AUX_RANGE_BASE: u32 = ${L.AUX_RANGE_BASE}u;
+const AUX_LIST_BASE: u32 = ${L.AUX_LIST_BASE}u;
+const MAX_PER_CELL: u32 = 64u;
 const ZONE_THERMAL_BASE: u32 = ${L.ZONE_THERMAL_BASE}u;
 const SINK_ABS_BASE: u32 = ${L.SINK_ABS_BASE}u;
 const REG_QUOTA_BASE: u32 = ${L.REG_QUOTA_BASE}u;
@@ -114,24 +138,34 @@ const FX_MAX: f32 = 6.0e7;
 @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
 @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
 @group(0) @binding(3) var<storage, read> walls: array<WallData>;
-@group(0) @binding(4) var<storage, read_write> cellHeads: array<atomic<i32>>;
-// gridLinks[i] = next particle in cell list, gridLinks[PARTNER_BASE + i] = best collision partner
-@group(0) @binding(5) var<storage, read_write> gridLinks: array<i32>;
-@group(0) @binding(6) var<storage, read> thermalTemps: array<f32>;
+// cellData[2b] = first sorted index of bucket b, cellData[2b + 1] = particle count.
+// Binding 10 is an atomic view of the same buffer, used while counting.
+@group(0) @binding(4) var<storage, read_write> cellData: array<u32>;
+// gridLinks[i]: bucket of particle i (count/scatter), later its best collision
+// partner in sorted order (pairs/integrate); gridLinks[RANK_BASE + i]: rank in bucket.
+@group(0) @binding(5) var<storage, read_write> gridLinks: array<u32>;
+// [0, MAX_SLICES): thermal slice temperatures as f32 bits; then wall grid
+// ranges [start, count] per cell; then the wall index list (dynamic walls first).
+@group(0) @binding(6) var<storage, read> aux: array<u32>;
 @group(0) @binding(7) var<storage, read> zones: array<ZoneData>;
 @group(0) @binding(8) var<storage, read_write> counters: array<atomic<u32>>;
 @group(0) @binding(9) var<storage, read_write> stats: array<atomic<u32>>;
+@group(0) @binding(10) var<storage, read_write> cellCounter: array<atomic<u32>>;
+@group(0) @binding(11) var<storage, read_write> blockSums: array<u32>;
 
 var<workgroup> wgAcc: array<atomic<u32>, ${L.WG_ACC_SIZE}>;
 var<workgroup> wgLiveCount: atomic<u32>;
 var<workgroup> wgBase: u32;
+var<workgroup> scanTmp: array<u32, 256>;
 
-fn hashCell(cx: i32, cy: i32, tableSize: u32) -> u32 {
-  let p1 = 73856093u;
-  let p2 = 19349663u;
-  let ux = bitcast<u32>(cx);
-  let uy = bitcast<u32>(cy);
-  return ((ux * p1) ^ (uy * p2)) % tableSize;
+// Bucket of a grid cell in a wrapping row-major table (gridWidth x gridTableSize /
+// gridWidth, both powers of two). Unlike a scattering hash this keeps
+// neighbouring cells adjacent in the cell-sorted particle buffer; cells further
+// apart than the table extent alias, which only merges buckets.
+fn cellKey(cx: i32, cy: i32) -> u32 {
+  let w = params.gridWidth;
+  let h = params.gridTableSize / w;
+  return (bitcast<u32>(cx) & (w - 1u)) + (bitcast<u32>(cy) & (h - 1u)) * w;
 }
 
 fn isDead(p: Particle) -> bool {
@@ -207,34 +241,145 @@ fn wallBounce(vel: vec2f, mass: f32, n: vec2f, wallIdx: u32) -> vec2f {
   return v;
 }
 
+// Wall candidates for one particle: the global (dynamic) list plus the grid
+// cell of its start position, or every wall when the grid cannot guarantee
+// coverage (no grid, or reach beyond the binning margin).
+struct WallCandidates { cellStart: u32, total: u32, brute: bool, };
+
+fn wallCandidates(pos: vec2f, reach: f32) -> WallCandidates {
+  var c: WallCandidates;
+  if (params.wallGridW == 0u || reach > params.wallGridMargin) {
+    c.brute = true;
+    c.total = params.wallCount;
+    return c;
+  }
+  c.brute = false;
+  c.cellStart = 0u;
+  var cellCount = 0u;
+  let g = floor((pos - params.wallGridOrigin) / params.wallGridCell);
+  if (g.x >= 0.0 && g.y >= 0.0 && g.x < f32(params.wallGridW) && g.y < f32(params.wallGridH)) {
+    let cell = u32(g.x) + u32(g.y) * params.wallGridW;
+    c.cellStart = aux[AUX_RANGE_BASE + 2u * cell];
+    cellCount = aux[AUX_RANGE_BASE + 2u * cell + 1u];
+  }
+  c.total = params.globalWallCount + cellCount;
+  return c;
+}
+
+fn wallAt(c: WallCandidates, k: u32) -> u32 {
+  if (c.brute) { return k; }
+  if (k < params.globalWallCount) { return aux[AUX_LIST_BASE + k]; }
+  return aux[AUX_LIST_BASE + c.cellStart + (k - params.globalWallCount)];
+}
+
 fn isOneWayWall(w: WallData) -> bool {
   return (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
 }
 
-@compute @workgroup_size(64)
-fn cs_clear_grid(@builtin(global_invocation_id) global_id: vec3u) {
-  let idx = global_id.x;
-  if (idx < params.gridTableSize) {
-    atomicStore(&cellHeads[idx], -1);
-  }
+fn cellOf(pos: vec2f) -> u32 {
+  let cx = i32(floor(pos.x / params.cellSize));
+  let cy = i32(floor(pos.y / params.cellSize));
+  return cellKey(cx, cy);
 }
 
 @compute @workgroup_size(64)
-fn cs_build_grid(@builtin(global_invocation_id) global_id: vec3u) {
+fn cs_clear_cells(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
-  if (idx >= params.particleCount) {
-    return;
+  if (idx < params.gridTableSize) {
+    atomicStore(&cellCounter[2u * idx + 1u], 0u);
   }
+  if (idx == 0u) { atomicStore(&counters[DEAD_IDX], 0u); }
+}
+
+@compute @workgroup_size(64)
+fn cs_count_cells(@builtin(global_invocation_id) global_id: vec3u) {
+  let idx = global_id.x;
+  if (idx >= params.particleCount) { return; }
   let p = particlesIn[idx];
   if (isDead(p)) {
-    gridLinks[idx] = -1;
+    gridLinks[idx] = NO_INDEX;
     return;
   }
-  let cx = i32(floor(p.pos.x / params.cellSize));
-  let cy = i32(floor(p.pos.y / params.cellSize));
-  let cellIdx = hashCell(cx, cy, params.gridTableSize);
-  let prevHead = atomicExchange(&cellHeads[cellIdx], i32(idx));
-  gridLinks[idx] = prevHead;
+  let cell = cellOf(p.pos);
+  gridLinks[idx] = cell;
+  gridLinks[RANK_BASE + idx] = atomicAdd(&cellCounter[2u * cell + 1u], 1u);
+}
+
+// Exclusive scan of bucket counts, SCAN_BLOCK buckets per workgroup (4 per thread).
+@compute @workgroup_size(256)
+fn cs_scan_blocks(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) lid: u32) {
+  let base = wid.x * 1024u + lid * 4u;
+  var prefix: array<u32, 4>;
+  var sum = 0u;
+  for (var k = 0u; k < 4u; k++) {
+    prefix[k] = sum;
+    sum += cellData[2u * (base + k) + 1u];
+  }
+  scanTmp[lid] = sum;
+  workgroupBarrier();
+  for (var off = 1u; off < 256u; off = off * 2u) {
+    var add = 0u;
+    if (lid >= off) { add = scanTmp[lid - off]; }
+    workgroupBarrier();
+    scanTmp[lid] += add;
+    workgroupBarrier();
+  }
+  let exclusive = scanTmp[lid] - sum;
+  for (var k = 0u; k < 4u; k++) {
+    cellData[2u * (base + k)] = exclusive + prefix[k];
+  }
+  if (lid == 255u) { blockSums[wid.x] = scanTmp[255]; }
+}
+
+// Exclusive scan of the per-block totals (up to 2048 blocks, 8 per thread).
+@compute @workgroup_size(256)
+fn cs_scan_totals(@builtin(local_invocation_index) lid: u32) {
+  let blocks = params.gridTableSize / 1024u;
+  var prefix: array<u32, 8>;
+  var sum = 0u;
+  for (var k = 0u; k < 8u; k++) {
+    let b = lid * 8u + k;
+    prefix[k] = sum;
+    if (b < blocks) { sum += blockSums[b]; }
+  }
+  scanTmp[lid] = sum;
+  workgroupBarrier();
+  for (var off = 1u; off < 256u; off = off * 2u) {
+    var add = 0u;
+    if (lid >= off) { add = scanTmp[lid - off]; }
+    workgroupBarrier();
+    scanTmp[lid] += add;
+    workgroupBarrier();
+  }
+  let exclusive = scanTmp[lid] - sum;
+  for (var k = 0u; k < 8u; k++) {
+    let b = lid * 8u + k;
+    if (b < blocks) { blockSums[b] = exclusive + prefix[k]; }
+  }
+}
+
+@compute @workgroup_size(256)
+fn cs_scan_add(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) lid: u32) {
+  let blockOffset = blockSums[wid.x];
+  let base = wid.x * 1024u + lid * 4u;
+  for (var k = 0u; k < 4u; k++) {
+    cellData[2u * (base + k)] += blockOffset;
+  }
+}
+
+// Writes particles into the other buffer in bucket order; dead ones fill the tail.
+@compute @workgroup_size(64)
+fn cs_scatter(@builtin(global_invocation_id) global_id: vec3u) {
+  let idx = global_id.x;
+  if (idx >= params.particleCount) { return; }
+  let p = particlesIn[idx];
+  let cell = gridLinks[idx];
+  if (cell == NO_INDEX) {
+    let d = atomicAdd(&counters[DEAD_IDX], 1u);
+    particlesOut[params.particleCount - 1u - d] = p;
+    return;
+  }
+  particlesOut[cellData[2u * cell] + gridLinks[RANK_BASE + idx]] = p;
 }
 
 @compute @workgroup_size(64)
@@ -243,20 +388,20 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
   if (idx >= params.particleCount) { return; }
   let p = particlesIn[idx];
   if (isDead(p)) {
-    gridLinks[PARTNER_BASE + idx] = -1;
+    gridLinks[idx] = NO_INDEX;
     return;
   }
   let cx = i32(floor(p.pos.x / params.cellSize));
   let cy = i32(floor(p.pos.y / params.cellSize));
 
-  var bestPartner = -1;
+  var bestPartner = NO_INDEX;
   var maxApproach = 0.0;
   var visitedBuckets: array<u32, 9>;
   var visitedCount = 0u;
 
   for (var dy = -1; dy <= 1; dy++) {
     for (var dx = -1; dx <= 1; dx++) {
-      let nCellIdx = hashCell(cx + dx, cy + dy, params.gridTableSize);
+      let nCellIdx = cellKey(cx + dx, cy + dy);
       var alreadyVisited = false;
       for (var v = 0u; v < visitedCount; v++) {
         if (visitedBuckets[v] == nCellIdx) {
@@ -268,11 +413,11 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
       visitedBuckets[visitedCount] = nCellIdx;
       visitedCount++;
 
-      var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
-      var loopSteps = 0;
-      while (otherIdx >= 0 && loopSteps < 48) {
-        if (otherIdx != i32(idx)) {
-          let pOther = particlesIn[u32(otherIdx)];
+      let rangeStart = cellData[2u * nCellIdx];
+      let rangeEnd = rangeStart + min(cellData[2u * nCellIdx + 1u], MAX_PER_CELL);
+      for (var otherIdx = rangeStart; otherIdx < rangeEnd; otherIdx++) {
+        if (otherIdx != idx) {
+          let pOther = particlesIn[otherIdx];
           let diff = p.pos - pOther.pos;
           let distSq = dot(diff, diff);
           let minDist = p.radius + pOther.radius;
@@ -290,12 +435,10 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
             }
           }
         }
-        otherIdx = gridLinks[u32(otherIdx)];
-        loopSteps++;
       }
     }
   }
-  gridLinks[PARTNER_BASE + idx] = bestPartner;
+  gridLinks[idx] = bestPartner;
 }
 
 @compute @workgroup_size(64)
@@ -325,7 +468,7 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
 
     for (var dy = -1; dy <= 1; dy++) {
       for (var dx = -1; dx <= 1; dx++) {
-        let nCellIdx = hashCell(cx + dx, cy + dy, params.gridTableSize);
+        let nCellIdx = cellKey(cx + dx, cy + dy);
         var alreadyVisited = false;
         for (var v = 0u; v < visitedCount; v++) {
           if (visitedBuckets[v] == nCellIdx) {
@@ -337,11 +480,11 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
         visitedBuckets[visitedCount] = nCellIdx;
         visitedCount++;
 
-        var otherIdx = atomicLoad(&cellHeads[nCellIdx]);
-        var loopSteps = 0;
-        while (otherIdx >= 0 && loopSteps < 32) {
-          if (otherIdx != i32(idx)) {
-            let pOther = particlesIn[u32(otherIdx)];
+        let rangeStart = cellData[2u * nCellIdx];
+        let rangeEnd = rangeStart + min(cellData[2u * nCellIdx + 1u], MAX_PER_CELL);
+        for (var otherIdx = rangeStart; otherIdx < rangeEnd; otherIdx++) {
+          if (otherIdx != idx) {
+            let pOther = particlesIn[otherIdx];
             let diff = p.pos - pOther.pos;
             let distSq = dot(diff, diff);
             let sigma = (p.radius + pOther.radius) * 0.9;
@@ -362,19 +505,16 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
               ljForce += diff * (forceOverDist / p.mass);
             }
           }
-          otherIdx = gridLinks[u32(otherIdx)];
-          loopSteps++;
         }
       }
     }
     p.vel += ljForce * params.dt;
   } else {
     // Ideal Gas: Mutual Pairwise Elastic Impulse
-    let partnerIdx = gridLinks[PARTNER_BASE + idx];
-    if (partnerIdx >= 0) {
-      let partnerOfOther = gridLinks[PARTNER_BASE + u32(partnerIdx)];
-      if (partnerOfOther == i32(idx)) {
-        let pOther = particlesIn[u32(partnerIdx)];
+    let partnerIdx = gridLinks[idx];
+    if (partnerIdx != NO_INDEX) {
+      if (gridLinks[partnerIdx] == idx) {
+        let pOther = particlesIn[partnerIdx];
         let diff = p.pos - pOther.pos;
         let distSq = dot(diff, diff);
         let minDist = p.radius + pOther.radius;
@@ -400,61 +540,76 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   // faces) advance by vel * dt per substep so they sweep rather than jump.
   let wallTime = f32(atomicLoad(&counters[SUBSTEP_IDX])) * params.dt;
   let moveVec = (p.pos - startPos) + p.vel * params.dt;
-  var candidatePos = startPos + moveVec;
-  var earliestT = 2.0;
-  var hitWallIdx = -1;
-  var hitNormal = vec2f(0.0, 0.0);
-  var hitEffRad = 0.0;
+  let cands = wallCandidates(startPos, p.radius + length(moveVec) + 0.1);
 
-  for (var i = 0u; i < params.wallCount; i++) {
-    let w = walls[i];
-    if (w.wallType == 1u && w.isOpen != 0u) { continue; }
-    let vRel = p.vel - w.vel;
-    let vDotN = dot(vRel, w.normal);
-    if (isOneWayWall(w) && (vDotN * w.allowedDir > 0.0)) { continue; }
+  // Up to 3 bounces per substep: after each hit the remaining motion is tested
+  // again, otherwise a particle deflected at a corner passes through the
+  // adjacent wall unchecked.
+  var segStart = startPos;
+  var segMove = moveVec;
+  var remaining = 1.0;          // fraction of this substep still to travel
+  var hitWallIdx = -1;          // last wall hit (skipped in the next test and the proximity pass)
+  for (var bounce = 0u; bounce < 3u; bounce++) {
+    let elapsed = (1.0 - remaining) * params.dt;
+    var earliestT = 2.0;
+    var hitIdx = -1;
+    var hitNormal = vec2f(0.0, 0.0);
+    var hitEffRad = 0.0;
 
-    let effRad = p.radius + w.thickness * 0.5;
-    let wp1 = w.p1 + w.vel * wallTime;
-    let seg = w.p2 - w.p1;
-    let segLenSq = dot(seg, seg);
-    if (segLenSq < 1e-6) { continue; }
+    for (var k = 0u; k < cands.total; k++) {
+      let i = wallAt(cands, k);
+      if (i32(i) == hitWallIdx) { continue; }
+      let w = walls[i];
+      if (w.wallType == 1u && w.isOpen != 0u) { continue; }
+      let vRel = p.vel - w.vel;
+      let vDotN = dot(vRel, w.normal);
+      if (isOneWayWall(w) && (vDotN * w.allowedDir > 0.0)) { continue; }
 
-    let vx = moveVec.x - w.vel.x * params.dt;
-    let vy = moveVec.y - w.vel.y * params.dt;
-    let wx = seg.x;
-    let wy = seg.y;
-    let denom = vx * wy - vy * wx;
+      let effRad = p.radius + w.thickness * 0.5;
+      let wp1 = w.p1 + w.vel * (wallTime + elapsed);
+      let seg = w.p2 - w.p1;
+      let segLenSq = dot(seg, seg);
+      if (segLenSq < 1e-6) { continue; }
 
-    if (abs(denom) > 1e-6) {
-      let dx13 = wp1.x - startPos.x;
-      let dy13 = wp1.y - startPos.y;
-      let t = (dx13 * wy - dy13 * wx) / denom;
-      let u = (dx13 * vy - dy13 * vx) / denom;
-      let wallLen = sqrt(segLenSq);
-      let eps = effRad / wallLen;
+      let vx = segMove.x - w.vel.x * params.dt * remaining;
+      let vy = segMove.y - w.vel.y * params.dt * remaining;
+      let wx = seg.x;
+      let wy = seg.y;
+      let denom = vx * wy - vy * wx;
 
-      if (t >= 0.0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps && t < earliestT) {
-        let hStart = dot(startPos - wp1, w.normal);
-        var norm = select(-w.normal, w.normal, hStart >= 0.0);
-        if (abs(hStart) < 1e-4) { norm = select(-w.normal, w.normal, vDotN < 0.0); }
-        earliestT = t;
-        hitWallIdx = i32(i);
-        hitNormal = norm;
-        hitEffRad = effRad;
+      if (abs(denom) > 1e-6) {
+        let dx13 = wp1.x - segStart.x;
+        let dy13 = wp1.y - segStart.y;
+        let t = (dx13 * wy - dy13 * wx) / denom;
+        let u = (dx13 * vy - dy13 * vx) / denom;
+        let wallLen = sqrt(segLenSq);
+        let eps = effRad / wallLen;
+
+        if (t >= 0.0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps && t < earliestT) {
+          let hStart = dot(segStart - wp1, w.normal);
+          var norm = select(-w.normal, w.normal, hStart >= 0.0);
+          if (abs(hStart) < 1e-4) { norm = select(-w.normal, w.normal, vDotN < 0.0); }
+          earliestT = t;
+          hitIdx = i32(i);
+          hitNormal = norm;
+          hitEffRad = effRad;
+        }
       }
     }
-  }
 
-  if (hitWallIdx >= 0) {
-    p.vel = wallBounce(p.vel, p.mass, hitNormal, u32(hitWallIdx));
-    let hitPoint = startPos + moveVec * earliestT;
-    let remainT = (1.0 - earliestT) * params.dt;
-    candidatePos = hitPoint + hitNormal * (hitEffRad + 0.05) + p.vel * remainT;
+    if (hitIdx < 0) { break; }
+    p.vel = wallBounce(p.vel, p.mass, hitNormal, u32(hitIdx));
+    segStart = segStart + segMove * earliestT + hitNormal * (hitEffRad + 0.05);
+    remaining = remaining * (1.0 - earliestT);
+    segMove = p.vel * params.dt * remaining;
+    hitWallIdx = hitIdx;
   }
-  p.pos = candidatePos;
+  p.pos = segStart + segMove;
 
-  // 4. Proximity nudge (resting contact or corner entry)
-  for (var i = 0u; i < params.wallCount; i++) {
+  // 4. Proximity nudge (resting contact or corner entry); the end position is
+  // within reach of the start, so the same candidates cover it
+  for (var k = 0u; k < cands.total; k++) {
+    let i = wallAt(cands, k);
     if (i32(i) == hitWallIdx) { continue; }
     let w = walls[i];
     if (w.wallType == 1u && w.isOpen != 0u) { continue; }
@@ -490,7 +645,7 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     if (z.direction == 1u) { frac = (p.pos.x - z.minPos.x) / max(z.maxPos.x - z.minPos.x, 1e-3); }
     let slice = min(u32(clamp(frac, 0.0, 0.9999) * f32(sliceCount)), sliceCount - 1u);
     let slot = z.maxCount + slice;
-    let targetSpeedSq = (2.0 * KB * max(5.0, thermalTemps[slot])) / max(0.01, p.mass);
+    let targetSpeedSq = (2.0 * KB * max(5.0, bitcast<f32>(aux[slot]))) / max(0.01, p.mass);
     let alpha = min(1.0, z.filterTemperature * 6.0 * params.dt);
     let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
     if (blendSq > 0.0) {

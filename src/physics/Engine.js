@@ -505,7 +505,7 @@ export class Engine {
       const hh = p.height * 0.5;
       const px = atFrameStart && p._frameStartX !== undefined ? p._frameStartX : p.x;
       const py = atFrameStart && p._frameStartY !== undefined ? p._frameStartY : p.y;
-      const thermal = { thickness: 6, temperature: p.temperature, conductivity: p.conductivity };
+      const thermal = { thickness: 6, temperature: p.temperature, conductivity: p.conductivity, dynamic: true };
       if (p.orientation === 'horizontal') {
         const extH = hh + 25;
         const face = Object.assign({ vel: { x: atFrameStart ? p.velocity : 0, y: 0 } }, thermal);
@@ -524,7 +524,7 @@ export class Engine {
     for (let i = 0; i < throttles.length; i++) {
       const tv = throttles[i];
       const disabled = !tv.isActive || tv.openRatio >= 0.999 || tv.wingLength <= 0.5;
-      const wing = { thickness: tv.thickness, temperature: tv.temperature, conductivity: tv.conductivity, disabled };
+      const wing = { thickness: tv.thickness, temperature: tv.temperature, conductivity: tv.conductivity, disabled, dynamic: true };
       add(segment(tv.p1.x, tv.p1.y, tv.wing1End.x, tv.wing1End.y, tv.normal.x, tv.normal.y, wing), 'throttle', tv);
       add(segment(tv.wing2Start.x, tv.wing2Start.y, tv.p2.x, tv.p2.y, tv.normal.x, tv.normal.y, wing), 'throttle', tv);
     }
