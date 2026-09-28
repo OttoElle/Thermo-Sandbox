@@ -412,7 +412,7 @@ def run_test():
                 // 12. GPU <-> element coupling (wall/piston momentum, relief valves, regulators, compaction, history)
                 const E = window.engine;
                 // Stop the splash-screen ambient loop from stepping the engine concurrently
-                isAmbientSim = false;
+                window.app.isAmbientSim = false;
                 E.ambientBounds = null;
                 // Readbacks resolve asynchronously; yield like real frames so rates reach the CPU
                 const run = async (n) => {

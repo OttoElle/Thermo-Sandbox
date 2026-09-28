@@ -423,13 +423,20 @@
 - **Ergebnis (AMD RDNA 3, ms/Frame):** 50k: 2,4 → 1,9 · 200k: 28,5 → 6,2 · **1 Mio.: 821 → 27 (30×)** · 200k + 484 Wandsegmente: 46 → 6,1.
 - [x] **Tests**: Abschnitt 14 (100 geschlossene Pfeiler, Gas + schneller Strom: 0 Durchdringungen, Gitter aktiv).
 
+### AD. Aufräumen: Module, Konstanten, main.js aufgeteilt (Claude Code, Schritt 4)
+- [x] **Dev-Modus `index.html?dev`**: lädt `src/main.js` direkt als ES-Modul (strict mode, kein Build nötig). Standard bleibt `bundle.js`; der Build ersetzt den Loader-Block im Standalone-HTML durch das inlined Bundle.
+- [x] **`tools/js_modules.py`**: statische Import/Export-Analyse. `build_all.py` leitet die Dateireihenfolge daraus ab (keine `files_order`-Liste mehr) und bricht ab bei fehlenden Imports, impliziten Globals, Zuweisungen an importierte Bindings, doppelten Top-Level-Namen und nicht erreichbaren Dateien. Gefunden: `SequencerExecutor` nutzte `SequencerConditions` ohne Import. Strip-Regexe sind jetzt zeilenverankert.
+- [x] **`src/physics/Constants.js`**: `KB` (vorher 19× `const kB = 35.0`, auch im WGSL per Template), `WORLD_SIZE`, `idealGasPressure()`. Globaler Druck nutzt jetzt dieselbe Formel wie Sensorzonen (`engine.stats.pressure/volume`); vorher war er mit einer abweichenden Skalierung (Faktor 250) gerechnet.
+- [x] **`main.js` (4,6k Zeilen) → `src/app/*` (17 Module)** + schlanker Einstieg (~85 Zeilen). Geteilter veränderlicher Zustand liegt auf `app`/`pointer` (`src/app/state.js`, `window.app` für Tests).
+- [x] **Tote Dateien entfernt**: `MaxwellBoltzmann.js`, `StateDiagrams.js`, `Regenerator.js`, `ThermalNode.js` (nie gebündelt/importiert). Veraltete `src/ui/...`-Verweise in `TOOL_CATALOG.md` korrigiert.
+- [x] **Tests**: `tests/test_ui_smoke_cdp.py` (in verify_all) läuft gegen Bundle, Dev-Modus und Standalone-HTML: alle Werkzeuge, Zeichnen aller Elementtypen mit echten Maus-Events, Auswahl/Popup/Kontextmenü, Entf + Undo/Redo, Ansicht-Menü, Wiedergabe; schlägt bei jeder Exception/Konsolenfehler fehl.
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)
 - [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren.
 - [ ] **Weitere Performance**: Pair-Suche dominiert weiterhin (Kernel-Profil siehe Abschnitt AC); Telemetrie-/Upload-Overhead pro Frame (`getGPUWalls()` allokiert jedes Frame).
-- [ ] **Schritt 4 – Aufräumen**: `kB`/Weltgrößen-Konstanten zentralisieren, ES-Module für Dev, `main.js` aufteilen.
+- [ ] **Große App-Module weiter zerlegen**: `canvasInput.js` (~850 Zeilen, ein großer mousedown/mouseup-Handler pro Werkzeug), `toolPanel.js` und `inspector.js` (je ~650, pro Elementtyp duplizierte Formulare) könnten pro Elementtyp datengetrieben werden.
 - [ ] **CSV- & JSON-Export für Chamber- & Dashboard-Telemetriedaten**: Export von Zeitreihen ($T(t), P(t), V(t), W_\text{net}$) als CSV/JSON für externe thermodynamische Auswertungen (z. B. Python/Excel).
 - [ ] **Interaktiver Partikel-Inspektor**: Klick auf ein einzelnes Partikel zur Verfolgung von Trajektorie, Kollisionshistorie und Geschwindigkeitsvektor.
-- [ ] **GPU-Thermische Grenzflächen für poröse Medien**: WebGPU-Shader-Integration für volumetrischen Wärmeaustausch in Regeneratoren und Wärmetauschern (`RegeneratorMatrix` / `HeatExchanger`).
 

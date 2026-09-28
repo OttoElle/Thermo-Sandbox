@@ -74,7 +74,7 @@ To launch the modular development version with live reload support:
    ```bash
    uv run python -m http.server 8000
    ```
-3. Open `http://localhost:8000` in your browser.
+3. Open `http://localhost:8000` in your browser (runs `bundle.js`; rebuild after changes), or `http://localhost:8000/index.html?dev` to load the ES modules in `src/` directly: edits show up on reload without a build.
 
 ---
 
@@ -96,14 +96,16 @@ Thermo-Sandbox/
 │   ├── splash.css               # Welcome dashboard & preset launcher
 │   └── sequencer.css            # Bottom GRAFCET drawer, cards & 2D gates
 ├── src/
-│   ├── main.js                  # Application coordinator & event loop
+│   ├── main.js                  # Entry point: start-up & animation loop
+│   ├── app/                     # UI modules: tools, inspector, canvas input, menus, splash, ...
 │   ├── physics/                 # Particle simulation & mechanical boundaries
 │   ├── control/                 # Cycle sequencer, actions & transition gates
 │   ├── analytics/               # Real-time telemetry, P-V loops & MB curves
 │   ├── render/                  # WebGL 2 particle instancing & 2D overlay
 │   └── presets/                 # Pre-configured thermodynamic experiments
 ├── tests/                       # Automated test suites & headless CDP tests
-├── build_all.py                 # Compiler script generating bundle.js & Standalone HTML
+├── build_all.py                 # Bundles src/ (import graph from main.js) + Standalone HTML
+├── tools/js_modules.py          # Import/export checker used by the build
 ├── ParticleLab_Standalone.html  # Portable zero-dependency distribution
 ├── INDEX.md                     # Complete codebase index & file map
 └── PROGRESS.md                  # Development history & milestone tracking

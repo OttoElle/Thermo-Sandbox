@@ -22,9 +22,9 @@
 
 Jedes Werkzeug besitzt zwei Repräsentationen in der Benutzeroberfläche:
 1. **Werkzeug-Einstellungsmenü (Tool Options Panel):**  
-   Befindet sich in der linken Seitenleiste (`src/ui/InspectorView.js`) und ist aktiv, wenn das Werkzeug in der Ribbon-Leiste ausgewählt ist. Hier eingestellte Werte gelten als Vorlage für neu gezeichnete Elemente und synchronisieren sich automatisch mit selektierten Elementen desselben Typs.
+   Befindet sich in der linken Seitenleiste (`renderToolProperties()` in `src/app/toolPanel.js`) und ist aktiv, wenn das Werkzeug in der Ribbon-Leiste ausgewählt ist. Hier eingestellte Werte gelten als Vorlage für neu gezeichnete Elemente und synchronisieren sich automatisch mit selektierten Elementen desselben Typs.
 2. **Element-Akkordeon (Item Accordion):**  
-   Befindet sich in der linken Elements-Outline (`src/ui/ItemAccordion.js`), wenn ein bereits auf dem Canvas platziertes Element selektiert wird.
+   Befindet sich in der linken Elements-Outline (`renderItemAccordionBody()` in `src/app/inspector.js`), wenn ein bereits auf dem Canvas platziertes Element selektiert wird.
 
 ### UI-Komponenten
 - **Dual-Input (`makeDualInput`):** Gekoppeltes Paar aus Schieberegler (Slider) und Zahlenfeld (Number Input) mit Live-Einheitenanzeige.
@@ -282,7 +282,7 @@ Gemeinsame Parameter für alle Ventiltypen:
 
 ## 9. Übersichtstabelle aller Standardwerte (`toolConfigs`)
 
-Zur Absicherung gegen unerwünschte Abweichungen im Codebase-Zustand (`src/ui/DualInput.js`):
+Zur Absicherung gegen unerwünschte Abweichungen im Codebase-Zustand (`toolConfigs` in `src/app/toolPanel.js`):
 
 ```javascript
 export const toolConfigs = {

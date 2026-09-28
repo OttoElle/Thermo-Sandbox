@@ -1,11 +1,12 @@
 # Thermo Sandbox Codebase Index
 
 ## Root Directory
-- **index.html**: Main web interface markup (Ribbon toolbar, dual sidebars, modals, canvases, playback dock, persistent bottom sequencer drawer, splash dashboard, modular CSS links).
+- **index.html**: Main web interface markup (Ribbon toolbar, dual sidebars, modals, canvases, playback dock, persistent bottom sequencer drawer, splash dashboard, modular CSS links). Loads `bundle.js`, or with `?dev` the ES modules in `src/` directly (no build step).
 - **style.css**: Master modular CSS aggregator (@import hub for variables, base, canvas, ribbon, sidebars, playback, modals, splash, and sequencer).
 - **bundle.js**: Monolithic bundled script compiled for offline execution and fast single-file deployment.
 - **ParticleLab_Standalone.html**: Zero-dependency standalone HTML bundle containing inlined CSS and JS.
-- **build_all.py**: Python compiler script assembling bundle.js, bundling all modular CSS, and generating ParticleLab_Standalone.html.
+- **build_all.py**: Python compiler script assembling bundle.js (file order derived from the import graph of `src/main.js`, fails on import/export errors), bundling all modular CSS, and generating ParticleLab_Standalone.html.
+- **tools/js_modules.py**: Static import/export analysis of `src/` (dependency order, missing imports, implicit globals, assignments to imported bindings, unreachable files). `uv run tools/js_modules.py` prints the report.
 - **Start_ParticleLab.bat**: Windows batch launcher for instant local preview.
 - **PROGRESS.md**: Context recovery and task completion log across sessions.
 - **INDEX.md**: Architectural directory and file purpose mapping.
@@ -42,6 +43,7 @@
 - **index.js**: Library of built-in thermodynamic experiments (Split-Stirling Cryocooler, Venturi Nozzle, Dual-Chamber Partition, Joule-Thomson, Adiabatic Cylinder, Brownian Motion).
 
 ## src/physics/ (Physics Engine & Geometry)
+- **Constants.js**: Shared simulation units: `KB` (Boltzmann constant, also templated into the WGSL), `WORLD_SIZE`, `idealGasPressure()` used by sensors and global stats.
 - **Vector2.js**: 2D vector mathematics utility (dot, cross, norm, rot, dist).
 - **Particle.js**: Hard-sphere and Lennard-Jones particle model with position, velocity, mass, radius, and thermal coloring.
 - **ParticleGPUComputeShader.js**: `GPU_LAYOUT` (shared buffer layout constants) and the WGSL kernels: cell-sorted grid (cs_clear_cells, cs_count_cells, cs_scan_blocks/totals/add, cs_scatter), cs_find_pairs, wall broadphase candidates, cs_integrate (mutual pairwise elastic impulse / Lennard-Jones, CCD Ray-vs-Segment collisions against swept wall segments with per-side impulse, heat & conductance event counters, permeable thermal zones for heat exchangers / regenerator slices, atomic sink/regulator removal), cs_advance_substep (moving-wall substep index), cs_telemetry (workgroup-atomic reduction of global/per-sensor sums, speed histograms, regulator counts) and cs_compact / cs_compact_tail (GPU stream compaction).
@@ -53,10 +55,8 @@
 - **Piston.js**: 1D dynamic boundaries (Displacer, Accumulator, Compressor, Expander) with cached bounds, rail limits, and TDC/BDC travel limits.
 - **Reservoir.js**: Infinite heat capacity constant-temperature boundary with cached bounds (Thermal Sink).
 - **HeatExchanger.js**: Permeable constant-T boundary with cross-hatch pattern for volumetric thermal equilibration.
-- **Regenerator.js**: Segmented matrix storing and releasing thermal energy to passing gas streams.
 - **RegeneratorMatrix.js**: Multi-slice thermal gradient matrix with directional parallel lines.
 - **ThermalBlock.js**: Solid thermal storage obstacles (Ressavoir) with finite heat capacity and cached bounds.
-- **ThermalNode.js**: Discrete thermal calculation node for segmented heat transfer matrices.
 - **Regulator.js**: Particle population regulator maintaining setpoint N with configurable hysteresis deadband (GPU mode: counts via GPU telemetry + pending delta, removals via GPU quotas).
 - **Emitter.js**: Directional & radial particle generator with velocity and temperature distribution control.
 - **Sink.js**: Vacuum particle removal absorber with absorption efficiency.
@@ -73,16 +73,34 @@
 - **ChamberChart.js**: Multi-metric chamber telemetry renderer, dynamic DashboardChart graph engine, and thermodynamic cycle work integration (W = -∫ P dV).
 - **TempTimeChart.js**: Global system continuous temperature history curve.
 - **VelHistChart.js**: Real-time velocity distribution histogram with theoretical Maxwell-Boltzmann curve.
-- **MaxwellBoltzmann.js**: Maxwell-Boltzmann probability distribution functions for comparison.
-- **StateDiagrams.js**: P-V indicator loops and thermodynamic state plane utilities.
 
 ## src/
-- **main.js**: Application orchestrator, dual-canvas synchronization, ribbon toolbar events, inspector synchronization, tool previews, splash screen management, and animation loop.
+- **main.js**: App entry point: imports the `src/app` modules, starts the ambient splash scene and runs the `requestAnimationFrame` loop.
+
+## src/app/ (UI Orchestration, split from the former 4.6k-line main.js)
+- **state.js**: Shared mutable state: `app` (project name, simulating/splash flags, active tool, selection, popup target; exposed as `window.app`) and `pointer` (mouse, drag and drawing-draft state), `resetPolygonDraft()`.
+- **dom.js**: DOM element lookups shared by the modules.
+- **core.js**: Engine, Renderer, charts and SequencerUI instances (`window.engine`/`renderer`/`sequencerUI`), canvas sizing, WebGPU + GPU compute start-up.
+- **history.js**: Edit-mode undo/redo stacks and the playback history (Step Back, GPU snapshots).
+- **fields.js**: Grid snapping and the dual slider/number input helpers.
+- **toolPanel.js**: `toolConfigs` (tool defaults), ribbon tool buttons, tool help and the floating tool properties dialog.
+- **inspector.js**: Accordion property editors for selected elements.
+- **elementTree.js**: Elements outline list and group management in the left sidebar.
+- **menus.js**: Menu bar (File/Edit/View/Help), reset/clear/import, Save As dialog.
+- **playback.js**: Play/pause/step/step-back/stop, physics model and gravity toggles, zoom controls.
+- **canvasInput.js**: Canvas mouse interaction: coordinates and magnetic snapping, context menu, drawing, dragging, panning.
+- **selection.js**: Selection transforms (rotate/flip/group), hit-testing and box selection, circle/arc wall generators, move and delete.
+- **popup.js**: Element popup next to the selected canvas item.
+- **keyboard.js**: Keyboard shortcuts, info modal and chart tabs (side-effect module, imported bare by main.js).
+- **dashboard.js**: Right sidebar: system stats, chamber cards and custom charts.
+- **toolPreview.js**: Live previews of the active drawing tool.
+- **splash.js**: Splash screen, presets, recent profiles and the ambient background scene.
 
 ## tests/ (Automated Verification & CDP Test Suites)
-- **verify_all.py**: Master test suite running file size audits (< 350 lines), CSS syntax checks, build verification, headless browser runtime test, WebGPU runtime test, and 50,000 particle Zero-Copy compute verification.
+- **verify_all.py**: Master test suite running file size audits (< 350 lines), CSS syntax checks, build verification (incl. module check), headless browser runtime test, WebGPU runtime test, 50,000 particle Zero-Copy compute verification, and the UI smoke test.
 - **test_webgpu_runtime.py**: Headless Chrome CDP test verifying WebGPU adapter, device, WGSL pipeline, and render pass.
 - **bench_gpu.py**: WebGPU benchmark (headless Chrome CDP) reporting ms/frame for 50k–1M particles and up to ~480 wall segments; not part of verify_all.
 - **test_gpu_compute_cdp.py**: Headless Chrome CDP test verifying 50,000 particle Zero-Copy GPU compute, CCD anti-tunneling, emitter streaming, dense-gas anti-freezing, GPU telemetry, sinks, piston-bound sensors, and GPU coupling (free piston pressure, relief valve, regulator, compaction, step-back history).
 - **test_sequencer_modal_cdp.py**: Chrome DevTools Protocol end-to-end test verifying sequencer UI, dialogs, exclusive accordions, and scrolling.
 - **test_transition_cdp.py**: CDP test suite verifying 2D compound transition builder, Boolean precedence, square chip collapse, and cycle execution.
+- **test_ui_smoke_cdp.py**: UI smoke test run against the bundle, `index.html?dev` and the standalone HTML: all ribbon tools, drawing every element type with real mouse events, selection/popup/context menu, Delete + undo/redo, view menu, playback; fails on any uncaught exception or console error.

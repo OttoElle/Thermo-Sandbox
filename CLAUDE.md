@@ -15,29 +15,34 @@ uv run tests/test_gpu_compute_cdp.py        # run a single CDP test (each script
 uv run tests/test_transition_cdp.py
 uv run tests/test_sequencer_modal_cdp.py
 uv run tests/test_webgpu_runtime.py
-uv run python -m http.server 8000     # serve for manual testing at http://localhost:8000/index.html
+uv run tests/test_ui_smoke_cdp.py    # UI smoke test: bundle, index.html?dev, standalone
+uv run tools/js_modules.py            # import/export report for src/ (also enforced by the build)
+uv run python -m http.server 8000     # manual testing: http://localhost:8000/index.html (bundle) or index.html?dev (live src/)
 ```
 
 - Python tooling is managed with **uv**: `.python-version` pins the interpreter, `pyproject.toml`/`uv.lock` pin `websocket-client`, and the env lives in `.venv/`. Always use `uv run …`, never a global `python`/`pip`. `uv sync` sets it up.
 - This machine's Claude desktop app is an MSIX package, so writes to `%APPDATA%`/`%LOCALAPPDATA%` from agent shells get redirected into the app's private package folder. The user env vars `UV_PYTHON_INSTALL_DIR` and `UV_CACHE_DIR` point to `%USERPROFILE%\.uv\…` to avoid this. If a fresh shell doesn't see them, load them from the User scope (`[Environment]::GetEnvironmentVariable(..., 'User')`) before calling uv, and refresh `PATH` the same way if `uv` isn't found.
 - CDP test screenshots are written to the git-ignored `scratch/` directory.
 - WGSL mistakes (e.g. reserved words like `active`) only surface at runtime: pipelines become invalid and every dispatch silently no-ops. Compilation errors are logged to the console as `ParticleComputeShader:<line>:<col>`; check the console after shader edits.
-- CDP tests need Chrome at `C:\Program Files\Google\Chrome\Application\chrome.exe`. They start their own local HTTP server + headless Chrome (`--enable-unsafe-webgpu`) on fixed ports and drive the page via `Runtime.evaluate` against the globals `window.engine`, `window.renderer`, `window.sequencerUI`.
+- CDP tests need Chrome at `C:\Program Files\Google\Chrome\Application\chrome.exe`. They start their own local HTTP server + headless Chrome (`--enable-unsafe-webgpu`) on fixed ports and drive the page via `Runtime.evaluate` against the globals `window.engine`, `window.renderer`, `window.sequencerUI`, `window.app` (shared UI state). Only these `window.*` globals work in both modes; don't reach bundle-only top-level names from tests.
 - Run tests from the repo root (paths are relative).
 
 ## Build model (important)
 
-- `src/` files are written as ES modules (`import`/`export`), but **nothing loads them as modules**. `index.html` loads only `bundle.js`. `build_all.py` concatenates files in the hardcoded `files_order` list and strips `import`/`export` lines with regexes, so everything ends up in one global script scope.
-  - A **new JS file must be added to `files_order`** in `build_all.py`, after its dependencies (order matters, since classes are evaluated top to bottom).
-  - Class/const names must be globally unique across all of `src/`.
-  - Keep `import`/`export` statements on a single line; the strip regex is line-based.
-  - Note: `MaxwellBoltzmann.js`, `StateDiagrams.js`, `Regenerator.js`, and `ThermalNode.js` are not currently in `files_order` (not bundled).
+- `src/` is plain ES modules with the entry `src/main.js`. Two ways to run it:
+  - **`index.html`** loads `bundle.js`: `build_all.py` walks the import graph from `src/main.js` (dependencies first), concatenates the files and strips `import` lines and `export` keywords, so everything shares one global script scope. `ParticleLab_Standalone.html` inlines the same bundle.
+  - **`index.html?dev`** loads `src/main.js` as a real module (strict mode, no build step), so edits show up on reload.
+- Both must keep working, so the build runs `tools/js_modules.py` and **fails** on: a module using another module's top-level name without importing it, imports of names that aren't exported, assignments to imported bindings, duplicate top-level names across modules (they'd collide in the bundle), and `.js` files under `src/` not reachable from `src/main.js`.
+  - New files only need to be imported somewhere; there is no file list to maintain. A module that only registers listeners needs a bare `import './x.js';`.
+  - Keep each `import` on a single line (`import { A, B } from './x.js';` or a bare import); the strip is line-based. No default exports, `export *` or dynamic imports.
+  - Shared mutable state can't be an exported `let` (read-only for importers); put it on a shared object like `app`/`pointer` in `src/app/state.js`.
 - CSS: `index.html` links the `css/*.css` modules directly; the build inlines them (via `css_files_order`) into the standalone HTML. New CSS files must be added both to `index.html` and to `css_files_order`.
 - `bundle.js` and `ParticleLab_Standalone.html` are generated but committed. Rebuild before committing and before running browser tests, because the tests load `index.html` → `bundle.js`.
 
 ## Architecture
 
-- **`src/main.js`** (~4.6k lines): the app orchestrator. It handles DOM wiring, the ribbon tool state (`toolConfigs`), canvas mouse interaction and editing (draw/select/drag/snap/group, undo/redo), inspector popups, splash screen/presets/recent profiles (localStorage), save/load JSON, and the `requestAnimationFrame` loop. It creates `Engine`, `Renderer`, and `SequencerUI`, then enables GPU compute (`new ParticleGPUCompute(renderer.gpuRenderer.device)` → `engine.enableGPUCompute(...)`) when WebGPU is available.
+- **`src/main.js` + `src/app/`**: the UI orchestration, split by concern (see `INDEX.md`). `app/core.js` creates `Engine`, `Renderer`, charts and `SequencerUI`, then enables GPU compute (`new ParticleGPUCompute(renderer.gpuRenderer.device)` → `engine.enableGPUCompute(...)`) when WebGPU is available. `app/state.js` holds the shared mutable UI state (`app.activeTool`, `app.selectedItems`, `app.isSimulating`, … and the mouse/drawing state in `pointer`). `app/toolPanel.js` has the ribbon tool defaults (`toolConfigs`); the other modules cover inspector, element tree, menus, playback, canvas input, selection, popup, keyboard, dashboard, tool previews and splash. `main.js` runs start-up and the `requestAnimationFrame` loop. The modules reference each other freely (cyclic imports are fine because cross-module calls only happen inside functions/handlers); top-level code must not call into modules that may not be evaluated yet.
+- **`src/physics/Constants.js`**: simulation units shared by CPU, WGSL (templated) and analytics: `KB` (35, so kB·T ≈ 35·T), `WORLD_SIZE`, `idealGasPressure()`. Don't reintroduce local `kB = 35.0` literals.
 - **`src/physics/Engine.js`**: owns all scene element arrays (particles, walls, pistons, reservoirs, sensors, emitters, sinks, regulators, thermal blocks, heat exchangers, regenerators, throttle valves, labels). `step(dt)` has two branches that share `_updateComponents()` (thermal couplings, element updates, `updateBoundSensors()`):
   - **CPU**: `_subStep` (spatial grid, hard-sphere / Lennard-Jones, in-place compaction).
   - **GPU** (`_stepGPU`, when `isGPUSimulating()`): the ping-pong buffer in `ParticleGPUCompute` is the **single source of truth** while simulating. `engine.particles` only holds the edit-time/start state and is uploaded via `syncParticlesToGPU()` (edit, reset, load). Particles spawned during a step (emitters, regulators) go through `addParticle()` → `gpuCompute.queueParticle()` and never exist on the CPU. Never read `engine.particles` positions during a GPU simulation.
@@ -50,8 +55,8 @@ uv run python -m http.server 8000     # serve for manual testing at http://local
 - **Heat exchange model** (CPU and GPU): surface contacts thermalize towards 1.5·kB·T (2D flux-weighted mean energy), volumetric zones towards kB·T. Finite-capacity elements accumulate heat Q and coupling conductance G and update implicitly (`T += Q / (C + G)`), which stays stable for small capacities. On the GPU path, measured impulse and heat go into pending buffers (`_gpuWallPending*`, `_gpuSlicePendingHeat`) that are credited exactly once, drained over the following frames, so momentum and energy are conserved despite readback latency. Elements whose heat capacity is comparable to a single particle's energy (kB·T ≈ 35·T) fluctuate strongly; that is statistics, not instability.
 - **Rendering**: `Renderer.js` runs a layered canvas stack. `#gpuCanvas` holds particles via `ParticleGPURenderer` (WebGPU instanced draw, colormap LUT from `Colormap.js`; with GPU compute active it renders zero-copy from the compute buffers). `#simCanvas` is a 2D overlay for all CAD geometry, handles, and selection UI.
 - **Sequencer (`src/control/`)**: a GRAFCET step/transition state machine. `CycleSequencer` (core) + `SequencerConditions` (compound AND/OR 2D condition grid) + `SequencerExecutor` (applies step action snapshots to engine elements) handle the logic. `SequencerUI` is the facade over the Dock/Timeline/ActionDialog/TransitionDialog UI modules. `verify_all.py` **fails if any `src/control/*.js` file reaches 350 lines**, so split modules instead of growing them.
-- **Element model**: each physics element class has `toJSON()`/`fromJSON()` for save/load and presets (`src/presets/index.js`). New element properties need serialization plus handling in Engine, Renderer (drawing/hit-testing), main.js (tool config, inspector), and, if sequenceable, `SequencerCatalogDefaults`/`SequencerExecutor`.
-- **`TOOL_CATALOG.md`** (German) is the canonical spec for every tool's parameters, labels, units, and defaults. `SequencerCatalogDefaults.TOOL_DEFAULTS` must stay consistent with it. Some file references in it (`src/ui/...`) are stale; the UI lives in `main.js`.
+- **Element model**: each physics element class has `toJSON()`/`fromJSON()` for save/load and presets (`src/presets/index.js`). New element properties need serialization plus handling in Engine, Renderer (drawing/hit-testing), `src/app/` (`toolConfigs` in toolPanel.js, inspector.js, popup.js), and, if sequenceable, `SequencerCatalogDefaults`/`SequencerExecutor`.
+- **`TOOL_CATALOG.md`** (German) is the canonical spec for every tool's parameters, labels, units, and defaults. `SequencerCatalogDefaults.TOOL_DEFAULTS` must stay consistent with it. The tool UI lives in `src/app/toolPanel.js` and `src/app/inspector.js`.
 
 ## Conventions
 

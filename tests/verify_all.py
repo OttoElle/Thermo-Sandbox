@@ -112,6 +112,15 @@ def test_gpu_compute():
         raise AssertionError("GPU Compute 50,000 particle test failed!")
     print("WebGPU Compute Shaders & Zero-Copy verification PASSED.")
 
+def test_ui_smoke():
+    print("\n--- 7. UI Smoke Test (bundle, index.html?dev ES modules, standalone) ---")
+    res = subprocess.run([sys.executable, 'tests/test_ui_smoke_cdp.py'], capture_output=True, text=True)
+    print(res.stdout.strip())
+    if res.returncode != 0:
+        print(res.stderr.strip())
+        raise AssertionError("UI smoke test failed!")
+    print("UI smoke test PASSED.")
+
 def main():
     print("==================================================")
     print("  Thermo Sandbox Verification Test Suite          ")
@@ -122,6 +131,7 @@ def main():
     test_browser_cdp()
     test_webgpu_runtime()
     test_gpu_compute()
+    test_ui_smoke()
     print("\n==================================================")
     print("  ALL VERIFICATION TESTS COMPLETED SUCCESSFULLY!  ")
     print("==================================================")
