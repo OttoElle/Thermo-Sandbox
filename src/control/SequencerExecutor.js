@@ -3,6 +3,7 @@
  * Generic Action Snapshot Executor for Thermodynamic Cycle Sequencer
  * Applies element properties and snapshots to physical simulation objects.
  */
+import { SequencerConditions } from './SequencerConditions.js';
 
 export class SequencerExecutor {
   /**

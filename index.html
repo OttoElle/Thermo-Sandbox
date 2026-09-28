@@ -896,6 +896,13 @@
     </div>
   </div>
 
-  <script src="bundle.js"></script>
+  <!-- app-script: index.html?dev loads the ES modules in src/ directly (no build step);
+       the default loads the bundle. build_all.py inlines the bundle in place of this block. -->
+  <script>
+    document.write(new URLSearchParams(location.search).has('dev')
+      ? '<script type="module" src="src/main.js"><\/script>'
+      : '<script src="bundle.js"><\/script>');
+  </script>
+  <!-- /app-script -->
 </body>
 </html>

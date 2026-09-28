@@ -6386,189 +6386,6 @@ class Sink {
 
 
 
-// --- src/physics/Regulator.js ---
-
-class Regulator {
-  constructor(x, y, width = 80, height = 80, options = {}) {
-    this.id = options.id || Math.random().toString(36).substring(2, 9);
-    this.x = x;
-    this.y = y;
-    this.width = width;
-    this.height = height;
-    this.targetCount = options.targetCount !== undefined ? options.targetCount : 50;
-    this.hysteresis = options.hysteresis !== undefined ? options.hysteresis : 3;
-    this.temperature = options.temperature !== undefined ? options.temperature : 300;
-    this.mass = options.mass !== undefined ? options.mass : 1.0;
-    this.rate = options.rate !== undefined ? options.rate : 15; // max adjustment particles per second
-    this.isActive = options.isActive !== undefined ? options.isActive : true;
-
-    this.currentCount = 0;
-    this.regulationState = 'idle'; // 'idle', 'emitting', or 'absorbing'
-    this.timer = 0;
-    this.initialActive = this.isActive;
-
-    // GPU mode: last zone population measured on the GPU plus the net change
-    // this regulator requested since (emitted minus requested removals).
-    this.gpuCount = 0;
-    this.gpuDelta = 0;
-  }
-
-  resetGPUCount(count) {
-    this.gpuCount = count;
-    this.gpuDelta = 0;
-  }
-
-  // `deltaAtSubmit` is gpuDelta at the time the readback was submitted; those
-  // changes are already reflected in `count`.
-  applyGPUCount(count, deltaAtSubmit = 0) {
-    this.gpuCount = count;
-    this.gpuDelta -= deltaAtSubmit;
-  }
-
-  toggle() {
-    this.isActive = !this.isActive;
-    if (!this.isActive) {
-      this.regulationState = 'idle';
-      this.timer = 0;
-    }
-    return this.isActive;
-  }
-
-  saveSnapshot() {
-    this.initialActive = this.isActive;
-  }
-
-  restoreSnapshot() {
-    this.isActive = this.initialActive;
-    this.regulationState = 'idle';
-    this.timer = 0;
-  }
-
-  contains(px, py) {
-    return px >= this.x && px <= this.x + this.width &&
-           py >= this.y && py <= this.y + this.height;
-  }
-
-  update(dt, engine) {
-    if (dt <= 0) return;
-
-    // 1. Count particles inside zone (GPU mode: last GPU measurement + own pending changes)
-    const gpuMode = engine.isGPUSimulating();
-    const insideParticles = [];
-    if (gpuMode) {
-      this.currentCount = Math.max(0, this.gpuCount + this.gpuDelta);
-    } else {
-      const allParticles = engine.particles;
-      for (let i = 0; i < allParticles.length; i++) {
-        const p = allParticles[i];
-        if (this.contains(p.pos.x, p.pos.y)) {
-          insideParticles.push(p);
-        }
-      }
-      this.currentCount = insideParticles.length;
-    }
-
-    if (!this.isActive) {
-      this.regulationState = 'idle';
-      this.timer = 0;
-      return;
-    }
-
-    const lowerBound = this.targetCount - this.hysteresis;
-    const upperBound = this.targetCount + this.hysteresis;
-
-    // 2. State transitions with deadband hysteresis
-    if (this.currentCount < lowerBound) {
-      this.regulationState = 'emitting';
-    } else if (this.currentCount > upperBound) {
-      this.regulationState = 'absorbing';
-    } else if (
-      (this.regulationState === 'emitting' && this.currentCount >= this.targetCount) ||
-      (this.regulationState === 'absorbing' && this.currentCount <= this.targetCount)
-    ) {
-      this.regulationState = 'idle';
-      this.timer = 0;
-    }
-
-    // 3. Execution of active regulation
-    if (this.regulationState === 'emitting') {
-      this.timer += dt;
-      const interval = 1.0 / Math.max(1, this.rate);
-      const kB = 35.0;
-      const thermalSpeed = Math.sqrt((2 * kB * Math.max(5, this.temperature)) / this.mass);
-
-      while (this.timer >= interval && this.currentCount < this.targetCount) {
-        this.timer -= interval;
-        const px = this.x + 6 + Math.random() * Math.max(1, this.width - 12);
-        const py = this.y + 6 + Math.random() * Math.max(1, this.height - 12);
-        const theta = Math.random() * Math.PI * 2;
-        const vx = thermalSpeed * Math.cos(theta);
-        const vy = thermalSpeed * Math.sin(theta);
-        engine.addParticle(px, py, vx, vy, this.mass);
-        this.currentCount++;
-        if (gpuMode) this.gpuDelta++;
-      }
-      if (this.currentCount >= this.targetCount) {
-        this.regulationState = 'idle';
-        this.timer = 0;
-      }
-    } else if (this.regulationState === 'absorbing') {
-      this.timer += dt;
-      const interval = 1.0 / Math.max(1, this.rate);
-      const toRemove = [];
-      let gpuRemovals = 0;
-
-      while (this.timer >= interval && this.currentCount > this.targetCount && (gpuMode || insideParticles.length > 0)) {
-        this.timer -= interval;
-        if (gpuMode) {
-          gpuRemovals++;
-          this.gpuDelta--;
-        } else {
-          toRemove.push(insideParticles.pop());
-        }
-        this.currentCount--;
-      }
-      if (gpuRemovals > 0) engine.requestGPURegulatorRemoval(this, gpuRemovals);
-      if (toRemove.length > 0) engine.deleteParticles(toRemove);
-      if (this.currentCount <= this.targetCount) {
-        this.regulationState = 'idle';
-        this.timer = 0;
-      }
-    } else {
-      this.timer = 0;
-    }
-  }
-
-  toJSON() {
-    return {
-      id: this.id,
-      x: this.x,
-      y: this.y,
-      width: this.width,
-      height: this.height,
-      targetCount: this.targetCount,
-      hysteresis: this.hysteresis,
-      temperature: this.temperature,
-      mass: this.mass,
-      rate: this.rate,
-      isActive: this.isActive
-    };
-  }
-
-  static fromJSON(data) {
-    return new Regulator(data.x, data.y, data.width, data.height, {
-      id: data.id,
-      targetCount: data.targetCount,
-      hysteresis: data.hysteresis,
-      temperature: data.temperature,
-      mass: data.mass,
-      rate: data.rate,
-      isActive: data.isActive
-    });
-  }
-}
-
-
 // --- src/physics/ThermalBlock.js ---
 
 class ThermalBlock {
@@ -6921,6 +6738,189 @@ class TextLabel {
 }
 
 
+// --- src/physics/Regulator.js ---
+
+class Regulator {
+  constructor(x, y, width = 80, height = 80, options = {}) {
+    this.id = options.id || Math.random().toString(36).substring(2, 9);
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.targetCount = options.targetCount !== undefined ? options.targetCount : 50;
+    this.hysteresis = options.hysteresis !== undefined ? options.hysteresis : 3;
+    this.temperature = options.temperature !== undefined ? options.temperature : 300;
+    this.mass = options.mass !== undefined ? options.mass : 1.0;
+    this.rate = options.rate !== undefined ? options.rate : 15; // max adjustment particles per second
+    this.isActive = options.isActive !== undefined ? options.isActive : true;
+
+    this.currentCount = 0;
+    this.regulationState = 'idle'; // 'idle', 'emitting', or 'absorbing'
+    this.timer = 0;
+    this.initialActive = this.isActive;
+
+    // GPU mode: last zone population measured on the GPU plus the net change
+    // this regulator requested since (emitted minus requested removals).
+    this.gpuCount = 0;
+    this.gpuDelta = 0;
+  }
+
+  resetGPUCount(count) {
+    this.gpuCount = count;
+    this.gpuDelta = 0;
+  }
+
+  // `deltaAtSubmit` is gpuDelta at the time the readback was submitted; those
+  // changes are already reflected in `count`.
+  applyGPUCount(count, deltaAtSubmit = 0) {
+    this.gpuCount = count;
+    this.gpuDelta -= deltaAtSubmit;
+  }
+
+  toggle() {
+    this.isActive = !this.isActive;
+    if (!this.isActive) {
+      this.regulationState = 'idle';
+      this.timer = 0;
+    }
+    return this.isActive;
+  }
+
+  saveSnapshot() {
+    this.initialActive = this.isActive;
+  }
+
+  restoreSnapshot() {
+    this.isActive = this.initialActive;
+    this.regulationState = 'idle';
+    this.timer = 0;
+  }
+
+  contains(px, py) {
+    return px >= this.x && px <= this.x + this.width &&
+           py >= this.y && py <= this.y + this.height;
+  }
+
+  update(dt, engine) {
+    if (dt <= 0) return;
+
+    // 1. Count particles inside zone (GPU mode: last GPU measurement + own pending changes)
+    const gpuMode = engine.isGPUSimulating();
+    const insideParticles = [];
+    if (gpuMode) {
+      this.currentCount = Math.max(0, this.gpuCount + this.gpuDelta);
+    } else {
+      const allParticles = engine.particles;
+      for (let i = 0; i < allParticles.length; i++) {
+        const p = allParticles[i];
+        if (this.contains(p.pos.x, p.pos.y)) {
+          insideParticles.push(p);
+        }
+      }
+      this.currentCount = insideParticles.length;
+    }
+
+    if (!this.isActive) {
+      this.regulationState = 'idle';
+      this.timer = 0;
+      return;
+    }
+
+    const lowerBound = this.targetCount - this.hysteresis;
+    const upperBound = this.targetCount + this.hysteresis;
+
+    // 2. State transitions with deadband hysteresis
+    if (this.currentCount < lowerBound) {
+      this.regulationState = 'emitting';
+    } else if (this.currentCount > upperBound) {
+      this.regulationState = 'absorbing';
+    } else if (
+      (this.regulationState === 'emitting' && this.currentCount >= this.targetCount) ||
+      (this.regulationState === 'absorbing' && this.currentCount <= this.targetCount)
+    ) {
+      this.regulationState = 'idle';
+      this.timer = 0;
+    }
+
+    // 3. Execution of active regulation
+    if (this.regulationState === 'emitting') {
+      this.timer += dt;
+      const interval = 1.0 / Math.max(1, this.rate);
+      const kB = 35.0;
+      const thermalSpeed = Math.sqrt((2 * kB * Math.max(5, this.temperature)) / this.mass);
+
+      while (this.timer >= interval && this.currentCount < this.targetCount) {
+        this.timer -= interval;
+        const px = this.x + 6 + Math.random() * Math.max(1, this.width - 12);
+        const py = this.y + 6 + Math.random() * Math.max(1, this.height - 12);
+        const theta = Math.random() * Math.PI * 2;
+        const vx = thermalSpeed * Math.cos(theta);
+        const vy = thermalSpeed * Math.sin(theta);
+        engine.addParticle(px, py, vx, vy, this.mass);
+        this.currentCount++;
+        if (gpuMode) this.gpuDelta++;
+      }
+      if (this.currentCount >= this.targetCount) {
+        this.regulationState = 'idle';
+        this.timer = 0;
+      }
+    } else if (this.regulationState === 'absorbing') {
+      this.timer += dt;
+      const interval = 1.0 / Math.max(1, this.rate);
+      const toRemove = [];
+      let gpuRemovals = 0;
+
+      while (this.timer >= interval && this.currentCount > this.targetCount && (gpuMode || insideParticles.length > 0)) {
+        this.timer -= interval;
+        if (gpuMode) {
+          gpuRemovals++;
+          this.gpuDelta--;
+        } else {
+          toRemove.push(insideParticles.pop());
+        }
+        this.currentCount--;
+      }
+      if (gpuRemovals > 0) engine.requestGPURegulatorRemoval(this, gpuRemovals);
+      if (toRemove.length > 0) engine.deleteParticles(toRemove);
+      if (this.currentCount <= this.targetCount) {
+        this.regulationState = 'idle';
+        this.timer = 0;
+      }
+    } else {
+      this.timer = 0;
+    }
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      targetCount: this.targetCount,
+      hysteresis: this.hysteresis,
+      temperature: this.temperature,
+      mass: this.mass,
+      rate: this.rate,
+      isActive: this.isActive
+    };
+  }
+
+  static fromJSON(data) {
+    return new Regulator(data.x, data.y, data.width, data.height, {
+      id: data.id,
+      targetCount: data.targetCount,
+      hysteresis: data.hysteresis,
+      temperature: data.temperature,
+      mass: data.mass,
+      rate: data.rate,
+      isActive: data.isActive
+    });
+  }
+}
+
+
 // --- src/physics/ThrottleValve.js ---
 
 class ThrottleValve {
@@ -7158,590 +7158,6 @@ class ThrottleValve {
       temperature: data.temperature,
       isActive: data.isActive
     });
-  }
-}
-
-
-// --- src/render/Colormap.js ---
-class Colormap {
-  constructor() {
-    // Exact Blue -> Violet -> Magenta -> Red gradient matching user screenshot
-    this.stops = [
-      { t: 0.00, r: 59,  g: 130, b: 246 }, // Vibrant Blue (#3b82f6)
-      { t: 0.35, r: 124, g: 58,  b: 237 }, // Deep Violet (#7c3aed)
-      { t: 0.65, r: 192, g: 38,  b: 211 }, // Magenta/Purple (#c026d3)
-      { t: 1.00, r: 239, g: 68,  b: 68 }  // Warm Red (#ef4444)
-    ];
-
-    this.lutSize = 256;
-    this.lut = new Array(this.lutSize);
-    this._generateLUT();
-  }
-
-  _generateLUT() {
-    for (let i = 0; i < this.lutSize; i++) {
-      const t = i / (this.lutSize - 1);
-      this.lut[i] = this._sampleGradient(t);
-    }
-  }
-
-  _sampleGradient(t) {
-    t = Math.max(0, Math.min(1, t));
-    let s0 = this.stops[0];
-    let s1 = this.stops[this.stops.length - 1];
-
-    for (let i = 0; i < this.stops.length - 1; i++) {
-      if (t >= this.stops[i].t && t <= this.stops[i + 1].t) {
-        s0 = this.stops[i];
-        s1 = this.stops[i + 1];
-        break;
-      }
-    }
-
-    const range = s1.t - s0.t || 1;
-    const factor = (t - s0.t) / range;
-
-    const r = Math.round(s0.r + factor * (s1.r - s0.r));
-    const g = Math.round(s0.g + factor * (s1.g - s0.g));
-    const b = Math.round(s0.b + factor * (s1.b - s0.b));
-
-    return {
-      r, g, b,
-      rgb: `rgb(${r}, ${g}, ${b})`
-    };
-  }
-
-  getColor(normalizedValue) {
-    const idx = Math.max(0, Math.min(this.lutSize - 1, Math.floor(normalizedValue * (this.lutSize - 1))));
-    return this.lut[idx];
-  }
-}
-
-const thermalColormap = new Colormap();
-
-
-// --- src/render/ParticleGPURenderer.js ---
-
-class ParticleGPURenderer {
-  constructor(canvas) {
-    this.canvas = canvas;
-    this.device = null;
-    this.context = null;
-    this.format = null;
-    this.pipeline = null;
-    this.bindGroup = null;
-    this.uniformBuffer = null;
-    this.quadBuffer = null;
-    this.instanceBuffer = null;
-    this.colormapTexture = null;
-    this.sampler = null;
-
-    this.capacity = 50000;
-    this.instanceData = new Float32Array(this.capacity * 4);
-    this.uniformData = new ArrayBuffer(48);
-    this.uniformFloats = new Float32Array(this.uniformData);
-    this.uniformU32 = new Uint32Array(this.uniformData);
-
-    this.isSupported = false;
-  }
-
-  async init() {
-    if (!navigator.gpu) {
-      console.warn('WebGPU is not available in navigator.gpu.');
-      this.isSupported = false;
-      return false;
-    }
-
-    try {
-      const adapter = await navigator.gpu.requestAdapter({
-        powerPreference: 'high-performance'
-      });
-
-      if (!adapter) {
-        console.warn('WebGPU: No appropriate GPUAdapter found.');
-        this.isSupported = false;
-        return false;
-      }
-
-      this.device = await adapter.requestDevice();
-      this.context = this.canvas.getContext('webgpu');
-      this.format = navigator.gpu.getPreferredCanvasFormat();
-
-      this.context.configure({
-        device: this.device,
-        format: this.format,
-        alphaMode: 'premultiplied'
-      });
-
-      this._initBuffers();
-      this._initColormapTexture();
-      this._initPipeline();
-
-      this.isSupported = true;
-      return true;
-    } catch (err) {
-      console.error('WebGPU initialization error:', err);
-      this.isSupported = false;
-      return false;
-    }
-  }
-
-  _initBuffers() {
-    const device = this.device;
-
-    // 1. Quad geometry buffer (TRIANGLE_STRIP unit circle quad: -1..1)
-    const quadVertices = new Float32Array([
-      -1.0, -1.0,
-       1.0, -1.0,
-      -1.0,  1.0,
-       1.0,  1.0
-    ]);
-
-    this.quadBuffer = device.createBuffer({
-      size: quadVertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-    device.queue.writeBuffer(this.quadBuffer, 0, quadVertices);
-
-    // 2. Uniform buffer (48 bytes)
-    this.uniformBuffer = device.createBuffer({
-      size: 48,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-    });
-
-    // 3. Dynamic instance buffer (posX, posY, radius, speedNorm)
-    this.instanceBuffer = device.createBuffer({
-      size: this.instanceData.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-  }
-
-  _initColormapTexture() {
-    const device = this.device;
-    const lutBytes = new Uint8Array(256 * 4);
-
-    for (let i = 0; i < 256; i++) {
-      const c = thermalColormap.lut[i];
-      lutBytes[i * 4 + 0] = c.r;
-      lutBytes[i * 4 + 1] = c.g;
-      lutBytes[i * 4 + 2] = c.b;
-      lutBytes[i * 4 + 3] = 255;
-    }
-
-    this.colormapTexture = device.createTexture({
-      size: [256, 1, 1],
-      format: 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
-    });
-
-    device.queue.writeTexture(
-      { texture: this.colormapTexture },
-      lutBytes,
-      { bytesPerRow: 256 * 4, rowsPerImage: 1 },
-      [256, 1, 1]
-    );
-
-    this.sampler = device.createSampler({
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge',
-      minFilter: 'linear',
-      magFilter: 'linear'
-    });
-  }
-
-  _initPipeline() {
-    const device = this.device;
-
-    const wgslSource = `
-      struct Uniforms {
-        uViewportSize: vec2f,
-        uPan: vec2f,
-        uZoom: f32,
-        uColorByVelocity: u32,
-        _pad: vec2f,
-        uDefaultColor: vec3f,
-        _pad2: f32,
-      };
-
-      @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-      @group(0) @binding(1) var uColormap: texture_2d<f32>;
-      @group(0) @binding(2) var uSampler: sampler;
-
-      struct VertexOutput {
-        @builtin(position) position: vec4f,
-        @location(0) vLocalPos: vec2f,
-        @location(1) vSpeedNorm: f32,
-      };
-
-      @vertex
-      fn vs_main(
-        @location(0) aQuad: vec2f,
-        @location(1) aPos: vec2f,
-        @location(2) aRadius: f32,
-        @location(3) aSpeedNorm: f32
-      ) -> VertexOutput {
-        var out: VertexOutput;
-        if (aRadius <= 0.0 || aPos.x < -50000.0) {
-          out.position = vec4f(2.0, 2.0, 2.0, 1.0);
-          out.vLocalPos = vec2f(0.0);
-          out.vSpeedNorm = 0.0;
-          return out;
-        }
-        out.vLocalPos = aQuad;
-        out.vSpeedNorm = aSpeedNorm;
-
-        let screenCenter = aPos * uniforms.uZoom + uniforms.uPan;
-        let screenRadius = max(1.0, aRadius * uniforms.uZoom);
-        let screenPos = screenCenter + aQuad * screenRadius;
-
-        let ndc = vec2f(
-          (screenPos.x / uniforms.uViewportSize.x) * 2.0 - 1.0,
-          1.0 - (screenPos.y / uniforms.uViewportSize.y) * 2.0
-        );
-
-        out.position = vec4f(ndc, 0.0, 1.0);
-        return out;
-      }
-
-      @fragment
-      fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-        let distSq = dot(in.vLocalPos, in.vLocalPos);
-        if (distSq > 1.0) {
-          discard;
-        }
-
-        let dist = sqrt(distSq);
-        let delta = fwidth(dist);
-        let alpha = 1.0 - smoothstep(1.0 - delta * 1.5, 1.0, dist);
-
-        var baseRgb: vec3f;
-        if (uniforms.uColorByVelocity != 0u) {
-          let uv = vec2f(clamp(in.vSpeedNorm, 0.0, 1.0), 0.5);
-          baseRgb = textureSample(uColormap, uSampler, uv).rgb;
-        } else {
-          baseRgb = uniforms.uDefaultColor;
-        }
-
-        let borderFactor = smoothstep(0.70, 0.95, dist);
-        let finalRgb = mix(baseRgb, vec3f(1.0), borderFactor * 0.45);
-
-        return vec4f(finalRgb, alpha);
-      }
-    `;
-
-    const shaderModule = device.createShaderModule({
-      label: 'ParticleGPUShader',
-      code: wgslSource
-    });
-
-    const bindGroupLayout = device.createBindGroupLayout({
-      label: 'ParticleGPUBindGroupLayout',
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: 'uniform' }
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'float' }
-        },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: 'filtering' }
-        }
-      ]
-    });
-
-    const pipelineLayout = device.createPipelineLayout({
-      label: 'ParticleGPUPipelineLayout',
-      bindGroupLayouts: [bindGroupLayout]
-    });
-
-    this.pipeline = device.createRenderPipeline({
-      label: 'ParticleGPURenderPipeline',
-      layout: pipelineLayout,
-      vertex: {
-        module: shaderModule,
-        entryPoint: 'vs_main',
-        buffers: [
-          // Buffer 0: Quad Geometry
-          {
-            arrayStride: 2 * 4,
-            stepMode: 'vertex',
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x2' }
-            ]
-          },
-          // Buffer 1: Instance Attributes
-          {
-            arrayStride: 4 * 4,
-            stepMode: 'instance',
-            attributes: [
-              { shaderLocation: 1, offset: 0, format: 'float32x2' },
-              { shaderLocation: 2, offset: 2 * 4, format: 'float32' },
-              { shaderLocation: 3, offset: 3 * 4, format: 'float32' }
-            ]
-          }
-        ]
-      },
-      fragment: {
-        module: shaderModule,
-        entryPoint: 'fs_main',
-        targets: [
-          {
-            format: this.format,
-            blend: {
-              color: {
-                srcFactor: 'src-alpha',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add'
-              },
-              alpha: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add'
-              }
-            }
-          }
-        ]
-      },
-      primitive: {
-        topology: 'triangle-strip'
-      }
-    });
-
-    this.computePipeline = device.createRenderPipeline({
-      label: 'ParticleGPUComputeRenderPipeline',
-      layout: pipelineLayout,
-      vertex: {
-        module: shaderModule,
-        entryPoint: 'vs_main',
-        buffers: [
-          // Buffer 0: Quad Geometry
-          {
-            arrayStride: 2 * 4,
-            stepMode: 'vertex',
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x2' }
-            ]
-          },
-          // Buffer 1: Instance Attributes from Storage Buffer (32 bytes per particle)
-          {
-            arrayStride: 8 * 4,
-            stepMode: 'instance',
-            attributes: [
-              { shaderLocation: 1, offset: 0, format: 'float32x2' },     // aPos
-              { shaderLocation: 2, offset: 4 * 4, format: 'float32' },   // aRadius
-              { shaderLocation: 3, offset: 6 * 4, format: 'float32' }    // aSpeedNorm
-            ]
-          }
-        ]
-      },
-      fragment: {
-        module: shaderModule,
-        entryPoint: 'fs_main',
-        targets: [
-          {
-            format: this.format,
-            blend: {
-              color: {
-                srcFactor: 'src-alpha',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add'
-              },
-              alpha: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add'
-              }
-            }
-          }
-        ]
-      },
-      primitive: {
-        topology: 'triangle-strip'
-      }
-    });
-
-    this.bindGroup = device.createBindGroup({
-      label: 'ParticleGPUBindGroup',
-      layout: bindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: this.colormapTexture.createView() },
-        { binding: 2, resource: this.sampler }
-      ]
-    });
-  }
-
-  resize(width, height) {
-    if (!this.isSupported) return;
-    if (this.canvas.width !== width || this.canvas.height !== height) {
-      this.canvas.width = width;
-      this.canvas.height = height;
-    }
-  }
-
-  clear() {
-    if (!this.isSupported || !this.device || !this.context) return;
-    const currentTexture = this.context.getCurrentTexture();
-    const commandEncoder = this.device.createCommandEncoder();
-    const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: currentTexture.createView(),
-          loadOp: 'clear',
-          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-          storeOp: 'store'
-        }
-      ]
-    });
-    renderPass.end();
-    this.device.queue.submit([commandEncoder.finish()]);
-  }
-
-  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
-    if (!this.isSupported || !this.device || !this.context || !buffer || count === 0) {
-      this.clear();
-      return;
-    }
-
-    this.uniformFloats[0] = this.canvas.width;
-    this.uniformFloats[1] = this.canvas.height;
-    this.uniformFloats[2] = panX;
-    this.uniformFloats[3] = panY;
-    this.uniformFloats[4] = zoom;
-    this.uniformU32[5] = colorByVelocity ? 1 : 0;
-    this.uniformFloats[6] = 0.0;
-    this.uniformFloats[7] = 0.0;
-    this.uniformFloats[8] = 56 / 255;
-    this.uniformFloats[9] = 189 / 255;
-    this.uniformFloats[10] = 248 / 255;
-    this.uniformFloats[11] = 0.0;
-
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
-
-    const currentTexture = this.context.getCurrentTexture();
-    const commandEncoder = this.device.createCommandEncoder({
-      label: 'ParticleGPURenderCommandsZeroCopy'
-    });
-
-    const renderPass = commandEncoder.beginRenderPass({
-      label: 'ParticleGPURenderPassZeroCopy',
-      colorAttachments: [
-        {
-          view: currentTexture.createView(),
-          loadOp: 'clear',
-          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-          storeOp: 'store'
-        }
-      ]
-    });
-
-    renderPass.setPipeline(this.computePipeline);
-    renderPass.setBindGroup(0, this.bindGroup);
-    renderPass.setVertexBuffer(0, this.quadBuffer);
-    renderPass.setVertexBuffer(1, buffer);
-    renderPass.draw(4, count, 0, 0);
-    renderPass.end();
-
-    this.device.queue.submit([commandEncoder.finish()]);
-  }
-
-  render(particles, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true, bufferCount = 0) {
-    if (!this.isSupported || !this.device || !this.context) return;
-
-    if (particles && (particles instanceof GPUBuffer || (particles.buffer && particles.buffer instanceof GPUBuffer))) {
-      const buf = (particles instanceof GPUBuffer) ? particles : particles.buffer;
-      const count = bufferCount || particles.count || this.capacity;
-      this.renderGPUBuffer(buf, count, panX, panY, zoom, maxSpeedReference, colorByVelocity);
-      return;
-    }
-
-    const count = particles ? particles.length : 0;
-    if (count === 0) {
-      this.clear();
-      return;
-    }
-
-    // Expand buffer if particle count exceeds capacity
-    if (count > this.capacity) {
-      this.capacity = Math.max(count + 10000, this.capacity * 2);
-      this.instanceData = new Float32Array(this.capacity * 4);
-      if (this.instanceBuffer) {
-        this.instanceBuffer.destroy();
-      }
-      this.instanceBuffer = this.device.createBuffer({
-        size: this.instanceData.byteLength,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-      });
-    }
-
-    const data = this.instanceData;
-    const invMaxSpeed = 1.0 / Math.max(1, maxSpeedReference);
-
-    let ptr = 0;
-    for (let i = 0; i < count; i++) {
-      const p = particles[i];
-      data[ptr++] = p.pos.x;
-      data[ptr++] = p.pos.y;
-      data[ptr++] = p.radius;
-      data[ptr++] = p.getSpeed() * invMaxSpeed;
-    }
-
-    // Upload instance buffer
-    this.device.queue.writeBuffer(
-      this.instanceBuffer,
-      0,
-      data.buffer,
-      0,
-      count * 4 * 4
-    );
-
-    // Update uniform buffer
-    this.uniformFloats[0] = this.canvas.width;
-    this.uniformFloats[1] = this.canvas.height;
-    this.uniformFloats[2] = panX;
-    this.uniformFloats[3] = panY;
-    this.uniformFloats[4] = zoom;
-    this.uniformU32[5] = colorByVelocity ? 1 : 0;
-    this.uniformFloats[6] = 0.0;
-    this.uniformFloats[7] = 0.0;
-    this.uniformFloats[8] = 56 / 255;  // #38bdf8 R
-    this.uniformFloats[9] = 189 / 255; // G
-    this.uniformFloats[10] = 248 / 255;// B
-    this.uniformFloats[11] = 0.0;
-
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
-
-    const currentTexture = this.context.getCurrentTexture();
-    const commandEncoder = this.device.createCommandEncoder({
-      label: 'ParticleGPURenderCommands'
-    });
-
-    const renderPass = commandEncoder.beginRenderPass({
-      label: 'ParticleGPURenderPass',
-      colorAttachments: [
-        {
-          view: currentTexture.createView(),
-          loadOp: 'clear',
-          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-          storeOp: 'store'
-        }
-      ]
-    });
-
-    renderPass.setPipeline(this.pipeline);
-    renderPass.setBindGroup(0, this.bindGroup);
-    renderPass.setVertexBuffer(0, this.quadBuffer);
-    renderPass.setVertexBuffer(1, this.instanceBuffer);
-    renderPass.draw(4, count, 0, 0);
-    renderPass.end();
-
-    this.device.queue.submit([commandEncoder.finish()]);
   }
 }
 
@@ -11629,6 +11045,590 @@ class Engine {
 }
 
 
+// --- src/render/Colormap.js ---
+class Colormap {
+  constructor() {
+    // Exact Blue -> Violet -> Magenta -> Red gradient matching user screenshot
+    this.stops = [
+      { t: 0.00, r: 59,  g: 130, b: 246 }, // Vibrant Blue (#3b82f6)
+      { t: 0.35, r: 124, g: 58,  b: 237 }, // Deep Violet (#7c3aed)
+      { t: 0.65, r: 192, g: 38,  b: 211 }, // Magenta/Purple (#c026d3)
+      { t: 1.00, r: 239, g: 68,  b: 68 }  // Warm Red (#ef4444)
+    ];
+
+    this.lutSize = 256;
+    this.lut = new Array(this.lutSize);
+    this._generateLUT();
+  }
+
+  _generateLUT() {
+    for (let i = 0; i < this.lutSize; i++) {
+      const t = i / (this.lutSize - 1);
+      this.lut[i] = this._sampleGradient(t);
+    }
+  }
+
+  _sampleGradient(t) {
+    t = Math.max(0, Math.min(1, t));
+    let s0 = this.stops[0];
+    let s1 = this.stops[this.stops.length - 1];
+
+    for (let i = 0; i < this.stops.length - 1; i++) {
+      if (t >= this.stops[i].t && t <= this.stops[i + 1].t) {
+        s0 = this.stops[i];
+        s1 = this.stops[i + 1];
+        break;
+      }
+    }
+
+    const range = s1.t - s0.t || 1;
+    const factor = (t - s0.t) / range;
+
+    const r = Math.round(s0.r + factor * (s1.r - s0.r));
+    const g = Math.round(s0.g + factor * (s1.g - s0.g));
+    const b = Math.round(s0.b + factor * (s1.b - s0.b));
+
+    return {
+      r, g, b,
+      rgb: `rgb(${r}, ${g}, ${b})`
+    };
+  }
+
+  getColor(normalizedValue) {
+    const idx = Math.max(0, Math.min(this.lutSize - 1, Math.floor(normalizedValue * (this.lutSize - 1))));
+    return this.lut[idx];
+  }
+}
+
+const thermalColormap = new Colormap();
+
+
+// --- src/render/ParticleGPURenderer.js ---
+
+class ParticleGPURenderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.device = null;
+    this.context = null;
+    this.format = null;
+    this.pipeline = null;
+    this.bindGroup = null;
+    this.uniformBuffer = null;
+    this.quadBuffer = null;
+    this.instanceBuffer = null;
+    this.colormapTexture = null;
+    this.sampler = null;
+
+    this.capacity = 50000;
+    this.instanceData = new Float32Array(this.capacity * 4);
+    this.uniformData = new ArrayBuffer(48);
+    this.uniformFloats = new Float32Array(this.uniformData);
+    this.uniformU32 = new Uint32Array(this.uniformData);
+
+    this.isSupported = false;
+  }
+
+  async init() {
+    if (!navigator.gpu) {
+      console.warn('WebGPU is not available in navigator.gpu.');
+      this.isSupported = false;
+      return false;
+    }
+
+    try {
+      const adapter = await navigator.gpu.requestAdapter({
+        powerPreference: 'high-performance'
+      });
+
+      if (!adapter) {
+        console.warn('WebGPU: No appropriate GPUAdapter found.');
+        this.isSupported = false;
+        return false;
+      }
+
+      this.device = await adapter.requestDevice();
+      this.context = this.canvas.getContext('webgpu');
+      this.format = navigator.gpu.getPreferredCanvasFormat();
+
+      this.context.configure({
+        device: this.device,
+        format: this.format,
+        alphaMode: 'premultiplied'
+      });
+
+      this._initBuffers();
+      this._initColormapTexture();
+      this._initPipeline();
+
+      this.isSupported = true;
+      return true;
+    } catch (err) {
+      console.error('WebGPU initialization error:', err);
+      this.isSupported = false;
+      return false;
+    }
+  }
+
+  _initBuffers() {
+    const device = this.device;
+
+    // 1. Quad geometry buffer (TRIANGLE_STRIP unit circle quad: -1..1)
+    const quadVertices = new Float32Array([
+      -1.0, -1.0,
+       1.0, -1.0,
+      -1.0,  1.0,
+       1.0,  1.0
+    ]);
+
+    this.quadBuffer = device.createBuffer({
+      size: quadVertices.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    });
+    device.queue.writeBuffer(this.quadBuffer, 0, quadVertices);
+
+    // 2. Uniform buffer (48 bytes)
+    this.uniformBuffer = device.createBuffer({
+      size: 48,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+
+    // 3. Dynamic instance buffer (posX, posY, radius, speedNorm)
+    this.instanceBuffer = device.createBuffer({
+      size: this.instanceData.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    });
+  }
+
+  _initColormapTexture() {
+    const device = this.device;
+    const lutBytes = new Uint8Array(256 * 4);
+
+    for (let i = 0; i < 256; i++) {
+      const c = thermalColormap.lut[i];
+      lutBytes[i * 4 + 0] = c.r;
+      lutBytes[i * 4 + 1] = c.g;
+      lutBytes[i * 4 + 2] = c.b;
+      lutBytes[i * 4 + 3] = 255;
+    }
+
+    this.colormapTexture = device.createTexture({
+      size: [256, 1, 1],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+    });
+
+    device.queue.writeTexture(
+      { texture: this.colormapTexture },
+      lutBytes,
+      { bytesPerRow: 256 * 4, rowsPerImage: 1 },
+      [256, 1, 1]
+    );
+
+    this.sampler = device.createSampler({
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+      minFilter: 'linear',
+      magFilter: 'linear'
+    });
+  }
+
+  _initPipeline() {
+    const device = this.device;
+
+    const wgslSource = `
+      struct Uniforms {
+        uViewportSize: vec2f,
+        uPan: vec2f,
+        uZoom: f32,
+        uColorByVelocity: u32,
+        _pad: vec2f,
+        uDefaultColor: vec3f,
+        _pad2: f32,
+      };
+
+      @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+      @group(0) @binding(1) var uColormap: texture_2d<f32>;
+      @group(0) @binding(2) var uSampler: sampler;
+
+      struct VertexOutput {
+        @builtin(position) position: vec4f,
+        @location(0) vLocalPos: vec2f,
+        @location(1) vSpeedNorm: f32,
+      };
+
+      @vertex
+      fn vs_main(
+        @location(0) aQuad: vec2f,
+        @location(1) aPos: vec2f,
+        @location(2) aRadius: f32,
+        @location(3) aSpeedNorm: f32
+      ) -> VertexOutput {
+        var out: VertexOutput;
+        if (aRadius <= 0.0 || aPos.x < -50000.0) {
+          out.position = vec4f(2.0, 2.0, 2.0, 1.0);
+          out.vLocalPos = vec2f(0.0);
+          out.vSpeedNorm = 0.0;
+          return out;
+        }
+        out.vLocalPos = aQuad;
+        out.vSpeedNorm = aSpeedNorm;
+
+        let screenCenter = aPos * uniforms.uZoom + uniforms.uPan;
+        let screenRadius = max(1.0, aRadius * uniforms.uZoom);
+        let screenPos = screenCenter + aQuad * screenRadius;
+
+        let ndc = vec2f(
+          (screenPos.x / uniforms.uViewportSize.x) * 2.0 - 1.0,
+          1.0 - (screenPos.y / uniforms.uViewportSize.y) * 2.0
+        );
+
+        out.position = vec4f(ndc, 0.0, 1.0);
+        return out;
+      }
+
+      @fragment
+      fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+        let distSq = dot(in.vLocalPos, in.vLocalPos);
+        if (distSq > 1.0) {
+          discard;
+        }
+
+        let dist = sqrt(distSq);
+        let delta = fwidth(dist);
+        let alpha = 1.0 - smoothstep(1.0 - delta * 1.5, 1.0, dist);
+
+        var baseRgb: vec3f;
+        if (uniforms.uColorByVelocity != 0u) {
+          let uv = vec2f(clamp(in.vSpeedNorm, 0.0, 1.0), 0.5);
+          baseRgb = textureSample(uColormap, uSampler, uv).rgb;
+        } else {
+          baseRgb = uniforms.uDefaultColor;
+        }
+
+        let borderFactor = smoothstep(0.70, 0.95, dist);
+        let finalRgb = mix(baseRgb, vec3f(1.0), borderFactor * 0.45);
+
+        return vec4f(finalRgb, alpha);
+      }
+    `;
+
+    const shaderModule = device.createShaderModule({
+      label: 'ParticleGPUShader',
+      code: wgslSource
+    });
+
+    const bindGroupLayout = device.createBindGroupLayout({
+      label: 'ParticleGPUBindGroupLayout',
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'uniform' }
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float' }
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: 'filtering' }
+        }
+      ]
+    });
+
+    const pipelineLayout = device.createPipelineLayout({
+      label: 'ParticleGPUPipelineLayout',
+      bindGroupLayouts: [bindGroupLayout]
+    });
+
+    this.pipeline = device.createRenderPipeline({
+      label: 'ParticleGPURenderPipeline',
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_main',
+        buffers: [
+          // Buffer 0: Quad Geometry
+          {
+            arrayStride: 2 * 4,
+            stepMode: 'vertex',
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x2' }
+            ]
+          },
+          // Buffer 1: Instance Attributes
+          {
+            arrayStride: 4 * 4,
+            stepMode: 'instance',
+            attributes: [
+              { shaderLocation: 1, offset: 0, format: 'float32x2' },
+              { shaderLocation: 2, offset: 2 * 4, format: 'float32' },
+              { shaderLocation: 3, offset: 3 * 4, format: 'float32' }
+            ]
+          }
+        ]
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_main',
+        targets: [
+          {
+            format: this.format,
+            blend: {
+              color: {
+                srcFactor: 'src-alpha',
+                dstFactor: 'one-minus-src-alpha',
+                operation: 'add'
+              },
+              alpha: {
+                srcFactor: 'one',
+                dstFactor: 'one-minus-src-alpha',
+                operation: 'add'
+              }
+            }
+          }
+        ]
+      },
+      primitive: {
+        topology: 'triangle-strip'
+      }
+    });
+
+    this.computePipeline = device.createRenderPipeline({
+      label: 'ParticleGPUComputeRenderPipeline',
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_main',
+        buffers: [
+          // Buffer 0: Quad Geometry
+          {
+            arrayStride: 2 * 4,
+            stepMode: 'vertex',
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x2' }
+            ]
+          },
+          // Buffer 1: Instance Attributes from Storage Buffer (32 bytes per particle)
+          {
+            arrayStride: 8 * 4,
+            stepMode: 'instance',
+            attributes: [
+              { shaderLocation: 1, offset: 0, format: 'float32x2' },     // aPos
+              { shaderLocation: 2, offset: 4 * 4, format: 'float32' },   // aRadius
+              { shaderLocation: 3, offset: 6 * 4, format: 'float32' }    // aSpeedNorm
+            ]
+          }
+        ]
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_main',
+        targets: [
+          {
+            format: this.format,
+            blend: {
+              color: {
+                srcFactor: 'src-alpha',
+                dstFactor: 'one-minus-src-alpha',
+                operation: 'add'
+              },
+              alpha: {
+                srcFactor: 'one',
+                dstFactor: 'one-minus-src-alpha',
+                operation: 'add'
+              }
+            }
+          }
+        ]
+      },
+      primitive: {
+        topology: 'triangle-strip'
+      }
+    });
+
+    this.bindGroup = device.createBindGroup({
+      label: 'ParticleGPUBindGroup',
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: this.colormapTexture.createView() },
+        { binding: 2, resource: this.sampler }
+      ]
+    });
+  }
+
+  resize(width, height) {
+    if (!this.isSupported) return;
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+  }
+
+  clear() {
+    if (!this.isSupported || !this.device || !this.context) return;
+    const currentTexture = this.context.getCurrentTexture();
+    const commandEncoder = this.device.createCommandEncoder();
+    const renderPass = commandEncoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: currentTexture.createView(),
+          loadOp: 'clear',
+          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+          storeOp: 'store'
+        }
+      ]
+    });
+    renderPass.end();
+    this.device.queue.submit([commandEncoder.finish()]);
+  }
+
+  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+    if (!this.isSupported || !this.device || !this.context || !buffer || count === 0) {
+      this.clear();
+      return;
+    }
+
+    this.uniformFloats[0] = this.canvas.width;
+    this.uniformFloats[1] = this.canvas.height;
+    this.uniformFloats[2] = panX;
+    this.uniformFloats[3] = panY;
+    this.uniformFloats[4] = zoom;
+    this.uniformU32[5] = colorByVelocity ? 1 : 0;
+    this.uniformFloats[6] = 0.0;
+    this.uniformFloats[7] = 0.0;
+    this.uniformFloats[8] = 56 / 255;
+    this.uniformFloats[9] = 189 / 255;
+    this.uniformFloats[10] = 248 / 255;
+    this.uniformFloats[11] = 0.0;
+
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
+
+    const currentTexture = this.context.getCurrentTexture();
+    const commandEncoder = this.device.createCommandEncoder({
+      label: 'ParticleGPURenderCommandsZeroCopy'
+    });
+
+    const renderPass = commandEncoder.beginRenderPass({
+      label: 'ParticleGPURenderPassZeroCopy',
+      colorAttachments: [
+        {
+          view: currentTexture.createView(),
+          loadOp: 'clear',
+          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+          storeOp: 'store'
+        }
+      ]
+    });
+
+    renderPass.setPipeline(this.computePipeline);
+    renderPass.setBindGroup(0, this.bindGroup);
+    renderPass.setVertexBuffer(0, this.quadBuffer);
+    renderPass.setVertexBuffer(1, buffer);
+    renderPass.draw(4, count, 0, 0);
+    renderPass.end();
+
+    this.device.queue.submit([commandEncoder.finish()]);
+  }
+
+  render(particles, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true, bufferCount = 0) {
+    if (!this.isSupported || !this.device || !this.context) return;
+
+    if (particles && (particles instanceof GPUBuffer || (particles.buffer && particles.buffer instanceof GPUBuffer))) {
+      const buf = (particles instanceof GPUBuffer) ? particles : particles.buffer;
+      const count = bufferCount || particles.count || this.capacity;
+      this.renderGPUBuffer(buf, count, panX, panY, zoom, maxSpeedReference, colorByVelocity);
+      return;
+    }
+
+    const count = particles ? particles.length : 0;
+    if (count === 0) {
+      this.clear();
+      return;
+    }
+
+    // Expand buffer if particle count exceeds capacity
+    if (count > this.capacity) {
+      this.capacity = Math.max(count + 10000, this.capacity * 2);
+      this.instanceData = new Float32Array(this.capacity * 4);
+      if (this.instanceBuffer) {
+        this.instanceBuffer.destroy();
+      }
+      this.instanceBuffer = this.device.createBuffer({
+        size: this.instanceData.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      });
+    }
+
+    const data = this.instanceData;
+    const invMaxSpeed = 1.0 / Math.max(1, maxSpeedReference);
+
+    let ptr = 0;
+    for (let i = 0; i < count; i++) {
+      const p = particles[i];
+      data[ptr++] = p.pos.x;
+      data[ptr++] = p.pos.y;
+      data[ptr++] = p.radius;
+      data[ptr++] = p.getSpeed() * invMaxSpeed;
+    }
+
+    // Upload instance buffer
+    this.device.queue.writeBuffer(
+      this.instanceBuffer,
+      0,
+      data.buffer,
+      0,
+      count * 4 * 4
+    );
+
+    // Update uniform buffer
+    this.uniformFloats[0] = this.canvas.width;
+    this.uniformFloats[1] = this.canvas.height;
+    this.uniformFloats[2] = panX;
+    this.uniformFloats[3] = panY;
+    this.uniformFloats[4] = zoom;
+    this.uniformU32[5] = colorByVelocity ? 1 : 0;
+    this.uniformFloats[6] = 0.0;
+    this.uniformFloats[7] = 0.0;
+    this.uniformFloats[8] = 56 / 255;  // #38bdf8 R
+    this.uniformFloats[9] = 189 / 255; // G
+    this.uniformFloats[10] = 248 / 255;// B
+    this.uniformFloats[11] = 0.0;
+
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
+
+    const currentTexture = this.context.getCurrentTexture();
+    const commandEncoder = this.device.createCommandEncoder({
+      label: 'ParticleGPURenderCommands'
+    });
+
+    const renderPass = commandEncoder.beginRenderPass({
+      label: 'ParticleGPURenderPass',
+      colorAttachments: [
+        {
+          view: currentTexture.createView(),
+          loadOp: 'clear',
+          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+          storeOp: 'store'
+        }
+      ]
+    });
+
+    renderPass.setPipeline(this.pipeline);
+    renderPass.setBindGroup(0, this.bindGroup);
+    renderPass.setVertexBuffer(0, this.quadBuffer);
+    renderPass.setVertexBuffer(1, this.instanceBuffer);
+    renderPass.draw(4, count, 0, 0);
+    renderPass.end();
+
+    this.device.queue.submit([commandEncoder.finish()]);
+  }
+}
+
+
 // --- src/render/Renderer.js ---
 
 class Renderer {
@@ -13885,106 +13885,553 @@ class DashboardChart {
 }
 
 
-// --- src/control/SequencerCatalogDefaults.js ---
-﻿/**
- * SequencerCatalogDefaults.js
- * Canonical default parameter values and lookup helpers according to TOOL_CATALOG.md.
- * Used for default indicators and 'Reset to Default' functionality.
- */
+// --- src/presets/index.js ---
+const Presets = {
+  // 1. Split-Stirling Cryocooler / Heat Engine
+  splitStirling: {
+    id: 'splitStirling',
+    name: 'Split-Stirling Cryocooler',
+    category: 'Thermodynamic Cycles',
+    icon: 'stirling',
+    description: 'Dual-piston compressor, split pipe, regenerator matrix, cold finger, and displacer piston.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
 
-const TOOL_DEFAULTS = {
-  wall: {
-    thickness: 4,
-    conductivity: 0.0
+      // Outer boundaries / Compressor housing (Left side)
+      engine.addWall(60, 160, 280, 160, { thickness: 6 });
+      engine.addWall(60, 480, 280, 480, { thickness: 6 });
+      engine.addWall(60, 160, 60, 480, { thickness: 6 });
+
+      // Split Pipe connecting compressor to regenerator
+      engine.addWall(280, 160, 280, 290, { thickness: 6 });
+      engine.addWall(280, 290, 560, 290, { thickness: 6 });
+      engine.addWall(280, 350, 560, 350, { thickness: 6 });
+      engine.addWall(280, 350, 280, 480, { thickness: 6 });
+
+      // Ambient Heat Exchanger along split pipe (rejection at 300K)
+      engine.addHeatExchanger(330, 275, 120, 90, {
+        temperature: 300,
+        conductivity: 0.8,
+        label: 'Ambient Cooler (300K)'
+      });
+
+      // Cold Finger / Expander Cylinder (Right side)
+      engine.addWall(560, 80, 700, 80, { thickness: 6 });
+      engine.addWall(560, 80, 560, 290, { thickness: 6 });
+      engine.addWall(700, 80, 700, 540, { thickness: 6 });
+      engine.addWall(560, 350, 560, 540, { thickness: 6 });
+      engine.addWall(560, 540, 700, 540, { thickness: 6 });
+
+      // Regenerator Matrix in Cold Finger
+      engine.addRegeneratorMatrix(570, 160, 120, 110, {
+        orientation: 'vertical',
+        temperature: 200,
+        heatCapacity: 450,
+        conductivity: 0.75,
+        label: 'Regenerator Matrix'
+      });
+
+      // Compressor Piston (Motorized harmonic drive)
+      engine.addPiston({
+        label: 'Compressor Piston',
+        orientation: 'horizontal',
+        x: 160,
+        y: 320,
+        width: 24,
+        height: 310,
+        minPos: 80,
+        maxPos: 250,
+        mode: 'motorized',
+        frequency: 0.8,
+        amplitude: 50,
+        phase: 0
+      });
+
+      // Displacer Piston in Bouncing Volume (Phase-shifted)
+      engine.addPiston({
+        label: 'Displacer Piston',
+        orientation: 'vertical',
+        x: 630,
+        y: 420,
+        width: 20,
+        height: 130,
+        minPos: 310,
+        maxPos: 490,
+        mode: 'motorized',
+        frequency: 0.8,
+        amplitude: 45,
+        phase: 80 // ~80 degrees phase lead for Stirling expansion
+      });
+
+      // Sensor Chambers
+      engine.addSensor({
+        label: 'Compression Space',
+        x: 180,
+        y: 180,
+        width: 90,
+        height: 280,
+        color: '#f97316'
+      });
+      engine.addSensor({
+        label: 'Expansion Cold Head',
+        x: 570,
+        y: 90,
+        width: 120,
+        height: 65,
+        color: '#38bdf8'
+      });
+
+      // Working Gas
+      engine.spawnGasRaster(180, 200, 90, 240, 90, 1.0, 300, 'maxwell_boltzmann', 'Compressor Gas');
+      engine.spawnGasRaster(570, 95, 120, 60, 45, 1.0, 220, 'maxwell_boltzmann', 'Cold Space Gas');
+    }
   },
-  piston: {
-    strokeCommand: 'drive_tdc',
-    motionType: 'free',
-    targetSpeed: 160,
-    mass: 30,
-    conductivity: 0.20,
-    springK: 50,
-    frequency: 0.8,
-    phase: 0,
-    dampingCoeff: 25
+
+  // 2. Venturi Nozzle & Bernoulli Effect
+  venturiTube: {
+    id: 'venturiTube',
+    name: 'Venturi Nozzle & Bernoulli Flow',
+    category: 'Fluid & Aerodynamics',
+    icon: 'venturi',
+    description: 'Converging-diverging contraction channel demonstrating velocity increase and pressure drop.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Top contoured wall
+      engine.addWall(40, 160, 260, 160, { thickness: 5 });
+      engine.addWall(260, 160, 440, 260, { thickness: 5 });
+      engine.addWall(440, 260, 560, 260, { thickness: 5 }); // Throat
+      engine.addWall(560, 260, 740, 160, { thickness: 5 });
+      engine.addWall(740, 160, 960, 160, { thickness: 5 });
+
+      // Bottom contoured wall
+      engine.addWall(40, 480, 260, 480, { thickness: 5 });
+      engine.addWall(260, 480, 440, 380, { thickness: 5 });
+      engine.addWall(440, 380, 560, 380, { thickness: 5 }); // Throat
+      engine.addWall(560, 380, 740, 480, { thickness: 5 });
+      engine.addWall(740, 480, 960, 480, { thickness: 5 });
+
+      // Inlet continuous emitter (left)
+      engine.addEmitter(50, 200, 40, 240, {
+        direction: 'right',
+        rate: 28,
+        temperature: 300,
+        mass: 1.0
+      });
+
+      // Outlet absorber (right)
+      engine.addSink(910, 180, 40, 280, {
+        direction: 'right',
+        absorptionEfficiency: 1.0
+      });
+
+      // Sensors: Inlet, Throat, Diffuser
+      engine.addSensor({
+        label: 'Inlet (Wide, Low v)',
+        x: 120,
+        y: 180,
+        width: 120,
+        height: 280,
+        color: '#38bdf8'
+      });
+      engine.addSensor({
+        label: 'Throat (Constriction, High v, Low P)',
+        x: 450,
+        y: 270,
+        width: 100,
+        height: 100,
+        color: '#f59e0b'
+      });
+      engine.addSensor({
+        label: 'Diffuser (Recovery)',
+        x: 760,
+        y: 180,
+        width: 140,
+        height: 280,
+        color: '#10b981'
+      });
+
+      // Pre-fill steady flow gas
+      engine.spawnGasRaster(120, 200, 120, 240, 60, 1.0, 300, 'uniform_speed', 'Inlet Gas');
+      engine.spawnGasRaster(450, 280, 100, 80, 35, 1.0, 270, 'uniform_speed', 'Throat Gas');
+      engine.spawnGasRaster(760, 200, 130, 240, 60, 1.0, 300, 'uniform_speed', 'Exit Gas');
+    }
   },
-  manual_valve: {
-    valveState: 'open',
-    conductivity: 0.0
+
+  // 3. Dual-Chamber Thermal Equalization
+  dualChamber: {
+    id: 'dualChamber',
+    name: 'Dual-Chamber Thermal Equalization',
+    category: 'Heat Transfer & 2nd Law',
+    icon: 'chambers',
+    description: 'High-temperature gas and cryogenic gas separated by a thermally conductive partition wall.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Outer insulated container (800x440)
+      engine.addWall(80, 120, 880, 120, { thickness: 8, conductivity: 0 });
+      engine.addWall(80, 560, 880, 560, { thickness: 8, conductivity: 0 });
+      engine.addWall(80, 120, 80, 560, { thickness: 8, conductivity: 0 });
+      engine.addWall(880, 120, 880, 560, { thickness: 8, conductivity: 0 });
+
+      // Central conductive dividing wall (kappa = 0.85)
+      engine.addWall(480, 120, 480, 560, {
+        thickness: 8,
+        conductivity: 0.85,
+        label: 'Conductive Partition (κ = 0.85)'
+      });
+
+      // Sensors: Left (Hot), Right (Cold)
+      engine.addSensor({
+        label: 'Chamber Left (Hot)',
+        x: 100,
+        y: 140,
+        width: 360,
+        height: 400,
+        color: '#ef4444'
+      });
+      engine.addSensor({
+        label: 'Chamber Right (Cold)',
+        x: 500,
+        y: 140,
+        width: 360,
+        height: 400,
+        color: '#3b82f6'
+      });
+
+      // Hot gas left (750K), Cold gas right (125K)
+      engine.spawnGasRaster(120, 160, 320, 360, 120, 1.0, 750, 'maxwell_boltzmann', 'Hot Gas (750K)');
+      engine.spawnGasRaster(520, 160, 320, 360, 120, 1.0, 125, 'maxwell_boltzmann', 'Cold Gas (125K)');
+    }
   },
-  check_valve: {
-    direction: 1,
-    conductivity: 0.0
+
+  // 4. Joule-Thomson Expansion & Throttle Valve
+  jouleThomson: {
+    id: 'jouleThomson',
+    name: 'Joule-Thomson Throttle Expansion',
+    category: 'Thermodynamic Expansion',
+    icon: 'throttle',
+    description: 'High-pressure gas forced through a narrow throttle valve aperture into an expansion chamber.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Outer enclosure
+      engine.addWall(60, 150, 900, 150, { thickness: 6 });
+      engine.addWall(60, 510, 900, 510, { thickness: 6 });
+      engine.addWall(60, 150, 60, 510, { thickness: 6 });
+      engine.addWall(900, 150, 900, 510, { thickness: 6 });
+
+      // Partition Wall with central Throttle Valve
+      engine.addWall(460, 150, 460, 260, { thickness: 6 });
+      engine.addThrottleValve(460, 260, 460, 400, {
+        openRatio: 0.25,
+        thickness: 8,
+        conductivity: 0.2
+      });
+      engine.addWall(460, 400, 460, 510, { thickness: 6 });
+
+      // Continuous high-pressure supply on left
+      engine.addEmitter(80, 230, 40, 200, {
+        direction: 'right',
+        rate: 22,
+        temperature: 450,
+        mass: 1.0
+      });
+
+      // Exhaust / Low-pressure sink on far right
+      engine.addSink(840, 230, 40, 200, {
+        direction: 'right',
+        absorptionEfficiency: 0.95
+      });
+
+      // Upstream & Downstream Sensor Zones
+      engine.addSensor({
+        label: 'High-Pressure Upstream (P1, T1)',
+        x: 140,
+        y: 170,
+        width: 300,
+        height: 320,
+        color: '#f97316'
+      });
+      engine.addSensor({
+        label: 'Low-Pressure Downstream (P2, T2)',
+        x: 480,
+        y: 170,
+        width: 340,
+        height: 320,
+        color: '#10b981'
+      });
+
+      // Pre-fill upstream chamber
+      engine.spawnGasRaster(160, 190, 260, 280, 110, 1.0, 450, 'maxwell_boltzmann', 'Upstream Gas');
+      engine.spawnGasRaster(500, 230, 300, 200, 40, 1.0, 250, 'maxwell_boltzmann', 'Downstream Gas');
+    }
   },
-  relief_valve: {
-    triggerPressure: 250,
-    pressureHysteresis: 25,
-    reliefMode: '1-way',
-    conductivity: 0.0
+
+  // 5. Adiabatic & Isothermal Compression
+  compressionCylinder: {
+    id: 'compressionCylinder',
+    name: 'Adiabatic Cylinder Compression',
+    category: 'Work & Compression',
+    icon: 'piston',
+    description: 'Cylinder enclosed with a moving heavy piston demonstrating work extraction and PV compression heating.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Rigid Cylinder Chamber
+      engine.addWall(80, 140, 840, 140, { thickness: 6, conductivity: 0 });
+      engine.addWall(80, 500, 840, 500, { thickness: 6, conductivity: 0 });
+      engine.addWall(80, 140, 80, 500, { thickness: 6, conductivity: 0 });
+
+      // Compressor Piston (Motorized sweep)
+      engine.addPiston({
+        label: 'Compression Piston',
+        orientation: 'horizontal',
+        x: 600,
+        y: 320,
+        width: 28,
+        height: 350,
+        minPos: 200,
+        maxPos: 760,
+        mode: 'motorized',
+        frequency: 0.5,
+        amplitude: 220,
+        phase: 0,
+        mass: 50,
+        conductivity: 0
+      });
+
+      // Cylinder Sensor
+      engine.addSensor({
+        label: 'Cylinder Chamber',
+        x: 100,
+        y: 160,
+        width: 480,
+        height: 320,
+        color: '#f59e0b'
+      });
+
+      // Enclosed Gas
+      engine.spawnGasRaster(120, 180, 440, 280, 160, 1.0, 280, 'maxwell_boltzmann', 'Cylinder Gas');
+    }
   },
-  throttle_valve: {
-    state: 'active',
-    openRatio: 0.30,
-    conductivity: 0.0
-  },
-  reservoir: {
-    isActive: true,
-    temperature: 500,
-    conductivity: 0.80
-  },
-  heat_exchanger: {
-    isActive: true,
-    temperature: 300,
-    conductivity: 0.60
-  },
-  regenerator: {
-    isActive: true,
-    orientation: 'horizontal',
-    temperature: 300,
-    heatCapacity: 400,
-    conductivity: 0.70
-  },
-  thermal_block: {
-    isActive: true,
-    temperature: 300,
-    heatCapacity: 300,
-    conductivity: 0.60
-  },
-  emitter: {
-    state: 'firing',
-    direction: 'right',
-    rate: 8,
-    temperature: 300,
-    mass: 1.0,
-    maxParticles: 0
-  },
-  sink: {
-    isActive: true,
-    direction: '360',
-    tempFilterMode: 'all',
-    filterTemperature: 300,
-    absorptionEfficiency: 1.0,
-    maxParticles: 0
-  },
-  regulator: {
-    isActive: true,
-    targetCount: 50,
-    hysteresis: 3,
-    temperature: 300,
-    mass: 1.0,
-    rate: 15
+
+  // 6. Brownian Motion & Colloidal Diffusion
+  brownianMotion: {
+    id: 'brownianMotion',
+    name: 'Brownian Motion & Colloidal Diffusion',
+    category: 'Statistical Mechanics',
+    icon: 'brownian',
+    description: 'Massive colloidal particles suspended in an ideal thermal bath undergoing random walk collisions.',
+    load: (engine) => {
+      engine.clear();
+      engine.timeScale = 1.0;
+
+      // Closed Container Box
+      engine.addWall(80, 80, 880, 80, { thickness: 6 });
+      engine.addWall(80, 580, 880, 580, { thickness: 6 });
+      engine.addWall(80, 80, 80, 580, { thickness: 6 });
+      engine.addWall(880, 80, 880, 580, { thickness: 6 });
+
+      // Measurement Zone
+      engine.addSensor({
+        label: 'Diffusion Bath',
+        x: 90,
+        y: 90,
+        width: 780,
+        height: 480,
+        color: '#a855f7'
+      });
+
+      // Background Light Gas (m = 0.5, fast)
+      engine.spawnGasRaster(100, 100, 760, 460, 240, 0.5, 350, 'maxwell_boltzmann', 'Thermal Gas Bath');
+
+      // Add 4 Heavy Colloidal Particles (m = 15.0 to 25.0)
+      const c1 = engine.addParticle(260, 300, 0, 0, 18.0);
+      c1.tag = 'colloid';
+      const c2 = engine.addParticle(480, 240, 0, 0, 22.0);
+      c2.tag = 'colloid';
+      const c3 = engine.addParticle(520, 420, 0, 0, 20.0);
+      c3.tag = 'colloid';
+      const c4 = engine.addParticle(700, 340, 0, 0, 25.0);
+      c4.tag = 'colloid';
+    }
   }
 };
 
-class SequencerCatalogDefaults {
-  static getDefaultsForType(type) {
-    const d = TOOL_DEFAULTS[type] || {};
-    return JSON.parse(JSON.stringify(d));
+if (typeof window !== 'undefined') {
+  window.Presets = Presets;
+}
+
+
+// --- src/control/SequencerDock.js ---
+/**
+ * SequencerDock.js
+ * Unified Bottom Dock Controller & Expansion Shell for Cycle Sequencer.
+ */
+
+class SequencerDock {
+  constructor(engine, callbacks = {}) {
+    this.engine = engine;
+    this.callbacks = callbacks; // { onToggle, onAddStep, onReset, onRenderRequest }
+    this.isOpen = false;
+
+    // DOM Elements
+    this.drawerEl = document.getElementById('cycleSequencerDrawer');
+    this.btnToggleSequencer = document.getElementById('btnToggleSequencer');
+    this.chevronBtn = document.getElementById('seqDrawerChevron');
+    this.headerEl = document.getElementById('seqDrawerHeader');
+    this.btnActive = document.getElementById('seqBtnActive');
+    this.btnLoop = document.getElementById('seqBtnLoop');
+    this.cycleBadge = document.getElementById('seqCycleBadge');
+    this.btnAddStep = document.getElementById('seqBtnAddStep');
+    this.btnReset = document.getElementById('seqBtnReset');
+
+    this._bindEvents();
+    this.updateBadges();
   }
 
-  static getDefault(type, prop) {
-    const d = TOOL_DEFAULTS[type];
-    return d && d[prop] !== undefined ? d[prop] : null;
+  _bindEvents() {
+    // 1. Bottom Dock Toggle Button [⏱ Sequencer]
+    this.btnToggleSequencer?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleDrawer();
+    });
+
+    // 2. Chevron Button in Drawer Header
+    this.chevronBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleDrawer();
+    });
+
+    // 3. Header strip click (unless clicking a control)
+    this.headerEl?.addEventListener('click', (e) => {
+      if (e.target.closest('input, select, button, label, .seq-cycle-badge')) return;
+      this.toggleDrawer();
+    });
+
+    // 4. Active Button Toggle
+    this.btnActive?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sequencer = this.engine.sequencer;
+      if (sequencer) {
+        sequencer.isEnabled = !sequencer.isEnabled;
+      }
+      this.updateBadges();
+      if (typeof this.callbacks.onRenderRequest === 'function') {
+        this.callbacks.onRenderRequest();
+      }
+    });
+
+    // 5. Loop Button Toggle
+    this.btnLoop?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sequencer = this.engine.sequencer;
+      if (sequencer) {
+        sequencer.isLooping = !sequencer.isLooping;
+      }
+      this.updateBadges();
+      if (typeof this.callbacks.onRenderRequest === 'function') {
+        this.callbacks.onRenderRequest();
+      }
+    });
+
+    // 6. Reset Button
+    this.btnReset?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sequencer = this.engine.sequencer;
+      if (sequencer) {
+        sequencer.reset();
+      }
+      this.updateBadges();
+      if (typeof this.callbacks.onReset === 'function') {
+        this.callbacks.onReset();
+      }
+    });
+
+    // 7. Add Step Button
+    this.btnAddStep?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (typeof this.callbacks.onAddStep === 'function') {
+        this.callbacks.onAddStep();
+      }
+      if (!this.isOpen) this.openDrawer();
+    });
+  }
+
+  toggleDrawer() {
+    if (this.isOpen) this.closeDrawer();
+    else this.openDrawer();
+  }
+
+  openDrawer() {
+    this.isOpen = true;
+    if (this.drawerEl) {
+      this.drawerEl.classList.remove('is-collapsed');
+    }
+    document.body.classList.add('sequencer-expanded');
+    if (this.btnToggleSequencer) {
+      this.btnToggleSequencer.classList.add('active');
+    }
+    if (this.chevronBtn) {
+      this.chevronBtn.classList.add('is-expanded');
+    }
+    if (typeof this.callbacks.onToggle === 'function') {
+      this.callbacks.onToggle(true);
+    }
+  }
+
+  closeDrawer() {
+    this.isOpen = false;
+    if (this.drawerEl) {
+      this.drawerEl.classList.add('is-collapsed');
+    }
+    document.body.classList.remove('sequencer-expanded');
+    if (this.btnToggleSequencer) {
+      this.btnToggleSequencer.classList.remove('active');
+    }
+    if (this.chevronBtn) {
+      this.chevronBtn.classList.remove('is-expanded');
+    }
+    if (typeof this.callbacks.onToggle === 'function') {
+      this.callbacks.onToggle(false);
+    }
+  }
+
+  updateBadges() {
+    const sequencer = this.engine.sequencer;
+    if (!sequencer) return;
+
+    const steps = sequencer.steps || [];
+    const total = steps.length;
+
+    // Update active toggle in bottom bar
+    const dot = this.btnToggleSequencer?.querySelector('.seq-status-dot');
+    if (dot) {
+      dot.classList.toggle('active', sequencer.isEnabled);
+    }
+
+    if (this.btnActive) this.btnActive.classList.toggle('active', !!sequencer.isEnabled);
+    if (this.btnLoop) this.btnLoop.classList.toggle('active', !!sequencer.isLooping);
+
+    if (!this.cycleBadge) return;
+
+    if (!sequencer.isEnabled) {
+      this.cycleBadge.innerHTML = total === 0
+        ? `<span class="seq-badge-status seq-status-idle">Idle (No Steps)</span>`
+        : `<span class="seq-badge-status seq-status-paused">Paused (${total} Steps)</span>`;
+    } else {
+      const cur = sequencer.activeStepIndex + 1;
+      this.cycleBadge.innerHTML = `
+        <span class="seq-badge-status seq-status-active">RUNNING</span>
+        <span class="seq-badge-meta">Cycle #${sequencer.currentCycleCount} • Step ${cur}/${total}</span>
+      `;
+    }
   }
 }
 
@@ -14610,6 +15057,616 @@ class SequencerActionFields {
     }
 
     return snapshot;
+  }
+}
+
+
+// --- src/control/SequencerSummary.js ---
+
+class SequencerSummary {
+  static getActionSummary(act) {
+    if (!act) return 'No action';
+    const type = act.type || '';
+    if (type === 'piston') {
+      const mode = act.strokeCommand || act.mode || 'drive_tdc';
+      if (mode === 'drive_tdc') return 'Drive to TDC';
+      if (mode === 'drive_bdc') return 'Drive to BDC';
+      if (mode === 'hold') return 'Hold Position';
+      if (mode === 'free') return 'Free Float';
+      return `Target ${act.targetPos || 0}px`;
+    }
+    if (type === 'throttle_valve') {
+      return act.state === 'bypassed' ? 'Bypassed (100%)' : `Aperture ${Math.round((act.openRatio !== undefined ? act.openRatio : 0.3) * 100)}%`;
+    }
+    if (type === 'manual_valve') {
+      return act.valveState === 'closed' ? 'Closed' : 'Open';
+    }
+    if (type === 'check_valve') {
+      return act.direction === -1 ? 'Reverse (←)' : 'Forward (→)';
+    }
+    if (type === 'relief_valve') {
+      return `P_max: ${act.triggerPressure || 250} Pa`;
+    }
+    if (type === 'reservoir' || type === 'thermal_block' || type === 'heat_exchanger' || type === 'regenerator') {
+      return act.isActive === false ? 'Insulated' : `${Math.round(act.temperature || 300)} K`;
+    }
+    if (type === 'emitter') {
+      return act.state === 'paused' ? 'Paused' : `${act.rate || 8} pts/s @ ${Math.round(act.temperature || 300)}K`;
+    }
+    if (type === 'sink') {
+      return act.isActive === false ? 'Inactive' : `${Math.round((act.absorptionEfficiency !== undefined ? act.absorptionEfficiency : 1.0) * 100)}% Eff`;
+    }
+    if (type === 'regulator') {
+      return act.isActive === false ? 'Inactive' : `Target N = ${act.targetCount || 50}`;
+    }
+    return 'Snapshot set';
+  }
+
+  static formatConditionSummary(cond) {
+    if (!cond) return 'Immediate';
+    const type = cond.type || 'duration';
+    if (type === 'duration') {
+      return `⏱ ${(cond.duration !== undefined ? cond.duration : 1.5).toFixed(1)}s`;
+    }
+    if (type === 'piston' || type === 'piston_target') {
+      const tgt = (cond.pistonTarget || 'tdc').toUpperCase();
+      return `🎯 ${tgt}`;
+    }
+    if (type === 'sensor') {
+      const metric = cond.sensorMetric === 'temperature' ? 'T' : 'P';
+      const unit = cond.sensorMetric === 'temperature' ? 'K' : 'Pa';
+      return `📡 ${metric}${cond.sensorOperator || '>='}${cond.sensorThreshold || 200}${unit}`;
+    }
+    return 'Immediate';
+  }
+
+  static getTransitionSummary(trans) {
+    if (!trans) return 'Immediate';
+    const norm = SequencerConditions.normalizeTransition(trans);
+    if (!norm.rows || norm.rows.length === 0) return 'Immediate';
+
+    const rowSummaries = norm.rows.map(row => {
+      if (!row.conditions || row.conditions.length === 0) return 'Immediate';
+      const parts = [];
+      row.conditions.forEach((c, idx) => {
+        parts.push(this.formatConditionSummary(c));
+        if (idx < row.conditions.length - 1) {
+          const op = (row.operators[idx] || 'AND').toUpperCase();
+          parts.push(op === 'OR' || op === '||' ? '||' : '&');
+        }
+      });
+      const rowStr = parts.join(' ');
+      return norm.rows.length > 1 || row.conditions.length > 1 ? `(${rowStr})` : rowStr;
+    });
+
+    const finalParts = [];
+    rowSummaries.forEach((rStr, idx) => {
+      finalParts.push(rStr);
+      if (idx < rowSummaries.length - 1) {
+        const rOp = (norm.rowOperators[idx] || 'OR').toUpperCase();
+        finalParts.push(rOp === 'AND' || rOp === '&' ? '&' : '||');
+      }
+    });
+
+    return finalParts.join(' ');
+  }
+
+  static formatActionPropsHTML(act, item) {
+    if (!act) return '';
+    const type = act.type || (item ? item.constructor.name.toLowerCase() : 'unknown');
+    const rows = [];
+
+    const addRow = (label, val) => {
+      rows.push(`<div class="seq-action-prop-row"><span class="seq-prop-key">${label}</span><span class="seq-prop-val">${val}</span></div>`);
+    };
+
+    if (type === 'piston') {
+      const strokeMap = { drive_tdc: 'Drive to TDC (Min Vol)', drive_bdc: 'Drive to BDC (Max Vol)', hold: 'Hold Position', free: 'Free Float' };
+      addRow('Stroke', strokeMap[act.strokeCommand || 'drive_tdc'] || act.strokeCommand);
+      addRow('Motion Mode', (act.motionType || item?.mode || 'free').toUpperCase());
+      addRow('Target Speed', `${act.targetSpeed !== undefined ? act.targetSpeed : 160} px/s`);
+      addRow('Mass', `${act.mass !== undefined ? act.mass : (item?.mass || 30)} kg`);
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : (item?.conductivity || 0.2)).toFixed(2)}`);
+      if (act.motionType === 'spring') addRow('Spring k', `${act.springK || 50} N/m`);
+      if (act.motionType === 'motorized') addRow('Frequency', `${act.frequency || 0.8} Hz`);
+      if (act.motionType === 'damper') addRow('Damping γ', `${act.dampingCoeff || 25} Ns/m`);
+    } else if (type === 'manual_valve') {
+      addRow('State', act.valveState === 'open' || act.valveState === undefined ? 'OPEN' : 'CLOSED');
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    } else if (type === 'check_valve') {
+      addRow('Allowed Flow', (act.direction === -1 ? 'Reverse (←)' : 'Forward (→)'));
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    } else if (type === 'relief_valve') {
+      addRow('Relief Mode', (act.reliefMode || '1-way').toUpperCase());
+      addRow('Trigger P_max', `${act.triggerPressure || 250} Pa`);
+      addRow('Hysteresis ΔP', `${act.pressureHysteresis || 25} Pa`);
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    } else if (type === 'throttle_valve') {
+      addRow('State', act.state === 'bypassed' ? 'BYPASSED (100%)' : 'THROTTLED');
+      addRow('Opening Ratio', `${Math.round((act.openRatio !== undefined ? act.openRatio : 0.3) * 100)}%`);
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    } else if (['reservoir', 'heat_exchanger', 'regenerator', 'thermal_block'].includes(type)) {
+      addRow('Thermal State', act.isActive !== false ? 'ACTIVE' : 'INSULATED');
+      addRow('Temperature T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
+      addRow('Coupling κ', `${(act.conductivity !== undefined ? act.conductivity : (act.conductance || 0.6)).toFixed(2)}`);
+      if (act.heatCapacity !== undefined || (item && item.heatCapacity)) {
+        addRow('Heat Capacity C', `${act.heatCapacity !== undefined ? act.heatCapacity : item.heatCapacity} J/K`);
+      }
+      if (type === 'regenerator') addRow('Orientation', (act.orientation || 'horizontal').toUpperCase());
+    } else if (type === 'emitter') {
+      addRow('State', act.state === 'paused' ? 'PAUSED' : 'FIRING');
+      addRow('Direction', (act.direction || 'right').toUpperCase());
+      addRow('Rate', `${act.rate !== undefined ? act.rate : 8} /s`);
+      addRow('Temperature T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
+      addRow('Particle Mass', `${act.mass !== undefined ? act.mass : 1.0}`);
+      addRow('Max Limit', act.maxParticles > 0 ? `${act.maxParticles}` : 'Unlimited');
+    } else if (type === 'sink') {
+      addRow('State', act.isActive !== false ? 'ACTIVE' : 'INACTIVE');
+      addRow('Direction', (act.direction || '360').toUpperCase());
+      addRow('Efficiency', `${Math.round((act.absorptionEfficiency !== undefined ? act.absorptionEfficiency : 1.0) * 100)}%`);
+      addRow('Temp Filter', (act.tempFilterMode || 'all').toUpperCase());
+      addRow('Max Limit', act.maxParticles > 0 ? `${act.maxParticles}` : 'Unlimited');
+    } else if (type === 'regulator') {
+      addRow('State', act.isActive !== false ? 'ACTIVE' : 'INACTIVE');
+      addRow('Target Count N', `${act.targetCount !== undefined ? act.targetCount : 50}`);
+      addRow('Hysteresis ΔN', `±${act.hysteresis !== undefined ? act.hysteresis : 3}`);
+      addRow('Gas Temp T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
+      addRow('Max Rate', `${act.rate !== undefined ? act.rate : 15} /s`);
+    } else {
+      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
+    }
+
+    return `
+      <div class="seq-action-body">
+        <div class="seq-action-props-grid">
+          ${rows.join('')}
+        </div>
+      </div>
+    `;
+  }
+}
+
+
+// --- src/control/SequencerTimeline.js ---
+/**
+ * SequencerTimeline.js
+ * Horizontal Step Cards & Transition Nodes Timeline Track.
+ * Features expandable Element Accordions with settings inspection and smooth Camera Focus.
+ */
+
+
+class SequencerTimeline {
+  constructor(engine, callbacks = {}, renderer = null) {
+    this.engine = engine;
+    this.callbacks = callbacks;
+    this.renderer = renderer;
+    this.trackEl = document.getElementById('seqTimelineTrack');
+    this.expandedActions = new Set(); // Stores expanded action keys: `${sIdx}_${aIdx}`
+  }
+
+  init() {
+    this.render();
+  }
+
+  render() {
+    const sequencer = this.engine.sequencer;
+    if (!this.trackEl || !sequencer) return;
+
+    this.trackEl.innerHTML = '';
+    const steps = sequencer.steps || [];
+    const totalSteps = steps.length;
+
+    steps.forEach((step, sIdx) => {
+      // 1. Step Card
+      const stepCard = this._createStepCard(step, sIdx, totalSteps, sequencer);
+      this.trackEl.appendChild(stepCard);
+
+      // 2. Transition Gate (between steps)
+      if (sIdx < totalSteps - 1 || sequencer.isLooping) {
+        const transNode = this._createTransitionNode(step, sIdx, totalSteps, sequencer);
+        this.trackEl.appendChild(transNode);
+      }
+    });
+
+    // 3. Add Step Placeholder at end
+    const addPlaceholder = document.createElement('div');
+    addPlaceholder.className = 'seq-add-card-placeholder';
+    addPlaceholder.title = 'Append New Step';
+    addPlaceholder.innerHTML = `
+      <div class="seq-add-card-inner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Add Step</span>
+      </div>
+    `;
+    addPlaceholder.addEventListener('click', () => {
+      sequencer.addStep();
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    this.trackEl.appendChild(addPlaceholder);
+  }
+
+  _createStepCard(step, sIdx, totalSteps, sequencer) {
+    const card = document.createElement('div');
+    const isActive = sequencer.isEnabled && sequencer.activeStepIndex === sIdx;
+    card.className = `seq-step-card ${isActive ? 'is-active' : ''}`;
+    card.setAttribute('data-step-index', sIdx);
+
+    const actions = step.actions || [];
+    let actionsHtml = '';
+
+    if (actions.length === 0) {
+      actionsHtml = `
+        <div class="seq-no-actions" style="font-size:11px; color:var(--text-dim); font-style:italic; padding:8px 0; text-align:center;">
+          No element actions assigned
+        </div>
+      `;
+    } else {
+      actions.forEach((act, aIdx) => {
+        const item = this._findTargetItem(act.targetId);
+        const tag = (act.type || 'ITEM').toUpperCase().substring(0, 7);
+        const label = item?.label || item?.name || `${act.type} ${act.targetId ? act.targetId.substring(0, 6) : ''}`;
+        const key = `${sIdx}_${aIdx}`;
+        const isExpanded = this.expandedActions.has(key);
+
+        actionsHtml += `
+          <div class="seq-action-card ${isExpanded ? 'is-expanded' : ''}" data-step="${sIdx}" data-action="${aIdx}">
+            <div class="seq-action-header" data-step="${sIdx}" data-action="${aIdx}" title="Click to edit properties & zoom canvas">
+              <div class="seq-action-header-left">
+                <span class="seq-action-arrow">${isExpanded ? '▼' : '▶'}</span>
+                <span class="seq-tag-mini">${tag}</span>
+                <span class="seq-action-title">${label}</span>
+              </div>
+              <div class="seq-action-tools">
+                <button class="seq-act-btn btn-del-action" title="Remove Action" data-step="${sIdx}" data-action="${aIdx}">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>
+              </div>
+            </div>
+            ${isExpanded ? `<div class="seq-action-body" id="seqAccBody_${sIdx}_${aIdx}"></div>` : ''}
+          </div>
+        `;
+      });
+    }
+
+    card.innerHTML = `
+      <div class="seq-step-header">
+        <div class="seq-step-title-group">
+          <span class="seq-step-pill">STEP ${sIdx + 1}</span>
+          <input type="text" class="seq-step-name-input" value="${step.name}" title="Click to rename step">
+        </div>
+        <div class="seq-step-actions-nav">
+          <button class="seq-nav-btn btn-move-left" ${sIdx === 0 ? 'disabled' : ''} title="Move Left">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <button class="seq-nav-btn btn-move-right" ${sIdx === totalSteps - 1 ? 'disabled' : ''} title="Move Right">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button class="seq-nav-btn btn-duplicate-step" title="Duplicate Step">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="seq-nav-btn btn-delete-step" title="Delete Step">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="seq-step-body">
+        <div class="seq-actions-list">${actionsHtml}</div>
+        <button class="seq-btn-add-element" data-step="${sIdx}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>+ Add Element</span>
+        </button>
+      </div>
+    `;
+
+    // Step event bindings
+    card.querySelector('.seq-step-name-input')?.addEventListener('change', (e) => {
+      step.name = e.target.value.trim() || `Step ${sIdx + 1}`;
+    });
+    card.querySelector('.btn-move-left')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sequencer.moveStep(sIdx, sIdx - 1);
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    card.querySelector('.btn-move-right')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sequencer.moveStep(sIdx, sIdx + 1);
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    card.querySelector('.btn-duplicate-step')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sequencer.duplicateStep(sIdx);
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    card.querySelector('.btn-delete-step')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sequencer.removeStep(sIdx);
+      this.render();
+      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+    });
+    card.querySelector('.seq-btn-add-element')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (typeof this.callbacks.onAddElement === 'function') this.callbacks.onAddElement(sIdx);
+    });
+
+    // Accordion Header Click: Toggle expand & zoom to canvas element WITHOUT opening modal
+    card.querySelectorAll('.seq-action-header').forEach(hdr => {
+      hdr.addEventListener('click', (e) => {
+        if (e.target.closest('.seq-action-tools')) return;
+        const aIdx = parseInt(hdr.getAttribute('data-action'), 10);
+        const key = `${sIdx}_${aIdx}`;
+        const act = step.actions[aIdx];
+        const item = this._findTargetItem(act?.targetId);
+
+        if (this.expandedActions.has(key)) {
+          this.expandedActions.delete(key);
+          const rend = this.renderer || this.engine?.renderer || window.renderer;
+          if (rend) rend.highlightedSequencerItem = null;
+        } else {
+          this.expandedActions.clear();
+          this.expandedActions.add(key);
+          if (item) this._focusCameraOnItem(item);
+        }
+        this.render();
+      });
+    });
+
+    // Delete action button
+    card.querySelectorAll('.btn-del-action').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const aIdx = parseInt(btn.getAttribute('data-action'), 10);
+        this.expandedActions.delete(`${sIdx}_${aIdx}`);
+        sequencer.removeAction(sIdx, aIdx);
+        this.render();
+        if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+      });
+    });
+
+    // Populate interactive controls for expanded actions
+    actions.forEach((act, aIdx) => {
+      const key = `${sIdx}_${aIdx}`;
+      if (this.expandedActions.has(key)) {
+        const body = card.querySelector(`#seqAccBody_${sIdx}_${aIdx}`);
+        const item = this._findTargetItem(act.targetId);
+        if (body && item) {
+          const pfx = `seqAcc_${sIdx}_${aIdx}_`;
+          SequencerActionFields.renderFields(body, item, act, (updated) => {
+            Object.assign(act, updated);
+            if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
+          }, pfx);
+        }
+      }
+    });
+
+    return card;
+  }
+
+  _focusCameraOnItem(item) {
+    const rend = this.renderer || this.engine?.renderer || window.renderer;
+    if (!rend || !item) return;
+
+    let cx = 400, cy = 300;
+    if (typeof item.getBounds === 'function') {
+      const b = item.getBounds();
+      cx = (b.left + b.right) / 2;
+      cy = (b.top + b.bottom) / 2;
+    } else if (item.p1 && item.p2) {
+      cx = (item.p1.x + item.p2.x) / 2;
+      cy = (item.p1.y + item.p2.y) / 2;
+    } else if (item.x !== undefined && item.y !== undefined) {
+      cx = item.x + (item.width || item.w || 40) / 2;
+      cy = item.y + (item.height || item.h || 40) / 2;
+    }
+
+    const leftBarW = document.getElementById('leftSidebar')?.offsetWidth || 340;
+    const rightBar = document.getElementById('sidebarRight');
+    const rightBarW = (rightBar && rightBar.style.display !== 'none' && !rightBar.classList.contains('collapsed')) ? rightBar.offsetWidth : 0;
+    const ribbonH = document.querySelector('.ribbon-container')?.offsetHeight || 115;
+    const dockH = document.getElementById('unifiedBottomDock')?.offsetHeight || 420;
+
+    const screenCenterX = (leftBarW + (window.innerWidth - rightBarW)) / 2;
+    const screenCenterY = (ribbonH + (window.innerHeight - dockH)) / 2;
+
+    const startPanX = rend.panX;
+    const startPanY = rend.panY;
+    const startZoom = rend.zoom;
+    const endZoom = Math.min(2.2, Math.max(startZoom, 1.25));
+    const endPanX = screenCenterX - cx * endZoom;
+    const endPanY = screenCenterY - cy * endZoom;
+
+    rend.highlightedSequencerItem = item;
+
+    const startTime = performance.now();
+    const duration = 280;
+    const step = (now) => {
+      const t = Math.min(1, (now - startTime) / duration);
+      const ease = 1 - Math.pow(1 - t, 3);
+      rend.panX = startPanX + (endPanX - startPanX) * ease;
+      rend.panY = startPanY + (endPanY - startPanY) * ease;
+      rend.zoom = startZoom + (endZoom - startZoom) * ease;
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  _createTransitionNode(step, sIdx, totalSteps, sequencer) {
+    const wrap = document.createElement('div');
+    wrap.className = 'seq-transition-wrapper';
+
+    const isActive = sequencer.isEnabled && sequencer.activeStepIndex === sIdx;
+    const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
+    const summary = SequencerSummary.getTransitionSummary(transition);
+    const progressPct = isActive ? Math.round(sequencer.stepProgress * 100) : 0;
+
+    wrap.innerHTML = `
+      <div class="seq-flow-arrow">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+      <div class="seq-transition-node ${isActive ? 'is-active' : ''}" data-step-trans="${sIdx}" title="Click to configure transition conditions">
+        <div class="seq-trans-header">
+          <span class="seq-trans-tag">TRANSITION</span>
+          <svg class="seq-trans-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <div class="seq-trans-desc">${summary}</div>
+        <div class="seq-transition-progress-track">
+          <div class="seq-transition-progress-fill" style="width: ${progressPct}%;"></div>
+        </div>
+      </div>
+      <div class="seq-flow-arrow">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    `;
+
+    wrap.querySelector('.seq-transition-node')?.addEventListener('click', () => {
+      if (typeof this.callbacks.onEditTransition === 'function') {
+        this.callbacks.onEditTransition(sIdx);
+      }
+    });
+
+    return wrap;
+  }
+
+  _findTargetItem(id) {
+    if (!id) return null;
+    const eng = this.engine;
+    return (eng.pistons || []).find(p => p.id === id) ||
+           (eng.walls || []).find(w => w.id === id) ||
+           (eng.throttleValves || []).find(v => v.id === id) ||
+           (eng.reservoirs || []).find(r => r.id === id) ||
+           (eng.heatExchangers || []).find(h => h.id === id) ||
+           (eng.regenerators || []).find(rg => rg.id === id) ||
+           (eng.thermalBlocks || []).find(b => b.id === id) ||
+           (eng.emitters || []).find(e => e.id === id) ||
+           (eng.sinks || []).find(s => s.id === id) ||
+           (eng.regulators || []).find(r => r.id === id);
+  }
+
+  updateActiveStep() {
+    const sequencer = this.engine.sequencer;
+    if (!sequencer || !this.trackEl) return;
+
+    const curIdx = sequencer.activeStepIndex;
+    const isRunning = sequencer.isEnabled;
+
+    this.trackEl.querySelectorAll('.seq-step-card').forEach((card, idx) => {
+      card.classList.toggle('is-active', isRunning && idx === curIdx);
+    });
+
+    this.trackEl.querySelectorAll('.seq-transition-node').forEach((gate, idx) => {
+      const isActive = isRunning && idx === curIdx;
+      gate.classList.toggle('is-active', isActive);
+      const fill = gate.querySelector('.seq-transition-progress-fill');
+      if (fill) fill.style.width = isActive ? `${Math.round(sequencer.stepProgress * 100)}%` : '0%';
+    });
+  }
+}
+
+
+// --- src/control/SequencerCatalogDefaults.js ---
+﻿/**
+ * SequencerCatalogDefaults.js
+ * Canonical default parameter values and lookup helpers according to TOOL_CATALOG.md.
+ * Used for default indicators and 'Reset to Default' functionality.
+ */
+
+const TOOL_DEFAULTS = {
+  wall: {
+    thickness: 4,
+    conductivity: 0.0
+  },
+  piston: {
+    strokeCommand: 'drive_tdc',
+    motionType: 'free',
+    targetSpeed: 160,
+    mass: 30,
+    conductivity: 0.20,
+    springK: 50,
+    frequency: 0.8,
+    phase: 0,
+    dampingCoeff: 25
+  },
+  manual_valve: {
+    valveState: 'open',
+    conductivity: 0.0
+  },
+  check_valve: {
+    direction: 1,
+    conductivity: 0.0
+  },
+  relief_valve: {
+    triggerPressure: 250,
+    pressureHysteresis: 25,
+    reliefMode: '1-way',
+    conductivity: 0.0
+  },
+  throttle_valve: {
+    state: 'active',
+    openRatio: 0.30,
+    conductivity: 0.0
+  },
+  reservoir: {
+    isActive: true,
+    temperature: 500,
+    conductivity: 0.80
+  },
+  heat_exchanger: {
+    isActive: true,
+    temperature: 300,
+    conductivity: 0.60
+  },
+  regenerator: {
+    isActive: true,
+    orientation: 'horizontal',
+    temperature: 300,
+    heatCapacity: 400,
+    conductivity: 0.70
+  },
+  thermal_block: {
+    isActive: true,
+    temperature: 300,
+    heatCapacity: 300,
+    conductivity: 0.60
+  },
+  emitter: {
+    state: 'firing',
+    direction: 'right',
+    rate: 8,
+    temperature: 300,
+    mass: 1.0,
+    maxParticles: 0
+  },
+  sink: {
+    isActive: true,
+    direction: '360',
+    tempFilterMode: 'all',
+    filterTemperature: 300,
+    absorptionEfficiency: 1.0,
+    maxParticles: 0
+  },
+  regulator: {
+    isActive: true,
+    targetCount: 50,
+    hysteresis: 3,
+    temperature: 300,
+    mass: 1.0,
+    rate: 15
+  }
+};
+
+class SequencerCatalogDefaults {
+  static getDefaultsForType(type) {
+    const d = TOOL_DEFAULTS[type] || {};
+    return JSON.parse(JSON.stringify(d));
+  }
+
+  static getDefault(type, prop) {
+    const d = TOOL_DEFAULTS[type];
+    return d && d[prop] !== undefined ? d[prop] : null;
   }
 }
 
@@ -15385,679 +16442,6 @@ class SequencerTransitionDialog {
 
 
 
-// --- src/control/SequencerSummary.js ---
-
-class SequencerSummary {
-  static getActionSummary(act) {
-    if (!act) return 'No action';
-    const type = act.type || '';
-    if (type === 'piston') {
-      const mode = act.strokeCommand || act.mode || 'drive_tdc';
-      if (mode === 'drive_tdc') return 'Drive to TDC';
-      if (mode === 'drive_bdc') return 'Drive to BDC';
-      if (mode === 'hold') return 'Hold Position';
-      if (mode === 'free') return 'Free Float';
-      return `Target ${act.targetPos || 0}px`;
-    }
-    if (type === 'throttle_valve') {
-      return act.state === 'bypassed' ? 'Bypassed (100%)' : `Aperture ${Math.round((act.openRatio !== undefined ? act.openRatio : 0.3) * 100)}%`;
-    }
-    if (type === 'manual_valve') {
-      return act.valveState === 'closed' ? 'Closed' : 'Open';
-    }
-    if (type === 'check_valve') {
-      return act.direction === -1 ? 'Reverse (←)' : 'Forward (→)';
-    }
-    if (type === 'relief_valve') {
-      return `P_max: ${act.triggerPressure || 250} Pa`;
-    }
-    if (type === 'reservoir' || type === 'thermal_block' || type === 'heat_exchanger' || type === 'regenerator') {
-      return act.isActive === false ? 'Insulated' : `${Math.round(act.temperature || 300)} K`;
-    }
-    if (type === 'emitter') {
-      return act.state === 'paused' ? 'Paused' : `${act.rate || 8} pts/s @ ${Math.round(act.temperature || 300)}K`;
-    }
-    if (type === 'sink') {
-      return act.isActive === false ? 'Inactive' : `${Math.round((act.absorptionEfficiency !== undefined ? act.absorptionEfficiency : 1.0) * 100)}% Eff`;
-    }
-    if (type === 'regulator') {
-      return act.isActive === false ? 'Inactive' : `Target N = ${act.targetCount || 50}`;
-    }
-    return 'Snapshot set';
-  }
-
-  static formatConditionSummary(cond) {
-    if (!cond) return 'Immediate';
-    const type = cond.type || 'duration';
-    if (type === 'duration') {
-      return `⏱ ${(cond.duration !== undefined ? cond.duration : 1.5).toFixed(1)}s`;
-    }
-    if (type === 'piston' || type === 'piston_target') {
-      const tgt = (cond.pistonTarget || 'tdc').toUpperCase();
-      return `🎯 ${tgt}`;
-    }
-    if (type === 'sensor') {
-      const metric = cond.sensorMetric === 'temperature' ? 'T' : 'P';
-      const unit = cond.sensorMetric === 'temperature' ? 'K' : 'Pa';
-      return `📡 ${metric}${cond.sensorOperator || '>='}${cond.sensorThreshold || 200}${unit}`;
-    }
-    return 'Immediate';
-  }
-
-  static getTransitionSummary(trans) {
-    if (!trans) return 'Immediate';
-    const norm = SequencerConditions.normalizeTransition(trans);
-    if (!norm.rows || norm.rows.length === 0) return 'Immediate';
-
-    const rowSummaries = norm.rows.map(row => {
-      if (!row.conditions || row.conditions.length === 0) return 'Immediate';
-      const parts = [];
-      row.conditions.forEach((c, idx) => {
-        parts.push(this.formatConditionSummary(c));
-        if (idx < row.conditions.length - 1) {
-          const op = (row.operators[idx] || 'AND').toUpperCase();
-          parts.push(op === 'OR' || op === '||' ? '||' : '&');
-        }
-      });
-      const rowStr = parts.join(' ');
-      return norm.rows.length > 1 || row.conditions.length > 1 ? `(${rowStr})` : rowStr;
-    });
-
-    const finalParts = [];
-    rowSummaries.forEach((rStr, idx) => {
-      finalParts.push(rStr);
-      if (idx < rowSummaries.length - 1) {
-        const rOp = (norm.rowOperators[idx] || 'OR').toUpperCase();
-        finalParts.push(rOp === 'AND' || rOp === '&' ? '&' : '||');
-      }
-    });
-
-    return finalParts.join(' ');
-  }
-
-  static formatActionPropsHTML(act, item) {
-    if (!act) return '';
-    const type = act.type || (item ? item.constructor.name.toLowerCase() : 'unknown');
-    const rows = [];
-
-    const addRow = (label, val) => {
-      rows.push(`<div class="seq-action-prop-row"><span class="seq-prop-key">${label}</span><span class="seq-prop-val">${val}</span></div>`);
-    };
-
-    if (type === 'piston') {
-      const strokeMap = { drive_tdc: 'Drive to TDC (Min Vol)', drive_bdc: 'Drive to BDC (Max Vol)', hold: 'Hold Position', free: 'Free Float' };
-      addRow('Stroke', strokeMap[act.strokeCommand || 'drive_tdc'] || act.strokeCommand);
-      addRow('Motion Mode', (act.motionType || item?.mode || 'free').toUpperCase());
-      addRow('Target Speed', `${act.targetSpeed !== undefined ? act.targetSpeed : 160} px/s`);
-      addRow('Mass', `${act.mass !== undefined ? act.mass : (item?.mass || 30)} kg`);
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : (item?.conductivity || 0.2)).toFixed(2)}`);
-      if (act.motionType === 'spring') addRow('Spring k', `${act.springK || 50} N/m`);
-      if (act.motionType === 'motorized') addRow('Frequency', `${act.frequency || 0.8} Hz`);
-      if (act.motionType === 'damper') addRow('Damping γ', `${act.dampingCoeff || 25} Ns/m`);
-    } else if (type === 'manual_valve') {
-      addRow('State', act.valveState === 'open' || act.valveState === undefined ? 'OPEN' : 'CLOSED');
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    } else if (type === 'check_valve') {
-      addRow('Allowed Flow', (act.direction === -1 ? 'Reverse (←)' : 'Forward (→)'));
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    } else if (type === 'relief_valve') {
-      addRow('Relief Mode', (act.reliefMode || '1-way').toUpperCase());
-      addRow('Trigger P_max', `${act.triggerPressure || 250} Pa`);
-      addRow('Hysteresis ΔP', `${act.pressureHysteresis || 25} Pa`);
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    } else if (type === 'throttle_valve') {
-      addRow('State', act.state === 'bypassed' ? 'BYPASSED (100%)' : 'THROTTLED');
-      addRow('Opening Ratio', `${Math.round((act.openRatio !== undefined ? act.openRatio : 0.3) * 100)}%`);
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    } else if (['reservoir', 'heat_exchanger', 'regenerator', 'thermal_block'].includes(type)) {
-      addRow('Thermal State', act.isActive !== false ? 'ACTIVE' : 'INSULATED');
-      addRow('Temperature T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
-      addRow('Coupling κ', `${(act.conductivity !== undefined ? act.conductivity : (act.conductance || 0.6)).toFixed(2)}`);
-      if (act.heatCapacity !== undefined || (item && item.heatCapacity)) {
-        addRow('Heat Capacity C', `${act.heatCapacity !== undefined ? act.heatCapacity : item.heatCapacity} J/K`);
-      }
-      if (type === 'regenerator') addRow('Orientation', (act.orientation || 'horizontal').toUpperCase());
-    } else if (type === 'emitter') {
-      addRow('State', act.state === 'paused' ? 'PAUSED' : 'FIRING');
-      addRow('Direction', (act.direction || 'right').toUpperCase());
-      addRow('Rate', `${act.rate !== undefined ? act.rate : 8} /s`);
-      addRow('Temperature T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
-      addRow('Particle Mass', `${act.mass !== undefined ? act.mass : 1.0}`);
-      addRow('Max Limit', act.maxParticles > 0 ? `${act.maxParticles}` : 'Unlimited');
-    } else if (type === 'sink') {
-      addRow('State', act.isActive !== false ? 'ACTIVE' : 'INACTIVE');
-      addRow('Direction', (act.direction || '360').toUpperCase());
-      addRow('Efficiency', `${Math.round((act.absorptionEfficiency !== undefined ? act.absorptionEfficiency : 1.0) * 100)}%`);
-      addRow('Temp Filter', (act.tempFilterMode || 'all').toUpperCase());
-      addRow('Max Limit', act.maxParticles > 0 ? `${act.maxParticles}` : 'Unlimited');
-    } else if (type === 'regulator') {
-      addRow('State', act.isActive !== false ? 'ACTIVE' : 'INACTIVE');
-      addRow('Target Count N', `${act.targetCount !== undefined ? act.targetCount : 50}`);
-      addRow('Hysteresis ΔN', `±${act.hysteresis !== undefined ? act.hysteresis : 3}`);
-      addRow('Gas Temp T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
-      addRow('Max Rate', `${act.rate !== undefined ? act.rate : 15} /s`);
-    } else {
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    }
-
-    return `
-      <div class="seq-action-body">
-        <div class="seq-action-props-grid">
-          ${rows.join('')}
-        </div>
-      </div>
-    `;
-  }
-}
-
-
-// --- src/control/SequencerTimeline.js ---
-/**
- * SequencerTimeline.js
- * Horizontal Step Cards & Transition Nodes Timeline Track.
- * Features expandable Element Accordions with settings inspection and smooth Camera Focus.
- */
-
-
-class SequencerTimeline {
-  constructor(engine, callbacks = {}, renderer = null) {
-    this.engine = engine;
-    this.callbacks = callbacks;
-    this.renderer = renderer;
-    this.trackEl = document.getElementById('seqTimelineTrack');
-    this.expandedActions = new Set(); // Stores expanded action keys: `${sIdx}_${aIdx}`
-  }
-
-  init() {
-    this.render();
-  }
-
-  render() {
-    const sequencer = this.engine.sequencer;
-    if (!this.trackEl || !sequencer) return;
-
-    this.trackEl.innerHTML = '';
-    const steps = sequencer.steps || [];
-    const totalSteps = steps.length;
-
-    steps.forEach((step, sIdx) => {
-      // 1. Step Card
-      const stepCard = this._createStepCard(step, sIdx, totalSteps, sequencer);
-      this.trackEl.appendChild(stepCard);
-
-      // 2. Transition Gate (between steps)
-      if (sIdx < totalSteps - 1 || sequencer.isLooping) {
-        const transNode = this._createTransitionNode(step, sIdx, totalSteps, sequencer);
-        this.trackEl.appendChild(transNode);
-      }
-    });
-
-    // 3. Add Step Placeholder at end
-    const addPlaceholder = document.createElement('div');
-    addPlaceholder.className = 'seq-add-card-placeholder';
-    addPlaceholder.title = 'Append New Step';
-    addPlaceholder.innerHTML = `
-      <div class="seq-add-card-inner">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span>Add Step</span>
-      </div>
-    `;
-    addPlaceholder.addEventListener('click', () => {
-      sequencer.addStep();
-      this.render();
-      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
-    });
-    this.trackEl.appendChild(addPlaceholder);
-  }
-
-  _createStepCard(step, sIdx, totalSteps, sequencer) {
-    const card = document.createElement('div');
-    const isActive = sequencer.isEnabled && sequencer.activeStepIndex === sIdx;
-    card.className = `seq-step-card ${isActive ? 'is-active' : ''}`;
-    card.setAttribute('data-step-index', sIdx);
-
-    const actions = step.actions || [];
-    let actionsHtml = '';
-
-    if (actions.length === 0) {
-      actionsHtml = `
-        <div class="seq-no-actions" style="font-size:11px; color:var(--text-dim); font-style:italic; padding:8px 0; text-align:center;">
-          No element actions assigned
-        </div>
-      `;
-    } else {
-      actions.forEach((act, aIdx) => {
-        const item = this._findTargetItem(act.targetId);
-        const tag = (act.type || 'ITEM').toUpperCase().substring(0, 7);
-        const label = item?.label || item?.name || `${act.type} ${act.targetId ? act.targetId.substring(0, 6) : ''}`;
-        const key = `${sIdx}_${aIdx}`;
-        const isExpanded = this.expandedActions.has(key);
-
-        actionsHtml += `
-          <div class="seq-action-card ${isExpanded ? 'is-expanded' : ''}" data-step="${sIdx}" data-action="${aIdx}">
-            <div class="seq-action-header" data-step="${sIdx}" data-action="${aIdx}" title="Click to edit properties & zoom canvas">
-              <div class="seq-action-header-left">
-                <span class="seq-action-arrow">${isExpanded ? '▼' : '▶'}</span>
-                <span class="seq-tag-mini">${tag}</span>
-                <span class="seq-action-title">${label}</span>
-              </div>
-              <div class="seq-action-tools">
-                <button class="seq-act-btn btn-del-action" title="Remove Action" data-step="${sIdx}" data-action="${aIdx}">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                </button>
-              </div>
-            </div>
-            ${isExpanded ? `<div class="seq-action-body" id="seqAccBody_${sIdx}_${aIdx}"></div>` : ''}
-          </div>
-        `;
-      });
-    }
-
-    card.innerHTML = `
-      <div class="seq-step-header">
-        <div class="seq-step-title-group">
-          <span class="seq-step-pill">STEP ${sIdx + 1}</span>
-          <input type="text" class="seq-step-name-input" value="${step.name}" title="Click to rename step">
-        </div>
-        <div class="seq-step-actions-nav">
-          <button class="seq-nav-btn btn-move-left" ${sIdx === 0 ? 'disabled' : ''} title="Move Left">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg>
-          </button>
-          <button class="seq-nav-btn btn-move-right" ${sIdx === totalSteps - 1 ? 'disabled' : ''} title="Move Right">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg>
-          </button>
-          <button class="seq-nav-btn btn-duplicate-step" title="Duplicate Step">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          </button>
-          <button class="seq-nav-btn btn-delete-step" title="Delete Step">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          </button>
-        </div>
-      </div>
-
-      <div class="seq-step-body">
-        <div class="seq-actions-list">${actionsHtml}</div>
-        <button class="seq-btn-add-element" data-step="${sIdx}">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          <span>+ Add Element</span>
-        </button>
-      </div>
-    `;
-
-    // Step event bindings
-    card.querySelector('.seq-step-name-input')?.addEventListener('change', (e) => {
-      step.name = e.target.value.trim() || `Step ${sIdx + 1}`;
-    });
-    card.querySelector('.btn-move-left')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      sequencer.moveStep(sIdx, sIdx - 1);
-      this.render();
-      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
-    });
-    card.querySelector('.btn-move-right')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      sequencer.moveStep(sIdx, sIdx + 1);
-      this.render();
-      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
-    });
-    card.querySelector('.btn-duplicate-step')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      sequencer.duplicateStep(sIdx);
-      this.render();
-      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
-    });
-    card.querySelector('.btn-delete-step')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      sequencer.removeStep(sIdx);
-      this.render();
-      if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
-    });
-    card.querySelector('.seq-btn-add-element')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (typeof this.callbacks.onAddElement === 'function') this.callbacks.onAddElement(sIdx);
-    });
-
-    // Accordion Header Click: Toggle expand & zoom to canvas element WITHOUT opening modal
-    card.querySelectorAll('.seq-action-header').forEach(hdr => {
-      hdr.addEventListener('click', (e) => {
-        if (e.target.closest('.seq-action-tools')) return;
-        const aIdx = parseInt(hdr.getAttribute('data-action'), 10);
-        const key = `${sIdx}_${aIdx}`;
-        const act = step.actions[aIdx];
-        const item = this._findTargetItem(act?.targetId);
-
-        if (this.expandedActions.has(key)) {
-          this.expandedActions.delete(key);
-          const rend = this.renderer || this.engine?.renderer || window.renderer;
-          if (rend) rend.highlightedSequencerItem = null;
-        } else {
-          this.expandedActions.clear();
-          this.expandedActions.add(key);
-          if (item) this._focusCameraOnItem(item);
-        }
-        this.render();
-      });
-    });
-
-    // Delete action button
-    card.querySelectorAll('.btn-del-action').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const aIdx = parseInt(btn.getAttribute('data-action'), 10);
-        this.expandedActions.delete(`${sIdx}_${aIdx}`);
-        sequencer.removeAction(sIdx, aIdx);
-        this.render();
-        if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
-      });
-    });
-
-    // Populate interactive controls for expanded actions
-    actions.forEach((act, aIdx) => {
-      const key = `${sIdx}_${aIdx}`;
-      if (this.expandedActions.has(key)) {
-        const body = card.querySelector(`#seqAccBody_${sIdx}_${aIdx}`);
-        const item = this._findTargetItem(act.targetId);
-        if (body && item) {
-          const pfx = `seqAcc_${sIdx}_${aIdx}_`;
-          SequencerActionFields.renderFields(body, item, act, (updated) => {
-            Object.assign(act, updated);
-            if (typeof this.callbacks.onStepModified === 'function') this.callbacks.onStepModified();
-          }, pfx);
-        }
-      }
-    });
-
-    return card;
-  }
-
-  _focusCameraOnItem(item) {
-    const rend = this.renderer || this.engine?.renderer || window.renderer;
-    if (!rend || !item) return;
-
-    let cx = 400, cy = 300;
-    if (typeof item.getBounds === 'function') {
-      const b = item.getBounds();
-      cx = (b.left + b.right) / 2;
-      cy = (b.top + b.bottom) / 2;
-    } else if (item.p1 && item.p2) {
-      cx = (item.p1.x + item.p2.x) / 2;
-      cy = (item.p1.y + item.p2.y) / 2;
-    } else if (item.x !== undefined && item.y !== undefined) {
-      cx = item.x + (item.width || item.w || 40) / 2;
-      cy = item.y + (item.height || item.h || 40) / 2;
-    }
-
-    const leftBarW = document.getElementById('leftSidebar')?.offsetWidth || 340;
-    const rightBar = document.getElementById('sidebarRight');
-    const rightBarW = (rightBar && rightBar.style.display !== 'none' && !rightBar.classList.contains('collapsed')) ? rightBar.offsetWidth : 0;
-    const ribbonH = document.querySelector('.ribbon-container')?.offsetHeight || 115;
-    const dockH = document.getElementById('unifiedBottomDock')?.offsetHeight || 420;
-
-    const screenCenterX = (leftBarW + (window.innerWidth - rightBarW)) / 2;
-    const screenCenterY = (ribbonH + (window.innerHeight - dockH)) / 2;
-
-    const startPanX = rend.panX;
-    const startPanY = rend.panY;
-    const startZoom = rend.zoom;
-    const endZoom = Math.min(2.2, Math.max(startZoom, 1.25));
-    const endPanX = screenCenterX - cx * endZoom;
-    const endPanY = screenCenterY - cy * endZoom;
-
-    rend.highlightedSequencerItem = item;
-
-    const startTime = performance.now();
-    const duration = 280;
-    const step = (now) => {
-      const t = Math.min(1, (now - startTime) / duration);
-      const ease = 1 - Math.pow(1 - t, 3);
-      rend.panX = startPanX + (endPanX - startPanX) * ease;
-      rend.panY = startPanY + (endPanY - startPanY) * ease;
-      rend.zoom = startZoom + (endZoom - startZoom) * ease;
-      if (t < 1) requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }
-
-  _createTransitionNode(step, sIdx, totalSteps, sequencer) {
-    const wrap = document.createElement('div');
-    wrap.className = 'seq-transition-wrapper';
-
-    const isActive = sequencer.isEnabled && sequencer.activeStepIndex === sIdx;
-    const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
-    const summary = SequencerSummary.getTransitionSummary(transition);
-    const progressPct = isActive ? Math.round(sequencer.stepProgress * 100) : 0;
-
-    wrap.innerHTML = `
-      <div class="seq-flow-arrow">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
-      </div>
-      <div class="seq-transition-node ${isActive ? 'is-active' : ''}" data-step-trans="${sIdx}" title="Click to configure transition conditions">
-        <div class="seq-trans-header">
-          <span class="seq-trans-tag">TRANSITION</span>
-          <svg class="seq-trans-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        </div>
-        <div class="seq-trans-desc">${summary}</div>
-        <div class="seq-transition-progress-track">
-          <div class="seq-transition-progress-fill" style="width: ${progressPct}%;"></div>
-        </div>
-      </div>
-      <div class="seq-flow-arrow">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
-      </div>
-    `;
-
-    wrap.querySelector('.seq-transition-node')?.addEventListener('click', () => {
-      if (typeof this.callbacks.onEditTransition === 'function') {
-        this.callbacks.onEditTransition(sIdx);
-      }
-    });
-
-    return wrap;
-  }
-
-  _findTargetItem(id) {
-    if (!id) return null;
-    const eng = this.engine;
-    return (eng.pistons || []).find(p => p.id === id) ||
-           (eng.walls || []).find(w => w.id === id) ||
-           (eng.throttleValves || []).find(v => v.id === id) ||
-           (eng.reservoirs || []).find(r => r.id === id) ||
-           (eng.heatExchangers || []).find(h => h.id === id) ||
-           (eng.regenerators || []).find(rg => rg.id === id) ||
-           (eng.thermalBlocks || []).find(b => b.id === id) ||
-           (eng.emitters || []).find(e => e.id === id) ||
-           (eng.sinks || []).find(s => s.id === id) ||
-           (eng.regulators || []).find(r => r.id === id);
-  }
-
-  updateActiveStep() {
-    const sequencer = this.engine.sequencer;
-    if (!sequencer || !this.trackEl) return;
-
-    const curIdx = sequencer.activeStepIndex;
-    const isRunning = sequencer.isEnabled;
-
-    this.trackEl.querySelectorAll('.seq-step-card').forEach((card, idx) => {
-      card.classList.toggle('is-active', isRunning && idx === curIdx);
-    });
-
-    this.trackEl.querySelectorAll('.seq-transition-node').forEach((gate, idx) => {
-      const isActive = isRunning && idx === curIdx;
-      gate.classList.toggle('is-active', isActive);
-      const fill = gate.querySelector('.seq-transition-progress-fill');
-      if (fill) fill.style.width = isActive ? `${Math.round(sequencer.stepProgress * 100)}%` : '0%';
-    });
-  }
-}
-
-
-// --- src/control/SequencerDock.js ---
-/**
- * SequencerDock.js
- * Unified Bottom Dock Controller & Expansion Shell for Cycle Sequencer.
- */
-
-class SequencerDock {
-  constructor(engine, callbacks = {}) {
-    this.engine = engine;
-    this.callbacks = callbacks; // { onToggle, onAddStep, onReset, onRenderRequest }
-    this.isOpen = false;
-
-    // DOM Elements
-    this.drawerEl = document.getElementById('cycleSequencerDrawer');
-    this.btnToggleSequencer = document.getElementById('btnToggleSequencer');
-    this.chevronBtn = document.getElementById('seqDrawerChevron');
-    this.headerEl = document.getElementById('seqDrawerHeader');
-    this.btnActive = document.getElementById('seqBtnActive');
-    this.btnLoop = document.getElementById('seqBtnLoop');
-    this.cycleBadge = document.getElementById('seqCycleBadge');
-    this.btnAddStep = document.getElementById('seqBtnAddStep');
-    this.btnReset = document.getElementById('seqBtnReset');
-
-    this._bindEvents();
-    this.updateBadges();
-  }
-
-  _bindEvents() {
-    // 1. Bottom Dock Toggle Button [⏱ Sequencer]
-    this.btnToggleSequencer?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.toggleDrawer();
-    });
-
-    // 2. Chevron Button in Drawer Header
-    this.chevronBtn?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.toggleDrawer();
-    });
-
-    // 3. Header strip click (unless clicking a control)
-    this.headerEl?.addEventListener('click', (e) => {
-      if (e.target.closest('input, select, button, label, .seq-cycle-badge')) return;
-      this.toggleDrawer();
-    });
-
-    // 4. Active Button Toggle
-    this.btnActive?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const sequencer = this.engine.sequencer;
-      if (sequencer) {
-        sequencer.isEnabled = !sequencer.isEnabled;
-      }
-      this.updateBadges();
-      if (typeof this.callbacks.onRenderRequest === 'function') {
-        this.callbacks.onRenderRequest();
-      }
-    });
-
-    // 5. Loop Button Toggle
-    this.btnLoop?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const sequencer = this.engine.sequencer;
-      if (sequencer) {
-        sequencer.isLooping = !sequencer.isLooping;
-      }
-      this.updateBadges();
-      if (typeof this.callbacks.onRenderRequest === 'function') {
-        this.callbacks.onRenderRequest();
-      }
-    });
-
-    // 6. Reset Button
-    this.btnReset?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const sequencer = this.engine.sequencer;
-      if (sequencer) {
-        sequencer.reset();
-      }
-      this.updateBadges();
-      if (typeof this.callbacks.onReset === 'function') {
-        this.callbacks.onReset();
-      }
-    });
-
-    // 7. Add Step Button
-    this.btnAddStep?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (typeof this.callbacks.onAddStep === 'function') {
-        this.callbacks.onAddStep();
-      }
-      if (!this.isOpen) this.openDrawer();
-    });
-  }
-
-  toggleDrawer() {
-    if (this.isOpen) this.closeDrawer();
-    else this.openDrawer();
-  }
-
-  openDrawer() {
-    this.isOpen = true;
-    if (this.drawerEl) {
-      this.drawerEl.classList.remove('is-collapsed');
-    }
-    document.body.classList.add('sequencer-expanded');
-    if (this.btnToggleSequencer) {
-      this.btnToggleSequencer.classList.add('active');
-    }
-    if (this.chevronBtn) {
-      this.chevronBtn.classList.add('is-expanded');
-    }
-    if (typeof this.callbacks.onToggle === 'function') {
-      this.callbacks.onToggle(true);
-    }
-  }
-
-  closeDrawer() {
-    this.isOpen = false;
-    if (this.drawerEl) {
-      this.drawerEl.classList.add('is-collapsed');
-    }
-    document.body.classList.remove('sequencer-expanded');
-    if (this.btnToggleSequencer) {
-      this.btnToggleSequencer.classList.remove('active');
-    }
-    if (this.chevronBtn) {
-      this.chevronBtn.classList.remove('is-expanded');
-    }
-    if (typeof this.callbacks.onToggle === 'function') {
-      this.callbacks.onToggle(false);
-    }
-  }
-
-  updateBadges() {
-    const sequencer = this.engine.sequencer;
-    if (!sequencer) return;
-
-    const steps = sequencer.steps || [];
-    const total = steps.length;
-
-    // Update active toggle in bottom bar
-    const dot = this.btnToggleSequencer?.querySelector('.seq-status-dot');
-    if (dot) {
-      dot.classList.toggle('active', sequencer.isEnabled);
-    }
-
-    if (this.btnActive) this.btnActive.classList.toggle('active', !!sequencer.isEnabled);
-    if (this.btnLoop) this.btnLoop.classList.toggle('active', !!sequencer.isLooping);
-
-    if (!this.cycleBadge) return;
-
-    if (!sequencer.isEnabled) {
-      this.cycleBadge.innerHTML = total === 0
-        ? `<span class="seq-badge-status seq-status-idle">Idle (No Steps)</span>`
-        : `<span class="seq-badge-status seq-status-paused">Paused (${total} Steps)</span>`;
-    } else {
-      const cur = sequencer.activeStepIndex + 1;
-      this.cycleBadge.innerHTML = `
-        <span class="seq-badge-status seq-status-active">RUNNING</span>
-        <span class="seq-badge-meta">Cycle #${sequencer.currentCycleCount} • Step ${cur}/${total}</span>
-      `;
-    }
-  }
-}
-
-
 // --- src/control/SequencerUI.js ---
 /**
  * SequencerUI.js
@@ -16164,390 +16548,6 @@ class SequencerUI {
     }
     return false;
   }
-}
-
-
-// --- src/presets/index.js ---
-const Presets = {
-  // 1. Split-Stirling Cryocooler / Heat Engine
-  splitStirling: {
-    id: 'splitStirling',
-    name: 'Split-Stirling Cryocooler',
-    category: 'Thermodynamic Cycles',
-    icon: 'stirling',
-    description: 'Dual-piston compressor, split pipe, regenerator matrix, cold finger, and displacer piston.',
-    load: (engine) => {
-      engine.clear();
-      engine.timeScale = 1.0;
-
-      // Outer boundaries / Compressor housing (Left side)
-      engine.addWall(60, 160, 280, 160, { thickness: 6 });
-      engine.addWall(60, 480, 280, 480, { thickness: 6 });
-      engine.addWall(60, 160, 60, 480, { thickness: 6 });
-
-      // Split Pipe connecting compressor to regenerator
-      engine.addWall(280, 160, 280, 290, { thickness: 6 });
-      engine.addWall(280, 290, 560, 290, { thickness: 6 });
-      engine.addWall(280, 350, 560, 350, { thickness: 6 });
-      engine.addWall(280, 350, 280, 480, { thickness: 6 });
-
-      // Ambient Heat Exchanger along split pipe (rejection at 300K)
-      engine.addHeatExchanger(330, 275, 120, 90, {
-        temperature: 300,
-        conductivity: 0.8,
-        label: 'Ambient Cooler (300K)'
-      });
-
-      // Cold Finger / Expander Cylinder (Right side)
-      engine.addWall(560, 80, 700, 80, { thickness: 6 });
-      engine.addWall(560, 80, 560, 290, { thickness: 6 });
-      engine.addWall(700, 80, 700, 540, { thickness: 6 });
-      engine.addWall(560, 350, 560, 540, { thickness: 6 });
-      engine.addWall(560, 540, 700, 540, { thickness: 6 });
-
-      // Regenerator Matrix in Cold Finger
-      engine.addRegeneratorMatrix(570, 160, 120, 110, {
-        orientation: 'vertical',
-        temperature: 200,
-        heatCapacity: 450,
-        conductivity: 0.75,
-        label: 'Regenerator Matrix'
-      });
-
-      // Compressor Piston (Motorized harmonic drive)
-      engine.addPiston({
-        label: 'Compressor Piston',
-        orientation: 'horizontal',
-        x: 160,
-        y: 320,
-        width: 24,
-        height: 310,
-        minPos: 80,
-        maxPos: 250,
-        mode: 'motorized',
-        frequency: 0.8,
-        amplitude: 50,
-        phase: 0
-      });
-
-      // Displacer Piston in Bouncing Volume (Phase-shifted)
-      engine.addPiston({
-        label: 'Displacer Piston',
-        orientation: 'vertical',
-        x: 630,
-        y: 420,
-        width: 20,
-        height: 130,
-        minPos: 310,
-        maxPos: 490,
-        mode: 'motorized',
-        frequency: 0.8,
-        amplitude: 45,
-        phase: 80 // ~80 degrees phase lead for Stirling expansion
-      });
-
-      // Sensor Chambers
-      engine.addSensor({
-        label: 'Compression Space',
-        x: 180,
-        y: 180,
-        width: 90,
-        height: 280,
-        color: '#f97316'
-      });
-      engine.addSensor({
-        label: 'Expansion Cold Head',
-        x: 570,
-        y: 90,
-        width: 120,
-        height: 65,
-        color: '#38bdf8'
-      });
-
-      // Working Gas
-      engine.spawnGasRaster(180, 200, 90, 240, 90, 1.0, 300, 'maxwell_boltzmann', 'Compressor Gas');
-      engine.spawnGasRaster(570, 95, 120, 60, 45, 1.0, 220, 'maxwell_boltzmann', 'Cold Space Gas');
-    }
-  },
-
-  // 2. Venturi Nozzle & Bernoulli Effect
-  venturiTube: {
-    id: 'venturiTube',
-    name: 'Venturi Nozzle & Bernoulli Flow',
-    category: 'Fluid & Aerodynamics',
-    icon: 'venturi',
-    description: 'Converging-diverging contraction channel demonstrating velocity increase and pressure drop.',
-    load: (engine) => {
-      engine.clear();
-      engine.timeScale = 1.0;
-
-      // Top contoured wall
-      engine.addWall(40, 160, 260, 160, { thickness: 5 });
-      engine.addWall(260, 160, 440, 260, { thickness: 5 });
-      engine.addWall(440, 260, 560, 260, { thickness: 5 }); // Throat
-      engine.addWall(560, 260, 740, 160, { thickness: 5 });
-      engine.addWall(740, 160, 960, 160, { thickness: 5 });
-
-      // Bottom contoured wall
-      engine.addWall(40, 480, 260, 480, { thickness: 5 });
-      engine.addWall(260, 480, 440, 380, { thickness: 5 });
-      engine.addWall(440, 380, 560, 380, { thickness: 5 }); // Throat
-      engine.addWall(560, 380, 740, 480, { thickness: 5 });
-      engine.addWall(740, 480, 960, 480, { thickness: 5 });
-
-      // Inlet continuous emitter (left)
-      engine.addEmitter(50, 200, 40, 240, {
-        direction: 'right',
-        rate: 28,
-        temperature: 300,
-        mass: 1.0
-      });
-
-      // Outlet absorber (right)
-      engine.addSink(910, 180, 40, 280, {
-        direction: 'right',
-        absorptionEfficiency: 1.0
-      });
-
-      // Sensors: Inlet, Throat, Diffuser
-      engine.addSensor({
-        label: 'Inlet (Wide, Low v)',
-        x: 120,
-        y: 180,
-        width: 120,
-        height: 280,
-        color: '#38bdf8'
-      });
-      engine.addSensor({
-        label: 'Throat (Constriction, High v, Low P)',
-        x: 450,
-        y: 270,
-        width: 100,
-        height: 100,
-        color: '#f59e0b'
-      });
-      engine.addSensor({
-        label: 'Diffuser (Recovery)',
-        x: 760,
-        y: 180,
-        width: 140,
-        height: 280,
-        color: '#10b981'
-      });
-
-      // Pre-fill steady flow gas
-      engine.spawnGasRaster(120, 200, 120, 240, 60, 1.0, 300, 'uniform_speed', 'Inlet Gas');
-      engine.spawnGasRaster(450, 280, 100, 80, 35, 1.0, 270, 'uniform_speed', 'Throat Gas');
-      engine.spawnGasRaster(760, 200, 130, 240, 60, 1.0, 300, 'uniform_speed', 'Exit Gas');
-    }
-  },
-
-  // 3. Dual-Chamber Thermal Equalization
-  dualChamber: {
-    id: 'dualChamber',
-    name: 'Dual-Chamber Thermal Equalization',
-    category: 'Heat Transfer & 2nd Law',
-    icon: 'chambers',
-    description: 'High-temperature gas and cryogenic gas separated by a thermally conductive partition wall.',
-    load: (engine) => {
-      engine.clear();
-      engine.timeScale = 1.0;
-
-      // Outer insulated container (800x440)
-      engine.addWall(80, 120, 880, 120, { thickness: 8, conductivity: 0 });
-      engine.addWall(80, 560, 880, 560, { thickness: 8, conductivity: 0 });
-      engine.addWall(80, 120, 80, 560, { thickness: 8, conductivity: 0 });
-      engine.addWall(880, 120, 880, 560, { thickness: 8, conductivity: 0 });
-
-      // Central conductive dividing wall (kappa = 0.85)
-      engine.addWall(480, 120, 480, 560, {
-        thickness: 8,
-        conductivity: 0.85,
-        label: 'Conductive Partition (κ = 0.85)'
-      });
-
-      // Sensors: Left (Hot), Right (Cold)
-      engine.addSensor({
-        label: 'Chamber Left (Hot)',
-        x: 100,
-        y: 140,
-        width: 360,
-        height: 400,
-        color: '#ef4444'
-      });
-      engine.addSensor({
-        label: 'Chamber Right (Cold)',
-        x: 500,
-        y: 140,
-        width: 360,
-        height: 400,
-        color: '#3b82f6'
-      });
-
-      // Hot gas left (750K), Cold gas right (125K)
-      engine.spawnGasRaster(120, 160, 320, 360, 120, 1.0, 750, 'maxwell_boltzmann', 'Hot Gas (750K)');
-      engine.spawnGasRaster(520, 160, 320, 360, 120, 1.0, 125, 'maxwell_boltzmann', 'Cold Gas (125K)');
-    }
-  },
-
-  // 4. Joule-Thomson Expansion & Throttle Valve
-  jouleThomson: {
-    id: 'jouleThomson',
-    name: 'Joule-Thomson Throttle Expansion',
-    category: 'Thermodynamic Expansion',
-    icon: 'throttle',
-    description: 'High-pressure gas forced through a narrow throttle valve aperture into an expansion chamber.',
-    load: (engine) => {
-      engine.clear();
-      engine.timeScale = 1.0;
-
-      // Outer enclosure
-      engine.addWall(60, 150, 900, 150, { thickness: 6 });
-      engine.addWall(60, 510, 900, 510, { thickness: 6 });
-      engine.addWall(60, 150, 60, 510, { thickness: 6 });
-      engine.addWall(900, 150, 900, 510, { thickness: 6 });
-
-      // Partition Wall with central Throttle Valve
-      engine.addWall(460, 150, 460, 260, { thickness: 6 });
-      engine.addThrottleValve(460, 260, 460, 400, {
-        openRatio: 0.25,
-        thickness: 8,
-        conductivity: 0.2
-      });
-      engine.addWall(460, 400, 460, 510, { thickness: 6 });
-
-      // Continuous high-pressure supply on left
-      engine.addEmitter(80, 230, 40, 200, {
-        direction: 'right',
-        rate: 22,
-        temperature: 450,
-        mass: 1.0
-      });
-
-      // Exhaust / Low-pressure sink on far right
-      engine.addSink(840, 230, 40, 200, {
-        direction: 'right',
-        absorptionEfficiency: 0.95
-      });
-
-      // Upstream & Downstream Sensor Zones
-      engine.addSensor({
-        label: 'High-Pressure Upstream (P1, T1)',
-        x: 140,
-        y: 170,
-        width: 300,
-        height: 320,
-        color: '#f97316'
-      });
-      engine.addSensor({
-        label: 'Low-Pressure Downstream (P2, T2)',
-        x: 480,
-        y: 170,
-        width: 340,
-        height: 320,
-        color: '#10b981'
-      });
-
-      // Pre-fill upstream chamber
-      engine.spawnGasRaster(160, 190, 260, 280, 110, 1.0, 450, 'maxwell_boltzmann', 'Upstream Gas');
-      engine.spawnGasRaster(500, 230, 300, 200, 40, 1.0, 250, 'maxwell_boltzmann', 'Downstream Gas');
-    }
-  },
-
-  // 5. Adiabatic & Isothermal Compression
-  compressionCylinder: {
-    id: 'compressionCylinder',
-    name: 'Adiabatic Cylinder Compression',
-    category: 'Work & Compression',
-    icon: 'piston',
-    description: 'Cylinder enclosed with a moving heavy piston demonstrating work extraction and PV compression heating.',
-    load: (engine) => {
-      engine.clear();
-      engine.timeScale = 1.0;
-
-      // Rigid Cylinder Chamber
-      engine.addWall(80, 140, 840, 140, { thickness: 6, conductivity: 0 });
-      engine.addWall(80, 500, 840, 500, { thickness: 6, conductivity: 0 });
-      engine.addWall(80, 140, 80, 500, { thickness: 6, conductivity: 0 });
-
-      // Compressor Piston (Motorized sweep)
-      engine.addPiston({
-        label: 'Compression Piston',
-        orientation: 'horizontal',
-        x: 600,
-        y: 320,
-        width: 28,
-        height: 350,
-        minPos: 200,
-        maxPos: 760,
-        mode: 'motorized',
-        frequency: 0.5,
-        amplitude: 220,
-        phase: 0,
-        mass: 50,
-        conductivity: 0
-      });
-
-      // Cylinder Sensor
-      engine.addSensor({
-        label: 'Cylinder Chamber',
-        x: 100,
-        y: 160,
-        width: 480,
-        height: 320,
-        color: '#f59e0b'
-      });
-
-      // Enclosed Gas
-      engine.spawnGasRaster(120, 180, 440, 280, 160, 1.0, 280, 'maxwell_boltzmann', 'Cylinder Gas');
-    }
-  },
-
-  // 6. Brownian Motion & Colloidal Diffusion
-  brownianMotion: {
-    id: 'brownianMotion',
-    name: 'Brownian Motion & Colloidal Diffusion',
-    category: 'Statistical Mechanics',
-    icon: 'brownian',
-    description: 'Massive colloidal particles suspended in an ideal thermal bath undergoing random walk collisions.',
-    load: (engine) => {
-      engine.clear();
-      engine.timeScale = 1.0;
-
-      // Closed Container Box
-      engine.addWall(80, 80, 880, 80, { thickness: 6 });
-      engine.addWall(80, 580, 880, 580, { thickness: 6 });
-      engine.addWall(80, 80, 80, 580, { thickness: 6 });
-      engine.addWall(880, 80, 880, 580, { thickness: 6 });
-
-      // Measurement Zone
-      engine.addSensor({
-        label: 'Diffusion Bath',
-        x: 90,
-        y: 90,
-        width: 780,
-        height: 480,
-        color: '#a855f7'
-      });
-
-      // Background Light Gas (m = 0.5, fast)
-      engine.spawnGasRaster(100, 100, 760, 460, 240, 0.5, 350, 'maxwell_boltzmann', 'Thermal Gas Bath');
-
-      // Add 4 Heavy Colloidal Particles (m = 15.0 to 25.0)
-      const c1 = engine.addParticle(260, 300, 0, 0, 18.0);
-      c1.tag = 'colloid';
-      const c2 = engine.addParticle(480, 240, 0, 0, 22.0);
-      c2.tag = 'colloid';
-      const c3 = engine.addParticle(520, 420, 0, 0, 20.0);
-      c3.tag = 'colloid';
-      const c4 = engine.addParticle(700, 340, 0, 0, 25.0);
-      c4.tag = 'colloid';
-    }
-  }
-};
-
-if (typeof window !== 'undefined') {
-  window.Presets = Presets;
 }
 
 
