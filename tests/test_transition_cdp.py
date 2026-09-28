@@ -12,6 +12,10 @@ import subprocess
 sys.stdout.reconfigure(encoding='utf-8')
 
 PORT = 8768
+# Verification screenshots go to the git-ignored scratch/ directory
+SNAPSHOT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scratch')
+os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+
 def start_server():
     class QuietHandler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, format, *args): pass
@@ -195,7 +199,7 @@ try:
         if resp.get('id') == 99:
             break
     img_data = base64.b64decode(resp['result']['data'])
-    modal_snap_path = r'C:\Users\ottou\.gemini\antigravity\brain\013f42b0-3c20-49e5-8b21-c9a758da41d4\transition_modal_2d_verified.png'
+    modal_snap_path = os.path.join(SNAPSHOT_DIR, 'transition_modal_2d_verified.png')
     with open(modal_snap_path, 'wb') as f:
         f.write(img_data)
     print("Modal screenshot saved to:", modal_snap_path)
@@ -235,7 +239,7 @@ try:
         if resp.get('id') == 100:
             break
     img_data2 = base64.b64decode(resp['result']['data'])
-    timeline_snap_path = r'C:\Users\ottou\.gemini\antigravity\brain\013f42b0-3c20-49e5-8b21-c9a758da41d4\transition_timeline_verified.png'
+    timeline_snap_path = os.path.join(SNAPSHOT_DIR, 'transition_timeline_verified.png')
     with open(timeline_snap_path, 'wb') as f:
         f.write(img_data2)
     print("Timeline screenshot saved to:", timeline_snap_path)

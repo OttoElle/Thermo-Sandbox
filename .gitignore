@@ -19,3 +19,6 @@ __pycache__/
 # Scratch & temporary directories
 scratch/
 
+
+# Python virtual environment (managed by uv)
+.venv/

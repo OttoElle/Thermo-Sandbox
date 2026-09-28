@@ -72,7 +72,7 @@ To launch the modular development version with live reload support:
 1. Double-click **`Start_ParticleLab.bat`** (Windows), or
 2. Serve the repository folder with any local web server:
    ```bash
-   python -m http.server 8000
+   uv run python -m http.server 8000
    ```
 3. Open `http://localhost:8000` in your browser.
 
@@ -113,14 +113,16 @@ Thermo-Sandbox/
 
 ## 🔧 Building & Testing
 
+The build and test scripts use Python, managed with [uv](https://docs.astral.sh/uv/). uv installs the pinned Python version (`.python-version`) and dependencies (`pyproject.toml`, `uv.lock`) into a project-local `.venv` automatically on the first `uv run`. The browser tests additionally need Google Chrome.
+
 To compile modular source files into the distribution bundles:
 ```bash
-python build_all.py
+uv run build_all.py
 ```
 
 To run the automated verification suite (file size audits, modular CSS syntax, build checks, and headless Chrome browser runtime test):
 ```bash
-python tests/verify_all.py
+uv run tests/verify_all.py
 ```
 
 ---

@@ -1,0 +1,11 @@
+[project]
+name = "thermo-sandbox"
+version = "0.1.0"
+description = "Build and test tooling for Thermo Sandbox (the app itself is plain browser JavaScript)"
+requires-python = ">=3.14"
+dependencies = [
+    "websocket-client>=1.8",
+]
+
+[tool.uv]
+package = false
