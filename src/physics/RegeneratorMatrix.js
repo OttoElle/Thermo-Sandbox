@@ -23,6 +23,7 @@ export class RegeneratorMatrix {
     }
 
     this.heatAccumulators = new Array(this.sliceCount).fill(0);
+    this.conductanceAccumulators = new Array(this.sliceCount).fill(0);
     this.initialTemperatures = [...this.temperatures];
     this.initialIsActive = this.isActive;
   }
@@ -65,6 +66,13 @@ export class RegeneratorMatrix {
     }
   }
 
+  // Stiffness guard: accumulated coupling conductance makes the slice heat update implicit.
+  addConductanceToSlice(idx, g) {
+    if (idx >= 0 && idx < this.sliceCount) {
+      this.conductanceAccumulators[idx] += g;
+    }
+  }
+
   toggle() {
     this.isActive = !this.isActive;
   }
@@ -77,8 +85,9 @@ export class RegeneratorMatrix {
     // 1. Apply particle heat exchanges
     for (let i = 0; i < this.sliceCount; i++) {
       if (this.heatAccumulators[i] !== 0) {
-        this.temperatures[i] += this.heatAccumulators[i] / sliceCapacity;
+        this.temperatures[i] += this.heatAccumulators[i] / (sliceCapacity + this.conductanceAccumulators[i]);
         this.heatAccumulators[i] = 0;
+        this.conductanceAccumulators[i] = 0;
         if (this.temperatures[i] < 5) this.temperatures[i] = 5;
       }
     }
@@ -106,6 +115,7 @@ export class RegeneratorMatrix {
   restoreSnapshot() {
     this.temperatures = [...this.initialTemperatures];
     this.heatAccumulators.fill(0);
+    this.conductanceAccumulators.fill(0);
     this.isActive = this.initialIsActive;
   }
 

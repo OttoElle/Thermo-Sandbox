@@ -13,6 +13,7 @@ export class ThrottleValve {
     this.temperature = options.temperature !== undefined ? options.temperature : 300;
     this.heatCapacity = options.heatCapacity !== undefined ? options.heatCapacity : 80;
     this.heatAccumulator = 0;
+    this.conductanceAccumulator = 0;
 
     // Pressure tracking
     this.accumulatedImpulseSide1 = 0;
@@ -81,6 +82,13 @@ export class ThrottleValve {
     }
   }
 
+  // Stiffness guard: accumulated coupling conductance makes the heat update implicit.
+  addConductance(g) {
+    if (this.isActive) {
+      this.conductanceAccumulator += g;
+    }
+  }
+
   saveSnapshot() {
     this.initialOpenRatio = this.openRatio;
     this.initialP1 = this.p1.clone();
@@ -103,8 +111,9 @@ export class ThrottleValve {
 
   update(dt) {
     if (dt > 0 && this.heatCapacity > 0 && this.isActive) {
-      this.temperature += this.heatAccumulator / this.heatCapacity;
+      this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
+      this.conductanceAccumulator = 0;
       if (this.temperature < 5) this.temperature = 5;
     }
 
@@ -176,9 +185,9 @@ export class ThrottleValve {
 
         if (this.conductivity > 0) {
           const kB = 35.0;
-          const targetSpeedSq = (2 * kB * this.temperature) / p.mass;
+          const targetSpeedSq = (3 * kB * this.temperature) / p.mass;
           const curSpeedSq = newVx * newVx + newVy * newVy;
-          const alpha = this.conductivity * 0.8;
+          const alpha = Math.min(1, this.conductivity * 0.8);
           const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
           const factor = curSpeedSq > 0.001 ? Math.sqrt(blendSq / curSpeedSq) : 1;
 
@@ -187,6 +196,7 @@ export class ThrottleValve {
           newVy *= factor;
           const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
           this.addHeat(-(eAfter - eBefore));
+          this.addConductance(alpha * 1.5 * kB);
         }
 
         p.vel.x = newVx;

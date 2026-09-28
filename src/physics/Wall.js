@@ -14,6 +14,7 @@ export class Wall {
     this.temperature = options.temperature !== undefined ? options.temperature : 300;
     this.heatCapacity = options.heatCapacity !== undefined ? options.heatCapacity : 80;
     this.heatAccumulator = 0;
+    this.conductanceAccumulator = 0;
 
     // Valve properties
     this.isOpen = options.isOpen !== undefined ? options.isOpen : false;
@@ -79,6 +80,11 @@ export class Wall {
     this.heatAccumulator += joules;
   }
 
+  // Stiffness guard: accumulated coupling conductance makes the heat update implicit.
+  addConductance(g) {
+    this.conductanceAccumulator += g;
+  }
+
   recordImpulse(impulseMagnitude) {
     this.accumulatedImpulse += impulseMagnitude;
   }
@@ -95,8 +101,9 @@ export class Wall {
 
   update(dt) {
     if (dt > 0 && this.heatCapacity > 0) {
-      this.temperature += this.heatAccumulator / this.heatCapacity;
+      this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
+      this.conductanceAccumulator = 0;
       if (this.temperature < 5) this.temperature = 5;
     }
 

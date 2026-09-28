@@ -13,6 +13,7 @@ export class ThermalBlock {
     this.conductivity = options.conductivity !== undefined ? Math.max(0.01, Math.min(1.0, options.conductivity)) : 0.6; // Surface thermal coupling
     this.isActive = options.isActive !== undefined ? options.isActive : true;
     this.heatAccumulator = 0;
+    this.conductanceAccumulator = 0;
     this.initialTemperature = this.temperature;
     this.initialIsActive = this.isActive;
     this.label = options.label || `Thermal Storage (${Math.round(this.temperature)}K)`;
@@ -41,10 +42,18 @@ export class ThermalBlock {
     }
   }
 
+  // Stiffness guard: accumulated coupling conductance makes the heat update implicit.
+  addConductance(g) {
+    if (this.isActive) {
+      this.conductanceAccumulator += g;
+    }
+  }
+
   update(dt) {
     if (dt > 0 && this.heatCapacity > 0 && this.isActive) {
-      this.temperature += this.heatAccumulator / this.heatCapacity;
+      this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
+      this.conductanceAccumulator = 0;
       if (this.temperature < 5) this.temperature = 5;
     }
   }

@@ -59,6 +59,7 @@ export class Piston {
     this.temperature = options.temperature !== undefined ? options.temperature : 300;
     this.heatCapacity = options.heatCapacity !== undefined ? options.heatCapacity : 120;
     this.heatAccumulator = 0;
+    this.conductanceAccumulator = 0;
 
     // Impulse tracking
     this.forceLeft = 0;
@@ -148,10 +149,18 @@ export class Piston {
     }
   }
 
+  // Stiffness guard: accumulated coupling conductance makes the heat update implicit.
+  addConductance(g) {
+    if (this.isActive) {
+      this.conductanceAccumulator += g;
+    }
+  }
+
   update(dt, totalTime) {
     if (dt > 0 && this.heatCapacity > 0 && this.isActive) {
-      this.temperature += this.heatAccumulator / this.heatCapacity;
+      this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
+      this.conductanceAccumulator = 0;
       if (this.temperature < 5) this.temperature = 5;
     }
 
@@ -170,7 +179,12 @@ export class Piston {
       // Oscillates across the entire handle span, reaching minTravel and maxTravel precisely
       const targetPos = midPos + amplitude * Math.sin(omega * totalTime + radPhase);
       const prevPos = this.getPos();
-      this.setPos(targetPos);
+      // Approach the sinusoid at no more than its peak speed. Without this the
+      // piston teleports onto the curve at start/reset/mode switch and shoots
+      // particles out at thousands of px/s.
+      const maxStep = amplitude * omega * dt * 1.05;
+      const delta = targetPos - prevPos;
+      this.setPos(Math.abs(delta) > maxStep ? prevPos + Math.sign(delta) * maxStep : targetPos);
       this.velocity = dt > 0 ? (this.getPos() - prevPos) / dt : 0;
       this.instantPower = 0;
     } else if (this.mode === 'free' || this.mode === 'spring' || this.mode === 'damper') {
