@@ -55,8 +55,17 @@ export class Engine {
     // GPU-mode transient state. While simulating on the GPU, `this.particles`
     // holds the edit-time particle set only; live state stays in VRAM.
     this._deferToGPU = false;
-    this._gpuWallImpulseRate = new Float64Array(GPU_LAYOUT.MAX_WALLS);
-    this._gpuWallHeatRate = new Float64Array(GPU_LAYOUT.MAX_WALLS);
+    // GPU exchange data per wall segment / thermal slice. Measured impulse and heat
+    // go into pending buffers that are credited exactly once, drained over the
+    // following frames; the conductance rate makes the heat update implicit.
+    this._gpuWallPendingFront = new Float64Array(GPU_LAYOUT.MAX_WALLS);  // impulse, particle on +normal side
+    this._gpuWallPendingBack = new Float64Array(GPU_LAYOUT.MAX_WALLS);
+    this._gpuWallPendingHeat = new Float64Array(GPU_LAYOUT.MAX_WALLS);
+    this._gpuWallConductanceRate = new Float64Array(GPU_LAYOUT.MAX_WALLS);
+    this._gpuSlicePendingHeat = new Float64Array(GPU_LAYOUT.MAX_SLICES);
+    this._gpuSliceConductanceRate = new Float64Array(GPU_LAYOUT.MAX_SLICES);
+    this._gpuDrainTime = 0.016;
+    this._gpuWallOwners = [];
     this._gpuRegulatorQuota = new Uint32Array(GPU_LAYOUT.MAX_REGULATORS);
     this._gpuLastEventTime = 0;
     this._gpuDeadSlots = 0;
@@ -433,11 +442,8 @@ export class Engine {
   // Called whenever the GPU particle set is replaced: discards event rates and
   // re-derives regulator counts from the (now authoritative) CPU particles.
   _resetGPUTransientState() {
-    this._gpuWallImpulseRate.fill(0);
-    this._gpuWallHeatRate.fill(0);
+    this._clearGPUEventRates();
     this._gpuRegulatorQuota.fill(0);
-    this._gpuLastEventTime = this.totalTime;
-    this._gpuDeadSlots = 0;
     for (let i = 0; i < this.regulators.length; i++) {
       const reg = this.regulators[i];
       let inside = 0;
@@ -453,64 +459,92 @@ export class Engine {
   restoreGPUHistory(slot) {
     if (!this.gpuCompute || !slot) return;
     this.gpuCompute.restoreHistory(slot);
-    this._gpuWallImpulseRate.fill(0);
-    this._gpuWallHeatRate.fill(0);
+    this._clearGPUEventRates();
+  }
+
+  _clearGPUEventRates() {
+    this._gpuWallPendingFront.fill(0);
+    this._gpuWallPendingBack.fill(0);
+    this._gpuWallPendingHeat.fill(0);
+    this._gpuWallConductanceRate.fill(0);
+    this._gpuSlicePendingHeat.fill(0);
+    this._gpuSliceConductanceRate.fill(0);
     this._gpuLastEventTime = this.totalTime;
     this._gpuDeadSlots = 0;
   }
 
-  getGPUWalls() {
-    const list = [...this.walls];
+  // Flattens every particle-blocking element into GPU wall segments. The
+  // parallel `_gpuWallOwners` table ({ kind, ref }) routes the per-segment
+  // momentum and heat measured on the GPU back to the owning element.
+  // `atFrameStart`: piston faces are placed where they were before this
+  // frame's piston update; the shader then sweeps them with their velocity.
+  getGPUWalls(atFrameStart = false) {
+    const list = [];
+    const owners = [];
+    const add = (seg, kind, ref) => { list.push(seg); owners.push({ kind, ref }); };
+    const segment = (x1, y1, x2, y2, nx, ny, extra) => Object.assign({
+      p1: { x: x1, y: y1 }, p2: { x: x2, y: y2 }, normal: { x: nx, y: ny },
+      thickness: 0, isOpen: false, type: 'standard', allowedDirection: 1,
+      temperature: 300, conductivity: 0, vel: { x: 0, y: 0 }
+    }, extra);
+    // Solid rectangles become four outward-facing zero-thickness edges.
+    const addRect = (r, kind, temperature, conductivity) => {
+      const x0 = r.x, y0 = r.y, x1 = r.x + r.width, y1 = r.y + r.height;
+      const thermal = { temperature, conductivity };
+      add(segment(x0, y0, x1, y0, 0, -1, thermal), kind, r);
+      add(segment(x0, y1, x1, y1, 0, 1, thermal), kind, r);
+      add(segment(x0, y0, x0, y1, -1, 0, thermal), kind, r);
+      add(segment(x1, y0, x1, y1, 1, 0, thermal), kind, r);
+    };
+
+    for (let i = 0; i < this.walls.length; i++) add(this.walls[i], 'wall', this.walls[i]);
+
     for (let k = 0; k < this.pistons.length; k++) {
       const p = this.pistons[k];
       const hw = p.width * 0.5;
       const hh = p.height * 0.5;
+      const px = atFrameStart && p._frameStartX !== undefined ? p._frameStartX : p.x;
+      const py = atFrameStart && p._frameStartY !== undefined ? p._frameStartY : p.y;
+      const thermal = { thickness: 6, temperature: p.temperature, conductivity: p.conductivity };
       if (p.orientation === 'horizontal') {
-        const vx = p.velocity;
         const extH = hh + 25;
-        list.push({
-          p1: { x: p.x - hw, y: p.y - extH },
-          p2: { x: p.x - hw, y: p.y + extH },
-          normal: { x: -1, y: 0 },
-          thickness: 6, isOpen: false, type: 'standard', allowedDirection: 1,
-          temperature: p.temperature, conductivity: p.conductivity,
-          vel: { x: vx, y: 0 }
-        });
-        list.push({
-          p1: { x: p.x + hw, y: p.y - extH },
-          p2: { x: p.x + hw, y: p.y + extH },
-          normal: { x: 1, y: 0 },
-          thickness: 6, isOpen: false, type: 'standard', allowedDirection: 1,
-          temperature: p.temperature, conductivity: p.conductivity,
-          vel: { x: vx, y: 0 }
-        });
+        const face = Object.assign({ vel: { x: atFrameStart ? p.velocity : 0, y: 0 } }, thermal);
+        add(segment(px - hw, py - extH, px - hw, py + extH, -1, 0, face), 'pistonLeft', p);
+        add(segment(px + hw, py - extH, px + hw, py + extH, 1, 0, face), 'pistonRight', p);
       } else {
-        const vy = p.velocity;
         const extW = hw + 25;
-        list.push({
-          p1: { x: p.x - extW, y: p.y - hh },
-          p2: { x: p.x + extW, y: p.y - hh },
-          normal: { x: 0, y: -1 },
-          thickness: 6, isOpen: false, type: 'standard', allowedDirection: 1,
-          temperature: p.temperature, conductivity: p.conductivity,
-          vel: { x: 0, y: vy }
-        });
-        list.push({
-          p1: { x: p.x - extW, y: p.y + hh },
-          p2: { x: p.x + extW, y: p.y + hh },
-          normal: { x: 0, y: 1 },
-          thickness: 6, isOpen: false, type: 'standard', allowedDirection: 1,
-          temperature: p.temperature, conductivity: p.conductivity,
-          vel: { x: 0, y: vy }
-        });
+        const face = Object.assign({ vel: { x: 0, y: atFrameStart ? p.velocity : 0 } }, thermal);
+        add(segment(px - extW, py - hh, px + extW, py - hh, 0, -1, face), 'pistonLeft', p);
+        add(segment(px - extW, py + hh, px + extW, py + hh, 0, 1, face), 'pistonRight', p);
       }
     }
+
+    // Throttle valves: the two wedge wings of the variable orifice
+    const throttles = this.throttleValves || [];
+    for (let i = 0; i < throttles.length; i++) {
+      const tv = throttles[i];
+      const disabled = !tv.isActive || tv.openRatio >= 0.999 || tv.wingLength <= 0.5;
+      const wing = { thickness: tv.thickness, temperature: tv.temperature, conductivity: tv.conductivity, disabled };
+      add(segment(tv.p1.x, tv.p1.y, tv.wing1End.x, tv.wing1End.y, tv.normal.x, tv.normal.y, wing), 'throttle', tv);
+      add(segment(tv.wing2Start.x, tv.wing2Start.y, tv.p2.x, tv.p2.y, tv.normal.x, tv.normal.y, wing), 'throttle', tv);
+    }
+
+    for (let i = 0; i < this.reservoirs.length; i++) {
+      const r = this.reservoirs[i];
+      addRect(r, 'reservoir', r.temperature, r.isActive ? r.conductance : 0);
+    }
+    for (let i = 0; i < this.thermalBlocks.length; i++) {
+      const b = this.thermalBlocks[i];
+      addRect(b, 'thermalBlock', b.temperature, b.isActive ? b.conductivity : 0);
+    }
+
+    this._gpuWallOwners = owners;
     return list;
   }
 
-  syncWallsToGPU() {
+  syncWallsToGPU(atFrameStart = false) {
     if (this.gpuCompute && this.useGPUCompute) {
-      const gpuWalls = this.getGPUWalls();
+      const gpuWalls = this.getGPUWalls(atFrameStart);
       this.gpuCompute.uploadWalls(gpuWalls || []);
     }
   }
@@ -580,10 +614,18 @@ export class Engine {
     const gpu = this.gpuCompute;
     gpu.flushPendingParticles();
     this._applyGPUEventRates(dt);
+    for (let i = 0; i < this.pistons.length; i++) {
+      this.pistons[i]._frameStartX = this.pistons[i].x;
+      this.pistons[i]._frameStartY = this.pistons[i].y;
+    }
     this._updateComponents(dt);
 
-    this.syncWallsToGPU();
-    gpu.uploadZones(this.sinks, this.regulators, this.sensors, this._gpuRegulatorQuota);
+    this.syncWallsToGPU(true);
+    gpu.uploadZones({
+      sinks: this.sinks, regulators: this.regulators, sensors: this.sensors,
+      heatExchangers: this.heatExchangers, regenerators: this.regenerators,
+      regulatorQuota: this._gpuRegulatorQuota
+    });
     this._gpuRegulatorQuota.fill(0);
 
     const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
@@ -592,23 +634,57 @@ export class Engine {
     this._submitGPUReadback();
   }
 
-  // Feeds GPU-measured wall/piston momentum and heat back into the CPU-side
-  // element models, spread evenly over frames at the last measured rate.
+  // Feeds GPU-measured momentum and heat back into the CPU-side element
+  // models, spread evenly over frames at the last measured rate.
   _applyGPUEventRates(dt) {
-    const nWalls = Math.min(this.walls.length, GPU_LAYOUT.MAX_WALLS);
-    const impRate = this._gpuWallImpulseRate;
-    const heatRate = this._gpuWallHeatRate;
-    for (let i = 0; i < nWalls; i++) {
-      const w = this.walls[i];
-      w.accumulatedImpulse += impRate[i] * dt;
-      if (heatRate[i] !== 0) w.addHeat(heatRate[i] * dt);
+    const f = Math.min(1, dt / Math.max(dt, this._gpuDrainTime));
+    const drain = (buf, i) => {
+      const amount = buf[i] * f;
+      buf[i] -= amount;
+      return amount;
+    };
+
+    const owners = this._gpuWallOwners;
+    const conductance = this._gpuWallConductanceRate;
+    const n = Math.min(owners.length, GPU_LAYOUT.MAX_WALLS);
+    for (let i = 0; i < n; i++) {
+      const { kind, ref } = owners[i];
+      const front = drain(this._gpuWallPendingFront, i);
+      const back = drain(this._gpuWallPendingBack, i);
+      const heat = drain(this._gpuWallPendingHeat, i);
+      switch (kind) {
+        case 'wall':
+          ref.accumulatedImpulse += front + back;
+          break;
+        case 'pistonLeft':
+          ref.accumulatedImpulseLeft += front + back;
+          break;
+        case 'pistonRight':
+          ref.accumulatedImpulseRight += front + back;
+          break;
+        case 'throttle':
+          ref.accumulatedImpulseSide1 += front;
+          ref.accumulatedImpulseSide2 += back;
+          break;
+      }
+      // Reservoirs have infinite heat capacity: nothing to accumulate
+      if (kind !== 'reservoir' && (heat !== 0 || conductance[i] > 0)) {
+        ref.addHeat(heat);
+        ref.addConductance(conductance[i] * dt);
+      }
     }
-    // Piston faces are appended after the walls by getGPUWalls(): [left/top, right/bottom]
-    for (let k = 0; k < this.pistons.length; k++) {
-      const base = this.walls.length + 2 * k;
-      if (base + 1 >= GPU_LAYOUT.MAX_WALLS) break;
-      this.pistons[k].accumulatedImpulseLeft += impRate[base] * dt;
-      this.pistons[k].accumulatedImpulseRight += impRate[base + 1] * dt;
+
+    const slotBase = this.gpuCompute.regeneratorSlotBase;
+    for (let i = 0; i < this.regenerators.length; i++) {
+      const base = slotBase[i];
+      if (base === undefined || base < 0) continue;
+      const reg = this.regenerators[i];
+      for (let k = 0; k < reg.sliceCount; k++) {
+        const heat = drain(this._gpuSlicePendingHeat, base + k);
+        if (heat === 0) continue;
+        reg.addHeatToSlice(k, heat);
+        reg.addConductanceToSlice(k, this._gpuSliceConductanceRate[base + k] * dt);
+      }
     }
   }
 
@@ -680,17 +756,25 @@ export class Engine {
       }
     }
 
-    // Wall & piston-face momentum / heat rates over the covered sim interval
+    // Wall-segment momentum / heat and regenerator slice heat over the covered sim interval
     const covered = info.simTime - this._gpuLastEventTime;
     this._gpuLastEventTime = info.simTime;
     if (covered > 1e-6) {
+      this._gpuDrainTime = covered;
+      const read = (idx) => ParticleGPUCompute.readU64(counters, idx) / L.EV_SCALE;
+      const readG = (idx) => ParticleGPUCompute.readU64(counters, idx) / L.G_SCALE;
       const nWalls = this.gpuCompute.wallCount;
       for (let i = 0; i < nWalls; i++) {
         const b = i * L.WALL_EV_STRIDE;
-        const impulse = ParticleGPUCompute.readU64(counters, b) / L.EV_SCALE;
-        const heat = (ParticleGPUCompute.readU64(counters, b + 2) - ParticleGPUCompute.readU64(counters, b + 4)) / L.EV_SCALE;
-        this._gpuWallImpulseRate[i] = impulse / covered;
-        this._gpuWallHeatRate[i] = heat / covered;
+        this._gpuWallPendingFront[i] += read(b);
+        this._gpuWallPendingBack[i] += read(b + 2);
+        this._gpuWallPendingHeat[i] += read(b + 4) - read(b + 6);
+        this._gpuWallConductanceRate[i] = readG(b + 8) / covered;
+      }
+      for (let i = 0; i < L.MAX_SLICES; i++) {
+        const b = L.SLICE_HEAT_BASE + i * L.SLICE_EV_STRIDE;
+        this._gpuSlicePendingHeat[i] += read(b) - read(b + 2);
+        this._gpuSliceConductanceRate[i] = readG(b + 4) / covered;
       }
     }
   }
@@ -945,9 +1029,10 @@ export class Engine {
 
           if (wall.conductivity > 0) {
             const kB = 35.0;
-            const targetSpeedSq = (2 * kB * wall.temperature) / p.mass;
+            // Surface contacts target 1.5 kB T (2D flux-weighted mean energy), see ParticleGPUComputeShader wallBounce()
+            const targetSpeedSq = (3 * kB * wall.temperature) / p.mass;
             const curSpeedSq = newVx * newVx + newVy * newVy;
-            const alpha = wall.conductivity * 0.8;
+            const alpha = Math.min(1, wall.conductivity * 0.8);
             const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
             const factor = curSpeedSq > 0.001 ? Math.sqrt(blendSq / curSpeedSq) : 1;
 
@@ -956,6 +1041,7 @@ export class Engine {
             newVy *= factor;
             const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
             wall.addHeat(-(eAfter - eBefore));
+            wall.addConductance(alpha * 1.5 * kB);
           }
 
           p.vel.x = newVx;
@@ -998,9 +1084,9 @@ export class Engine {
 
         if (wall.conductivity > 0) {
           const kB = 35.0;
-          const targetSpeedSq = (2 * kB * wall.temperature) / p.mass;
+          const targetSpeedSq = (3 * kB * wall.temperature) / p.mass;
           const curSpeedSq = newVx * newVx + newVy * newVy;
-          const alpha = wall.conductivity * 0.8;
+          const alpha = Math.min(1, wall.conductivity * 0.8);
           const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
           const factor = curSpeedSq > 0.001 ? Math.sqrt(blendSq / curSpeedSq) : 1;
 
@@ -1009,6 +1095,7 @@ export class Engine {
           newVy *= factor;
           const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
           wall.addHeat(-(eAfter - eBefore));
+          wall.addConductance(alpha * 1.5 * kB);
         }
 
         p.vel.x = newVx;
@@ -1114,6 +1201,7 @@ export class Engine {
         p.vel.multiplyScalar(factor);
         const eAfter = 0.5 * p.mass * p.getSpeedSq();
         reg.addHeatToSlice(sliceIdx, -(eAfter - eBefore));
+        reg.addConductanceToSlice(sliceIdx, alpha * kB);
       }
     }
   }
@@ -1142,7 +1230,7 @@ export class Engine {
       if (block.isActive && block.conductivity > 0) {
         const kB = 35.0;
         const targetTemp = Math.max(5, block.temperature);
-        const targetSpeedSq = (2 * kB * targetTemp) / Math.max(0.01, p.mass);
+        const targetSpeedSq = (3 * kB * targetTemp) / Math.max(0.01, p.mass);
         const curSpeedSq = p.getSpeedSq();
         if (curSpeedSq > 0.0001) {
           const alpha = Math.min(1.0, block.conductivity * 0.8);
@@ -1154,6 +1242,7 @@ export class Engine {
               p.vel.multiplyScalar(factor);
               const eAfter = 0.5 * p.mass * p.getSpeedSq();
               block.addHeat(-(eAfter - eBefore));
+              block.addConductance(alpha * 1.5 * kB);
             }
           }
         }
@@ -1185,7 +1274,7 @@ export class Engine {
       if (res.isActive && res.conductance > 0) {
         const kB = 35.0;
         const targetTemp = Math.max(5, res.temperature);
-        const targetSpeedSq = (2 * kB * targetTemp) / Math.max(0.01, p.mass);
+        const targetSpeedSq = (3 * kB * targetTemp) / Math.max(0.01, p.mass);
         const curSpeedSq = p.getSpeedSq();
         if (curSpeedSq > 0.0001) {
           const alpha = Math.min(1.0, res.conductance * 0.8);

@@ -81,7 +81,8 @@ def run_test():
         send_cdp('Console.enable')
 
         time.sleep(0.5)
-        for _ in range(30):
+        # Up to 15 s: bundle load + WebGPU init can be slow right after a heavy GPU test
+        for _ in range(75):
             chk = send_cdp('Runtime.evaluate', {
                 'expression': 'typeof window.renderer !== "undefined" && typeof window.engine !== "undefined"'
             })

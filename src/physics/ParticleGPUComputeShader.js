@@ -4,12 +4,16 @@ export const GPU_LAYOUT = (() => {
   const L = {
     WG: 64,
     PARTICLE_FLOATS: 8,
+    CAPACITY: 1000000,     // particle slots per ping-pong buffer
     MAX_WALLS: 512,
     MAX_SINKS: 64,
     MAX_REGULATORS: 16,
     MAX_SENSORS: 16,
+    MAX_THERMAL_ZONES: 16, // heat exchangers + regenerator matrices
+    MAX_SLICES: 512,       // thermal zone temperature slots (regenerator slices)
     ZONE_WORDS: 12,
-    WALL_EV_STRIDE: 6,     // impulse(lo,hi), heatIntoWall(lo,hi), heatOutOfWall(lo,hi)
+    WALL_EV_STRIDE: 10,    // impulseFront, impulseBack, heatIn, heatOut, conductance (each lo,hi)
+    SLICE_EV_STRIDE: 6,    // heatIn, heatOut, conductance (each lo,hi)
     TELEM_SCALARS: 12,     // N, KE, vx+, vx-, vy+, vy-, mvx+, mvx-, mvy+, mvy-, m, |v|
     HIST_BINS: 64,
     HIST_BIN_WIDTH: 10,    // px/s per histogram bin
@@ -17,17 +21,22 @@ export const GPU_LAYOUT = (() => {
     V_SCALE: 16,
     MV_SCALE: 4,
     M_SCALE: 64,
-    EV_SCALE: 16
+    EV_SCALE: 16,
+    G_SCALE: 256           // coupling conductance (alpha * 1.5 kB per wall hit, alpha * kB per volume exchange)
   };
-  L.SINK_ABS_BASE = L.MAX_WALLS * L.WALL_EV_STRIDE;
+  // Counters: [wall events][slice heat] are cleared on every readback; the rest persists.
+  L.SLICE_HEAT_BASE = L.MAX_WALLS * L.WALL_EV_STRIDE;
+  L.SINK_ABS_BASE = L.SLICE_HEAT_BASE + L.MAX_SLICES * L.SLICE_EV_STRIDE;
   L.REG_QUOTA_BASE = L.SINK_ABS_BASE + L.MAX_SINKS;
   L.COMPACT_IDX = L.REG_QUOTA_BASE + L.MAX_REGULATORS;
-  L.COUNTER_WORDS = L.COMPACT_IDX + 1;
+  L.SUBSTEP_IDX = L.COMPACT_IDX + 1; // index of the running substep within a frame
+  L.COUNTER_WORDS = L.SUBSTEP_IDX + 1;
 
   L.ZONE_SINK_BASE = 0;
   L.ZONE_REG_BASE = L.MAX_SINKS;
   L.ZONE_SENSOR_BASE = L.MAX_SINKS + L.MAX_REGULATORS;
-  L.MAX_ZONES = L.ZONE_SENSOR_BASE + L.MAX_SENSORS;
+  L.ZONE_THERMAL_BASE = L.ZONE_SENSOR_BASE + L.MAX_SENSORS;
+  L.MAX_ZONES = L.ZONE_THERMAL_BASE + L.MAX_THERMAL_ZONES;
 
   L.TELEM_TARGETS = 1 + L.MAX_SENSORS; // target 0 = global system
   L.WG_TARGET_STRIDE = L.TELEM_SCALARS + L.HIST_BINS;
@@ -46,7 +55,7 @@ struct SimParams {
   particleCount: u32, maxSpeedReference: f32, wallCount: u32, subSteps: u32,
   boundsEnabled: u32, cellSize: f32, gridTableSize: u32, sinkCount: u32,
   boundMin: vec2f, boundMax: vec2f,
-  simModel: u32, regulatorCount: u32, sensorCount: u32, pad0: u32,
+  simModel: u32, regulatorCount: u32, sensorCount: u32, thermalZoneCount: u32,
 };
 
 struct Particle {
@@ -59,7 +68,10 @@ struct WallData {
   temperature: f32, conductivity: f32, vel: vec2f, pad: vec2f,
 };
 
-// Axis-aligned zone shared by sinks, regulators and sensor chambers.
+// Axis-aligned zone shared by sinks, regulators, sensor chambers and thermal
+// zones. Thermal zones reuse fields: direction = slice axis (0: y, 1: x),
+// tempFilterMode = slice count, filterTemperature = conductivity,
+// maxCount = first slot in thermalTemps, pad0 = 1 if slice heat is recorded.
 struct ZoneData {
   minPos: vec2f, maxPos: vec2f,
   isActive: u32, direction: u32, tempFilterMode: u32, filterTemperature: f32,
@@ -69,9 +81,14 @@ struct ZoneData {
 const KB: f32 = 35.0;
 const WG_SIZE: u32 = ${L.WG}u;
 const WALL_EV_STRIDE: u32 = ${L.WALL_EV_STRIDE}u;
+const SLICE_EV_STRIDE: u32 = ${L.SLICE_EV_STRIDE}u;
+const SLICE_HEAT_BASE: u32 = ${L.SLICE_HEAT_BASE}u;
+const PARTNER_BASE: u32 = ${L.CAPACITY}u;
+const ZONE_THERMAL_BASE: u32 = ${L.ZONE_THERMAL_BASE}u;
 const SINK_ABS_BASE: u32 = ${L.SINK_ABS_BASE}u;
 const REG_QUOTA_BASE: u32 = ${L.REG_QUOTA_BASE}u;
 const COMPACT_IDX: u32 = ${L.COMPACT_IDX}u;
+const SUBSTEP_IDX: u32 = ${L.SUBSTEP_IDX}u;
 const ZONE_SINK_BASE: u32 = ${L.ZONE_SINK_BASE}u;
 const ZONE_REG_BASE: u32 = ${L.ZONE_REG_BASE}u;
 const ZONE_SENSOR_BASE: u32 = ${L.ZONE_SENSOR_BASE}u;
@@ -88,6 +105,7 @@ const V_SCALE: f32 = ${L.V_SCALE}.0;
 const MV_SCALE: f32 = ${L.MV_SCALE}.0;
 const M_SCALE: f32 = ${L.M_SCALE}.0;
 const EV_SCALE: f32 = ${L.EV_SCALE}.0;
+const G_SCALE: f32 = ${L.G_SCALE}.0;
 // Per-particle fixed-point cap: WG_SIZE * FX_MAX must stay below 2^32 so a
 // workgroup-local u32 accumulator can never overflow.
 const FX_MAX: f32 = 6.0e7;
@@ -97,8 +115,9 @@ const FX_MAX: f32 = 6.0e7;
 @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
 @group(0) @binding(3) var<storage, read> walls: array<WallData>;
 @group(0) @binding(4) var<storage, read_write> cellHeads: array<atomic<i32>>;
-@group(0) @binding(5) var<storage, read_write> particleNext: array<i32>;
-@group(0) @binding(6) var<storage, read_write> bestPartners: array<i32>;
+// gridLinks[i] = next particle in cell list, gridLinks[PARTNER_BASE + i] = best collision partner
+@group(0) @binding(5) var<storage, read_write> gridLinks: array<i32>;
+@group(0) @binding(6) var<storage, read> thermalTemps: array<f32>;
 @group(0) @binding(7) var<storage, read> zones: array<ZoneData>;
 @group(0) @binding(8) var<storage, read_write> counters: array<atomic<u32>>;
 @group(0) @binding(9) var<storage, read_write> stats: array<atomic<u32>>;
@@ -142,15 +161,22 @@ fn addStat64(idx: u32, v: u32) {
   if (old > 0xFFFFFFFFu - v) { atomicAdd(&stats[idx + 1u], 1u); }
 }
 
-fn recordWallEvent(wallIdx: u32, impulse: f32, heatIntoWall: f32) {
+// \`front\`: the particle is on the side the wall normal points to.
+// Heat (signed, split into in/out channels) plus coupling conductance at \`base\`.
+fn recordHeat(base: u32, heatIntoElement: f32, conductance: f32) {
+  if (heatIntoElement > 0.0) {
+    addCounter64(base, fx(heatIntoElement, EV_SCALE));
+  } else if (heatIntoElement < 0.0) {
+    addCounter64(base + 2u, fx(-heatIntoElement, EV_SCALE));
+  }
+  if (conductance > 0.0) { addCounter64(base + 4u, fx(conductance, G_SCALE)); }
+}
+
+fn recordWallEvent(wallIdx: u32, impulse: f32, heatIntoWall: f32, conductance: f32, front: bool) {
   let base = wallIdx * WALL_EV_STRIDE;
   let imp = fx(impulse, EV_SCALE);
-  if (imp > 0u) { addCounter64(base, imp); }
-  if (heatIntoWall > 0.0) {
-    addCounter64(base + 2u, fx(heatIntoWall, EV_SCALE));
-  } else if (heatIntoWall < 0.0) {
-    addCounter64(base + 4u, fx(-heatIntoWall, EV_SCALE));
-  }
+  if (imp > 0u) { addCounter64(base + select(2u, 0u, front), imp); }
+  recordHeat(base + 4u, heatIntoWall, conductance);
 }
 
 // Reflects a particle off a (possibly moving, possibly conductive) wall and
@@ -162,17 +188,22 @@ fn wallBounce(vel: vec2f, mass: f32, n: vec2f, wallIdx: u32) -> vec2f {
   if (vn >= 0.0) { return vel; }
   var v = vel - 2.0 * vn * n;
   var heatIntoWall = 0.0;
+  var conductance = 0.0;
   if (w.conductivity > 0.0) {
     let curSpeedSq = dot(v, v);
     if (curSpeedSq > 0.001) {
-      let targetSpeedSq = (2.0 * KB * w.temperature) / mass;
-      let alpha = w.conductivity * 0.8;
+      // Wall hits sample the flux-weighted distribution, whose mean energy in 2D is
+      // 1.5 kB T (not kB T), so the target is 1.5 kB T_wall; otherwise gas in contact
+      // with a wall would settle at T_wall / 1.5.
+      let targetSpeedSq = (3.0 * KB * w.temperature) / mass;
+      let alpha = min(1.0, w.conductivity * 0.8);
       let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
       v *= sqrt(blendSq / curSpeedSq);
       heatIntoWall = 0.5 * mass * (curSpeedSq - blendSq);
+      conductance = alpha * 1.5 * KB;
     }
   }
-  recordWallEvent(wallIdx, 2.0 * mass * (-vn), heatIntoWall);
+  recordWallEvent(wallIdx, 2.0 * mass * (-vn), heatIntoWall, conductance, dot(n, w.normal) > 0.0);
   return v;
 }
 
@@ -196,14 +227,14 @@ fn cs_build_grid(@builtin(global_invocation_id) global_id: vec3u) {
   }
   let p = particlesIn[idx];
   if (isDead(p)) {
-    particleNext[idx] = -1;
+    gridLinks[idx] = -1;
     return;
   }
   let cx = i32(floor(p.pos.x / params.cellSize));
   let cy = i32(floor(p.pos.y / params.cellSize));
   let cellIdx = hashCell(cx, cy, params.gridTableSize);
   let prevHead = atomicExchange(&cellHeads[cellIdx], i32(idx));
-  particleNext[idx] = prevHead;
+  gridLinks[idx] = prevHead;
 }
 
 @compute @workgroup_size(64)
@@ -212,7 +243,7 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
   if (idx >= params.particleCount) { return; }
   let p = particlesIn[idx];
   if (isDead(p)) {
-    bestPartners[idx] = -1;
+    gridLinks[PARTNER_BASE + idx] = -1;
     return;
   }
   let cx = i32(floor(p.pos.x / params.cellSize));
@@ -259,12 +290,12 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
             }
           }
         }
-        otherIdx = particleNext[u32(otherIdx)];
+        otherIdx = gridLinks[u32(otherIdx)];
         loopSteps++;
       }
     }
   }
-  bestPartners[idx] = bestPartner;
+  gridLinks[PARTNER_BASE + idx] = bestPartner;
 }
 
 @compute @workgroup_size(64)
@@ -331,7 +362,7 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
               ljForce += diff * (forceOverDist / p.mass);
             }
           }
-          otherIdx = particleNext[u32(otherIdx)];
+          otherIdx = gridLinks[u32(otherIdx)];
           loopSteps++;
         }
       }
@@ -339,9 +370,9 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     p.vel += ljForce * params.dt;
   } else {
     // Ideal Gas: Mutual Pairwise Elastic Impulse
-    let partnerIdx = bestPartners[idx];
+    let partnerIdx = gridLinks[PARTNER_BASE + idx];
     if (partnerIdx >= 0) {
-      let partnerOfOther = bestPartners[u32(partnerIdx)];
+      let partnerOfOther = gridLinks[PARTNER_BASE + u32(partnerIdx)];
       if (partnerOfOther == i32(idx)) {
         let pOther = particlesIn[u32(partnerIdx)];
         let diff = p.pos - pOther.pos;
@@ -365,6 +396,9 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   }
 
   // 3. Wall Continuous Collision Detection (CCD) Ray-vs-Segment
+  // Walls are uploaded at their frame-start position; moving walls (piston
+  // faces) advance by vel * dt per substep so they sweep rather than jump.
+  let wallTime = f32(atomicLoad(&counters[SUBSTEP_IDX])) * params.dt;
   let moveVec = (p.pos - startPos) + p.vel * params.dt;
   var candidatePos = startPos + moveVec;
   var earliestT = 2.0;
@@ -380,6 +414,7 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     if (isOneWayWall(w) && (vDotN * w.allowedDir > 0.0)) { continue; }
 
     let effRad = p.radius + w.thickness * 0.5;
+    let wp1 = w.p1 + w.vel * wallTime;
     let seg = w.p2 - w.p1;
     let segLenSq = dot(seg, seg);
     if (segLenSq < 1e-6) { continue; }
@@ -391,15 +426,15 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     let denom = vx * wy - vy * wx;
 
     if (abs(denom) > 1e-6) {
-      let dx13 = w.p1.x - startPos.x;
-      let dy13 = w.p1.y - startPos.y;
+      let dx13 = wp1.x - startPos.x;
+      let dy13 = wp1.y - startPos.y;
       let t = (dx13 * wy - dy13 * wx) / denom;
       let u = (dx13 * vy - dy13 * vx) / denom;
       let wallLen = sqrt(segLenSq);
       let eps = effRad / wallLen;
 
       if (t >= 0.0 && t <= 1.0 && u >= -eps && u <= 1.0 + eps && t < earliestT) {
-        let hStart = dot(startPos - w.p1, w.normal);
+        let hStart = dot(startPos - wp1, w.normal);
         var norm = select(-w.normal, w.normal, hStart >= 0.0);
         if (abs(hStart) < 1e-4) { norm = select(-w.normal, w.normal, vDotN < 0.0); }
         earliestT = t;
@@ -425,13 +460,14 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     if (w.wallType == 1u && w.isOpen != 0u) { continue; }
     if (isOneWayWall(w) && (dot(p.vel - w.vel, w.normal) * w.allowedDir > 0.0)) { continue; }
     let effRad = p.radius + w.thickness * 0.5;
+    let wp1 = w.p1 + w.vel * (wallTime + params.dt);
     let seg = w.p2 - w.p1;
     let segLenSq = dot(seg, seg);
     var u_proj = 0.0;
     if (segLenSq > 1e-6) {
-      u_proj = clamp(dot(p.pos - w.p1, seg) / segLenSq, 0.0, 1.0);
+      u_proj = clamp(dot(p.pos - wp1, seg) / segLenSq, 0.0, 1.0);
     }
-    let closest = w.p1 + seg * u_proj;
+    let closest = wp1 + seg * u_proj;
     let diff = p.pos - closest;
     let distSq = dot(diff, diff);
     if (distSq < effRad * effRad && distSq > 1e-6) {
@@ -439,6 +475,29 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
       let norm = diff / dist;
       p.pos = closest + norm * (effRad + 0.05);
       p.vel = wallBounce(p.vel, p.mass, norm, i);
+    }
+  }
+
+  // 4a. Permeable thermal zones: heat exchangers (isothermal) and regenerator
+  // slices (finite capacity, heat recorded per slice)
+  for (var t = 0u; t < params.thermalZoneCount; t++) {
+    let z = zones[ZONE_THERMAL_BASE + t];
+    if (z.isActive == 0u || !inZone(p.pos, z)) { continue; }
+    let curSpeedSq = dot(p.vel, p.vel);
+    if (curSpeedSq < 0.0001) { continue; }
+    let sliceCount = max(z.tempFilterMode, 1u);
+    var frac = (p.pos.y - z.minPos.y) / max(z.maxPos.y - z.minPos.y, 1e-3);
+    if (z.direction == 1u) { frac = (p.pos.x - z.minPos.x) / max(z.maxPos.x - z.minPos.x, 1e-3); }
+    let slice = min(u32(clamp(frac, 0.0, 0.9999) * f32(sliceCount)), sliceCount - 1u);
+    let slot = z.maxCount + slice;
+    let targetSpeedSq = (2.0 * KB * max(5.0, thermalTemps[slot])) / max(0.01, p.mass);
+    let alpha = min(1.0, z.filterTemperature * 6.0 * params.dt);
+    let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+    if (blendSq > 0.0) {
+      p.vel *= sqrt(blendSq / curSpeedSq);
+      if (z.pad0 != 0u) {
+        recordHeat(SLICE_HEAT_BASE + slot * SLICE_EV_STRIDE, 0.5 * p.mass * (curSpeedSq - blendSq), alpha * KB);
+      }
     }
   }
 
@@ -574,6 +633,12 @@ fn cs_telemetry(@builtin(global_invocation_id) global_id: vec3u,
       atomicAdd(&stats[t * STAT_TARGET_STRIDE + 2u * TELEM_SCALARS + (c - TELEM_SCALARS)], v);
     }
   }
+}
+
+// Runs once after each substep so moving walls know how far they have advanced.
+@compute @workgroup_size(1)
+fn cs_advance_substep() {
+  atomicAdd(&counters[SUBSTEP_IDX], 1u);
 }
 
 // Stream compaction: live particles are packed to the front of particlesOut.

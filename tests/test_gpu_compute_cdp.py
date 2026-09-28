@@ -501,6 +501,82 @@ def run_test():
                 const historyRestored = beforeHist.every((p, i) => p.pos.x === afterHist[i].pos.x && p.pos.y === afterHist[i].pos.y)
                     && beforeHist.some((p, i) => p.pos.x !== movedHist[i].pos.x);
 
+                // 13. Elements that used to be CPU-only: throttle valves, reservoirs,
+                // thermal blocks, heat exchangers, regenerator matrices
+                const countWhere = async (pred) => (await E.gpuCompute.readbackParticles()).filter(p => p.radius > 0 && pred(p)).length;
+
+                // 13a. Closed throttle valve separates two chambers; opening it lets gas through
+                E.clear();
+                makeBox(100, 100, 700, 300);
+                const throttle = E.addThrottleValve(400, 100, 400, 300, { openRatio: 0.0, thickness: 6 });
+                E.spawnGasRaster(110, 110, 270, 180, 400, 1.0, 300);
+                E.syncParticlesToGPU();
+                await run(60);
+                const throttleLeaked = await countWhere(p => p.pos.x > 404);
+                const throttleDeltaP = throttle.deltaP;
+                throttle.setOpenRatio(0.6);
+                await run(60);
+                const throttlePassed = await countWhere(p => p.pos.x > 404);
+
+                // 13b. Hot isothermal reservoir heats the gas and stays impenetrable
+                E.clear();
+                makeBox(100, 100, 500, 500);
+                E.addReservoir(250, 250, 100, 100, { temperature: 1500, conductance: 1.0 });
+                E.spawnGasRaster(110, 110, 380, 120, 300, 1.0, 300);
+                E.syncParticlesToGPU();
+                await run(240);
+                const reservoirGasT = E.stats.systemTemperature;
+                const reservoirInside = await countWhere(p => p.pos.x > 252 && p.pos.x < 348 && p.pos.y > 252 && p.pos.y < 348);
+
+                // 13c. Cold thermal block absorbs heat from the gas
+                E.clear();
+                makeBox(100, 100, 500, 500);
+                // Capacity must be large vs. a single particle's energy, otherwise T follows individual hits
+                const block = E.addThermalBlock(250, 250, 100, 100, { temperature: 50, conductivity: 1.0, heatCapacity: 2000 });
+                E.spawnGasRaster(110, 110, 380, 120, 300, 1.0, 600);
+                E.syncParticlesToGPU();
+                await run(150);
+                const blockTemp = block.temperature;
+                const blockInside = await countWhere(p => p.pos.x > 252 && p.pos.x < 348 && p.pos.y > 252 && p.pos.y < 348);
+
+                // 13d. Permeable heat exchanger drives the gas towards its temperature
+                E.clear();
+                makeBox(100, 100, 500, 500);
+                E.addHeatExchanger(110, 110, 380, 380, { temperature: 900, conductivity: 1.0 });
+                E.spawnGasRaster(110, 110, 380, 380, 300, 1.0, 300);
+                E.syncParticlesToGPU();
+                await run(90);
+                const hxGasT = E.stats.systemTemperature;
+
+                // 13e. Cold regenerator matrix stores heat from hot gas in its slices
+                E.clear();
+                makeBox(100, 100, 500, 500);
+                // Preset-like parameters (Split-Stirling); very small capacities make the explicit coupling unstable
+                const regen = E.addRegeneratorMatrix(240, 110, 120, 380, { temperature: 100, conductivity: 0.75, heatCapacity: 450, sliceCount: 10 });
+                E.spawnGasRaster(110, 110, 380, 380, 200, 1.0, 900);
+                E.syncParticlesToGPU();
+                await run(120);
+                const regenAvgT = regen.getAverageTemperature();
+                const regenGasT = E.stats.systemTemperature;
+
+                // 13f. Motorized piston starting off its sinusoid must not teleport, and a fast
+                // piston face must sweep particles instead of letting them slip into/behind it
+                window.Presets.compressionCylinder.load(E);
+                E.ambientBounds = null;
+                E.syncParticlesToGPU();
+                E.syncWallsToGPU();
+                const motor = E.pistons[0];
+                const motorLimits = motor.getTravelLimits();
+                const motorPeakSpeed = Math.PI * motor.frequency * motorLimits.stroke;
+                let motorMaxSpeed = 0;
+                for (let i = 0; i < 180; i++) {
+                    E.step(0.016);
+                    motorMaxSpeed = Math.max(motorMaxSpeed, Math.abs(motor.velocity));
+                    if (i % 2 === 1) await E.awaitGPUTelemetry();
+                }
+                const motorSpeedRatio = motorMaxSpeed / motorPeakSpeed;
+                const motorLeaked = await countWhere(p => p.pos.x > motor.x + motor.width / 2);
+
                 return {
                     success: true,
                     count: 50000,
@@ -534,6 +610,18 @@ def run_test():
                     regDrainedCount,
                     compaction,
                     historyRestored,
+                    throttleLeaked,
+                    throttleDeltaP,
+                    throttlePassed,
+                    reservoirGasT,
+                    reservoirInside,
+                    blockTemp,
+                    blockInside,
+                    hxGasT,
+                    regenAvgT,
+                    regenGasT,
+                    motorSpeedRatio,
+                    motorLeaked,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -605,6 +693,20 @@ def run_test():
         assert comp.get('slots') == comp.get('live'), f"GPU compaction left dead slots: {comp}"
         assert comp.get('live', 0) + comp.get('absorbed', 0) == 2000, f"Particles lost or duplicated during compaction: {comp}"
         assert val.get('historyRestored') == True, "GPU step-back history did not restore particle state"
+
+        # Formerly CPU-only elements on the GPU
+        assert val.get('throttleLeaked') == 0, f"Closed throttle valve leaked {val.get('throttleLeaked')} particles"
+        assert val.get('throttleDeltaP', 0) > 0, f"Closed throttle valve measured no pressure difference ({val.get('throttleDeltaP')})"
+        assert val.get('throttlePassed', 0) > 20, f"Opened throttle valve let only {val.get('throttlePassed')} particles pass"
+        assert val.get('reservoirGasT', 0) > 380, f"Hot reservoir did not heat the gas (T = {val.get('reservoirGasT')})"
+        assert val.get('reservoirInside') == 0, f"{val.get('reservoirInside')} particles penetrated the reservoir"
+        assert 100 < val.get('blockTemp', 0) < 700, f"Cold thermal block did not absorb heat or overshot the 600 K gas (T = {val.get('blockTemp')})"
+        assert val.get('blockInside') == 0, f"{val.get('blockInside')} particles penetrated the thermal block"
+        assert val.get('hxGasT', 0) > 700, f"Heat exchanger did not drive gas towards 900 K (T = {val.get('hxGasT')})"
+        assert 300 < val.get('regenAvgT', 0) < 1300, f"Regenerator matrix did not store heat or diverged (avg T = {val.get('regenAvgT')})"
+        assert val.get('regenGasT', 1e9) < 880, f"Regenerator matrix did not cool the gas (T = {val.get('regenGasT')})"
+        assert val.get('motorSpeedRatio', 99) <= 1.1, f"Motorized piston exceeded its peak speed by {val.get('motorSpeedRatio')}x (teleport)"
+        assert val.get('motorLeaked', 99) <= 5, f"{val.get('motorLeaked')} particles slipped past the moving piston face"
 
         print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter, Telemetry & Sensor Zone tests PASSED!")
 

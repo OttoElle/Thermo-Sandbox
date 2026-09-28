@@ -401,9 +401,20 @@
 
 ---
 
+### AB. Alle Elemente auf der GPU, Kolben-Fixes & stabiler Wärmeaustausch (Claude Code, Schritt 2)
+- [x] **Drosselventil, Reservoir, Thermoblock auf der GPU**: `getGPUWalls()` erzeugt Segmente (Drossel-Flügel; 4 Kanten je Rechteck, Dicke 0) mit Owner-Tabelle `_gpuWallOwners` statt Index-Arithmetik. Wandereignisse zählen den Impuls pro Seite (Vorder-/Rückseite) → ΔP der Drossel funktioniert. Inaktive/degenerierte Flügel werden als offenes Ventil markiert (`disabled`).
+- [x] **Wärmetauscher & Regenerator auf der GPU** als permeable „thermische Zonen“ (volumetrische Relaxation pro Substep, Regenerator mit Wärmezählern pro Schicht). Dafür `particleNext` + `bestPartners` zu `gridLinks` zusammengelegt (Limit 8 Storage-Buffer pro Pipeline).
+- [x] **Motorisierter Kolben teleportierte** beim Start/Reset/Moduswechsel auf seine Sinusbahn (z. B. 120 px in einem Frame ≈ 7.500 px/s) und schoss Teilchen auf > 12.000 px/s. Jetzt Annäherung mit max. Spitzengeschwindigkeit (`Piston.update`, CPU + GPU).
+- [x] **Teilchen rutschten durch schnelle Kolbenflächen** (GPU): Flächen wurden an der End-Position hochgeladen und sprangen im 1. Substep. Jetzt Upload an der Frame-Start-Position + Mitführen per `vel · subDt` (`cs_advance_substep`, `SUBSTEP_IDX`). Leckage Adiabatic-Preset: 57 → 0–2 Teilchen.
+- [x] **Physikfehler Wandthermalisierung** (vorbestehend, CPU + GPU): Wandtreffer setzten die Energie auf kB·T, der auftreffende Fluss hat in 2D aber 1,5·kB·T → Gas in Kontakt mit einer Wand stellte sich auf T_Wand / 1,5 ein (300-K-Wand kühlte auf 200 K). Jetzt Ziel 1,5·kB·T für alle Oberflächenkontakte.
+- [x] **Instabiler expliziter Wärmeaustausch** (vorbestehend): kleine Wärmekapazitäten schwangen über und erzeugten an der 5-K-Untergrenze Energie aus dem Nichts (Divergenz bis 10⁶ K). Jetzt implizites Update `T += Q/(C+G)` mit Kopplungsleitwert G (Wall, ThrottleValve, ThermalBlock, Piston, Regenerator-Schichten); auf der GPU werden gemessene Impulse und Wärme über Pending-Puffer exakt einmal gutgeschrieben (Energie- und Impulserhaltung trotz Readback-Latenz; GPU ≈ CPU: Block E/E₀ 0,99, freier Kolben 343 vs. 338 px). Kolbenflächen-Wärme wird jetzt dem Kolben gutgeschrieben.
+- [x] **Tests**: Abschnitt 13 (Drossel dicht/offen + ΔP, Reservoir heizt + undurchdringlich, Block nimmt Wärme auf + undurchdringlich, Wärmetauscher, Regenerator, Kolben ohne Teleport/Leckage). `test_webgpu_runtime.py`: Wartezeit 6 → 15 s (Flake nach schwerem GPU-Test).
+- **Bekannt**: Das Adiabatic-Cylinder-Preset fährt den Kolben mit ~Mach 6 (877 vs. 145 px/s) → starke, physikalisch reale Stoßerwärmung (CPU ≈ GPU). Regenerator-Mittel schwingt in beiden Pfaden leicht über die Gastemperatur (≈ 1.000 K bei 800 K Gas) — Ursache noch offen.
+
+---
+
 ## 3. Nächste Schritte (Next Session Starting Tasks)
-- [ ] **Schritt 2 – Fehlende Elemente im GPU-Shader**: ThrottleValve, Reservoir, ThermalBlock, HeatExchanger, RegeneratorMatrix (im GPU-Modus derzeit für Partikel durchlässig/wirkungslos).
-- [ ] **Energiepumpen motorisierter Kolben** untersuchen (siehe AA, „Bekannt“).
+- [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren; Preset-Parameter des Adiabatic-Cylinders (Kolbengeschwindigkeit) überdenken.
 - [ ] **Schritt 3 – Performance**: Wand-Broadphase, zellsortiertes Spatial-Grid, fester Zeitschritt; vorher Benchmark-Test.
 - [ ] **Schritt 4 – Aufräumen**: `kB`/Weltgrößen-Konstanten zentralisieren, ES-Module für Dev, `main.js` aufteilen.
 - [ ] **CSV- & JSON-Export für Chamber- & Dashboard-Telemetriedaten**: Export von Zeitreihen ($T(t), P(t), V(t), W_\text{net}$) als CSV/JSON für externe thermodynamische Auswertungen (z. B. Python/Excel).

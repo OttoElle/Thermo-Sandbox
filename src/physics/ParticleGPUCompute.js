@@ -4,9 +4,10 @@ import { particleComputeWGSL, GPU_LAYOUT } from './ParticleGPUComputeShader.js';
 const PIPELINE_BINDINGS = {
   clear: [0, 4],
   build: [0, 1, 4, 5],
-  pairs: [0, 1, 4, 5, 6],
+  pairs: [0, 1, 4, 5],
   integrate: [0, 1, 2, 3, 4, 5, 6, 7, 8],
   telemetry: [0, 1, 7, 9],
+  advance: [8],
   compact: [0, 1, 2, 8],
   compactTail: [0, 2, 8]
 };
@@ -29,13 +30,15 @@ export class ParticleGPUCompute {
     this.device = device;
     this.isSupported = !!device;
 
-    this.capacity = 1000000;
+    this.capacity = GPU_LAYOUT.CAPACITY;
     this.count = 0;               // occupied slots (live + dead)
     this.maxWalls = GPU_LAYOUT.MAX_WALLS;
     this.wallCount = 0;
     this.sinkCount = 0;
     this.regulatorCount = 0;
     this.sensorCount = 0;
+    this.thermalZoneCount = 0;
+    this.regeneratorSlotBase = []; // first thermalTemps slot per regenerator, -1 if not uploaded
     this.pingPong = 0; // 0: A is in, B is out; 1: B is in, A is out
 
     this.gridTableSize = 131072;
@@ -62,10 +65,11 @@ export class ParticleGPUCompute {
     this._zoneData = new ArrayBuffer(GPU_LAYOUT.MAX_ZONES * GPU_LAYOUT.ZONE_WORDS * 4);
     this._zoneF32 = new Float32Array(this._zoneData);
     this._zoneU32 = new Uint32Array(this._zoneData);
+    this._thermalTemps = new Float32Array(GPU_LAYOUT.MAX_SLICES);
 
     this._statBytes = GPU_LAYOUT.STAT_WORDS * 4;
     this._counterBytes = GPU_LAYOUT.COUNTER_WORDS * 4;
-    this._wallEventBytes = GPU_LAYOUT.SINK_ABS_BASE * 4;
+    this._eventBytes = GPU_LAYOUT.SINK_ABS_BASE * 4; // wall + slice events, cleared per readback
     this._stagingFree = [];
     this._stagingTotal = 0;
     this._historyPool = [];
@@ -86,8 +90,8 @@ export class ParticleGPUCompute {
     this.uniformBuffer = make('ComputeUniforms', 80, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.wallsBuffer = make('ComputeWalls', this.maxWalls * 64, s | GPUBufferUsage.COPY_DST);
     this.cellHeadsBuffer = make('ComputeCellHeads', this.gridTableSize * 4, s | GPUBufferUsage.COPY_DST);
-    this.particleNextBuffer = make('ComputeParticleNext', cap * 4, s);
-    this.bestPartnersBuffer = make('ComputeBestPartners', cap * 4, s);
+    this.gridLinksBuffer = make('ComputeGridLinks', cap * 2 * 4, s);
+    this.thermalTempsBuffer = make('ComputeThermalTemps', GPU_LAYOUT.MAX_SLICES * 4, s | GPUBufferUsage.COPY_DST);
     this.zonesBuffer = make('ComputeZones', this._zoneData.byteLength, s | GPUBufferUsage.COPY_DST);
     this.countersBuffer = make('ComputeCounters', this._counterBytes, s | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
     this.statsBuffer = make('ComputeStats', this._statBytes, s | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
@@ -110,6 +114,7 @@ export class ParticleGPUCompute {
       pairs: makePipe('cs_find_pairs'),
       integrate: makePipe('cs_integrate'),
       telemetry: makePipe('cs_telemetry'),
+      advance: makePipe('cs_advance_substep'),
       compact: makePipe('cs_compact'),
       compactTail: makePipe('cs_compact_tail')
     };
@@ -123,7 +128,7 @@ export class ParticleGPUCompute {
   _makeBindGroups(inBuf, outBuf) {
     const resources = {
       0: this.uniformBuffer, 1: inBuf, 2: outBuf, 3: this.wallsBuffer,
-      4: this.cellHeadsBuffer, 5: this.particleNextBuffer, 6: this.bestPartnersBuffer,
+      4: this.cellHeadsBuffer, 5: this.gridLinksBuffer, 6: this.thermalTempsBuffer,
       7: this.zonesBuffer, 8: this.countersBuffer, 9: this.statsBuffer
     };
     const groups = {};
@@ -147,7 +152,7 @@ export class ParticleGPUCompute {
     this.compactPending = false;
     this._pendingCount = 0;
     if (this.isSupported) {
-      this.device.queue.writeBuffer(this.countersBuffer, 0, new Uint8Array(this._wallEventBytes));
+      this.device.queue.writeBuffer(this.countersBuffer, 0, new Uint8Array(this._eventBytes));
     }
   }
 
@@ -174,11 +179,12 @@ export class ParticleGPUCompute {
       f32[ptr + 3] = w.p2 ? w.p2.y : 0;
       f32[ptr + 4] = w.normal ? w.normal.x : 0;
       f32[ptr + 5] = w.normal ? w.normal.y : 0;
-      f32[ptr + 6] = w.thickness || 4;
-      u32[ptr + 7] = w.isOpen ? 1 : 0;
+      f32[ptr + 6] = w.thickness !== undefined ? w.thickness : 4;
+      // Disabled segments (inactive throttle, degenerate wing) behave like an open valve.
+      u32[ptr + 7] = (w.isOpen || w.disabled) ? 1 : 0;
 
       let typeCode = 0;
-      if (w.type === 'manual_valve') typeCode = 1;
+      if (w.disabled || w.type === 'manual_valve') typeCode = 1;
       else if (w.type === 'check_valve') typeCode = 2;
       else if (w.type === 'relief_valve') {
         // An open bidirectional relief valve lets flow pass both ways, like an open manual valve.
@@ -212,9 +218,9 @@ export class ParticleGPUCompute {
     u32[base + 8] = maxCount;
   }
 
-  // Per-frame upload of sink, regulator and sensor rectangles plus the
-  // regulator removal quotas for the upcoming step.
-  uploadZones(sinks = [], regulators = [], sensors = [], regulatorQuota = null) {
+  // Per-frame upload of sink, regulator, sensor and thermal-zone rectangles,
+  // thermal slice temperatures and the regulator removal quotas.
+  uploadZones({ sinks = [], regulators = [], sensors = [], heatExchangers = [], regenerators = [], regulatorQuota = null } = {}) {
     if (!this.isSupported) return;
     const L = GPU_LAYOUT;
 
@@ -246,11 +252,44 @@ export class ParticleGPUCompute {
       this._writeZone(L.ZONE_SENSOR_BASE + i, s.x, s.y, s.width, s.height, true, 0, 0, 0, 0);
     }
 
+    // Thermal zones: heat exchangers use one slot, regenerators one slot per slice.
+    let zone = 0;
+    let slot = 0;
+    const temps = this._thermalTemps;
+    for (let i = 0; i < heatExchangers.length && zone < L.MAX_THERMAL_ZONES && slot < L.MAX_SLICES; i++) {
+      const hx = heatExchangers[i];
+      temps[slot] = hx.temperature;
+      this._writeThermalZone(zone++, hx, 0, 1, hx.conductivity || 0.6, slot++, false);
+    }
+    this.regeneratorSlotBase.length = regenerators.length;
+    for (let i = 0; i < regenerators.length; i++) {
+      const reg = regenerators[i];
+      const slices = Math.max(1, reg.sliceCount | 0);
+      if (zone >= L.MAX_THERMAL_ZONES || slot + slices > L.MAX_SLICES) {
+        this.regeneratorSlotBase[i] = -1;
+        continue;
+      }
+      this.regeneratorSlotBase[i] = slot;
+      for (let k = 0; k < slices; k++) temps[slot + k] = reg.temperatures[k];
+      const axis = reg.orientation === 'horizontal' ? 0 : 1;
+      this._writeThermalZone(zone++, reg, axis, slices, reg.conductivity || 0.7, slot, true);
+      slot += slices;
+    }
+    this.thermalZoneCount = zone;
+
     this.device.queue.writeBuffer(this.zonesBuffer, 0, this._zoneData);
+    if (slot > 0) this.device.queue.writeBuffer(this.thermalTempsBuffer, 0, temps, 0, slot);
     if (regulatorQuota) {
       this.device.queue.writeBuffer(this.countersBuffer, L.REG_QUOTA_BASE * 4,
         regulatorQuota.buffer, regulatorQuota.byteOffset, L.MAX_REGULATORS * 4);
     }
+  }
+
+  _writeThermalZone(zone, el, axis, slices, conductivity, slot, recordHeat) {
+    const L = GPU_LAYOUT;
+    const idx = L.ZONE_THERMAL_BASE + zone;
+    this._writeZone(idx, el.x, el.y, el.width, el.height, el.isActive !== false, axis, slices, conductivity, slot);
+    this._zoneU32[idx * L.ZONE_WORDS + 9] = recordHeat ? 1 : 0;
   }
 
   // Structural sink sync: seeds the cumulative GPU absorption counters.
@@ -353,7 +392,7 @@ export class ParticleGPUCompute {
     this.uniformU32[16] = P.simModel ? 1 : 0;
     this.uniformU32[17] = this.regulatorCount;
     this.uniformU32[18] = this.sensorCount;
-    this.uniformU32[19] = 0;
+    this.uniformU32[19] = this.thermalZoneCount;
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
   }
 
@@ -366,6 +405,7 @@ export class ParticleGPUCompute {
     const clearGridWorkgroups = Math.ceil(this.gridTableSize / GPU_LAYOUT.WG);
     const particleWorkgroups = Math.ceil(this.count / GPU_LAYOUT.WG);
 
+    this.device.queue.writeBuffer(this.countersBuffer, GPU_LAYOUT.SUBSTEP_IDX * 4, new Uint32Array(1));
     const encoder = this.device.createCommandEncoder({ label: 'ParticleComputeEncoder' });
     // A single pass: WebGPU synchronizes storage writes between dispatches.
     const pass = encoder.beginComputePass({ label: 'ParticleComputeSubSteps' });
@@ -386,6 +426,10 @@ export class ParticleGPUCompute {
       pass.setPipeline(this.pipelines.integrate);
       pass.setBindGroup(0, bg.integrate);
       pass.dispatchWorkgroups(particleWorkgroups);
+
+      pass.setPipeline(this.pipelines.advance);
+      pass.setBindGroup(0, bg.advance);
+      pass.dispatchWorkgroups(1);
 
       this.pingPong = 1 - this.pingPong;
     }
@@ -447,7 +491,7 @@ export class ParticleGPUCompute {
     }
     encoder.copyBufferToBuffer(this.statsBuffer, 0, staging, 0, this._statBytes);
     encoder.copyBufferToBuffer(this.countersBuffer, 0, staging, this._statBytes, this._counterBytes);
-    encoder.clearBuffer(this.countersBuffer, 0, this._wallEventBytes);
+    encoder.clearBuffer(this.countersBuffer, 0, this._eventBytes);
     this.device.queue.submit([encoder.finish()]);
 
     return staging.mapAsync(GPUMapMode.READ).then(() => {
