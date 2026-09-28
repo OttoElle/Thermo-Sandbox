@@ -42,7 +42,7 @@ export class Engine {
 
     this.grid = new SpatialGrid(width, height, 25);
 
-    this.subSteps = 4;
+    this.subSteps = 4; // per 1/60 s of simulated time, see _subStepsFor()
     this.timeScale = 1.0;
     this.isPaused = true;
     this.simModel = 'hard_sphere'; // 'hard_sphere' or 'lennard_jones'
@@ -596,10 +596,11 @@ export class Engine {
       return;
     }
 
-    const subDt = effectiveDt / this.subSteps;
+    const subSteps = this._subStepsFor(effectiveDt);
+    const subDt = effectiveDt / subSteps;
 
     // 2. Sub-step Physics
-    for (let step = 0; step < this.subSteps; step++) {
+    for (let step = 0; step < subSteps; step++) {
       this._subStep(subDt);
     }
 
@@ -608,6 +609,12 @@ export class Engine {
     for (let i = 0; i < this.sensors.length; i++) this.sensors[i].updateMeasurements(this.particles, this.totalTime);
 
     this._updateStats();
+  }
+
+  // `subSteps` is the number of substeps per 1/60 s of simulated time, so the
+  // substep length stays constant regardless of refresh rate and time scale.
+  _subStepsFor(dt) {
+    return Math.min(64, Math.max(1, Math.ceil(dt * 60 * this.subSteps - 1e-6)));
   }
 
   _stepGPU(dt) {
@@ -629,7 +636,7 @@ export class Engine {
     this._gpuRegulatorQuota.fill(0);
 
     const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
-    gpu.step(dt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this.subSteps, modelType);
+    gpu.step(dt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this._subStepsFor(dt), modelType);
     this.totalTime += dt;
     this._submitGPUReadback();
   }

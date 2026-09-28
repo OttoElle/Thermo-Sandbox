@@ -413,9 +413,21 @@
 
 ---
 
+### AC. WebGPU-Performance (Claude Code, Schritt 3)
+- [x] **Benchmark** `tests/bench_gpu.py` (headless Chrome, Durchsatz ms/Frame bei 4 Substeps; nicht Teil von verify_all).
+- [x] **Zellsortiertes Gitter** statt verketteter Hash-Listen: Zählen → Präfixsumme (Blöcke à 1024 + Blocksummen) → Scatter in Bucket-Reihenfolge (tote Teilchen ans Ende). Tabellengröße dynamisch (nächste Zweierpotenz ≥ 2·N).
+- [x] **Räumlich kohärenter Zellschlüssel** (umklappende Zeilen-Tabelle) statt streuendem Hash → Nachbarzellen liegen im Speicher nebeneinander (Pair-Suche war vorher 12,8 ms/Dispatch bei 1 Mio.).
+- [x] **Wand-Broadphase**: statische Wände im CPU-Gitter (nur bei Geometrieänderung neu gebaut), dynamische Segmente global, Rückfall auf alle Wände bei großer Reichweite. Wandlisten + Regenerator-Temperaturen in gemeinsamem `aux`-Puffer (Limit 8 Storage-Buffer).
+- [x] **Mehrfach-Abprall-CCD** (bis 3 Treffer pro Substep): schnelle Teilchen tunnelten vorher an Ecken kleiner geschlossener Hindernisse (66 → 0).
+- [x] **Substeps pro 1/60 s Simulationszeit** (`_subStepsFor`): konstante Substep-Länge unabhängig von Bildrate und Zeitraffer.
+- **Ergebnis (AMD RDNA 3, ms/Frame):** 50k: 2,4 → 1,9 · 200k: 28,5 → 6,2 · **1 Mio.: 821 → 27 (30×)** · 200k + 484 Wandsegmente: 46 → 6,1.
+- [x] **Tests**: Abschnitt 14 (100 geschlossene Pfeiler, Gas + schneller Strom: 0 Durchdringungen, Gitter aktiv).
+
+---
+
 ## 3. Nächste Schritte (Next Session Starting Tasks)
-- [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren; Preset-Parameter des Adiabatic-Cylinders (Kolbengeschwindigkeit) überdenken.
-- [ ] **Schritt 3 – Performance**: Wand-Broadphase, zellsortiertes Spatial-Grid, fester Zeitschritt; vorher Benchmark-Test.
+- [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren.
+- [ ] **Weitere Performance**: Pair-Suche dominiert weiterhin (Kernel-Profil siehe Abschnitt AC); Telemetrie-/Upload-Overhead pro Frame (`getGPUWalls()` allokiert jedes Frame).
 - [ ] **Schritt 4 – Aufräumen**: `kB`/Weltgrößen-Konstanten zentralisieren, ES-Module für Dev, `main.js` aufteilen.
 - [ ] **CSV- & JSON-Export für Chamber- & Dashboard-Telemetriedaten**: Export von Zeitreihen ($T(t), P(t), V(t), W_\text{net}$) als CSV/JSON für externe thermodynamische Auswertungen (z. B. Python/Excel).
 - [ ] **Interaktiver Partikel-Inspektor**: Klick auf ein einzelnes Partikel zur Verfolgung von Trajektorie, Kollisionshistorie und Geschwindigkeitsvektor.
