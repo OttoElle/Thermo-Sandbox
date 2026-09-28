@@ -194,9 +194,9 @@ export class DashboardChart {
       }
 
       if (!xArr || xArr.length === 0 || !yArr || yArr.length === 0) {
-        const curP = isGlobal ? ((engine.stats.particleCount / 2500) * 35.0 * engine.stats.systemTemperature * 10) : this.target.pressure;
+        const curP = isGlobal ? engine.stats.pressure : this.target.pressure;
         const curT = isGlobal ? engine.stats.systemTemperature : this.target.temperature;
-        const curV = isGlobal ? (2500 * 2500) : this.target.volume;
+        const curV = isGlobal ? engine.stats.volume : this.target.volume;
         if (this.metric === 'pv') { xArr = [curV, curV]; yArr = [curP, curP]; }
         else if (this.metric === 'pt') { xArr = [curT, curT]; yArr = [curP, curP]; }
         else if (this.metric === 'ts') {
@@ -312,8 +312,8 @@ export class DashboardChart {
       let curVal = 0;
       if (this.target === 'global') {
         if (this.metric === 'temp') curVal = engine.stats.systemTemperature;
-        else if (this.metric === 'pressure') curVal = (engine.stats.particleCount / 2500) * 35.0 * engine.stats.systemTemperature * 10;
-        else if (this.metric === 'volume') curVal = 2500 * 2500;
+        else if (this.metric === 'pressure') curVal = engine.stats.pressure;
+        else if (this.metric === 'volume') curVal = engine.stats.volume;
         else if (this.metric === 'count') curVal = engine.stats.particleCount;
         else if (this.metric === 'kinetic') curVal = engine.stats.totalKineticEnergy;
         else if (this.metric === 'drift') curVal = (engine.historyDrift && engine.historyDrift.length > 0) ? engine.historyDrift[0] : 0;

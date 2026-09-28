@@ -1,3 +1,5 @@
+import { KB } from './Constants.js';
+
 // Shared memory layout between the WGSL kernels and the JS coordinator.
 // Every buffer offset below is expressed in 32-bit words.
 export const GPU_LAYOUT = (() => {
@@ -97,7 +99,7 @@ struct ZoneData {
   maxCount: u32, pad0: u32, pad1: u32, pad2: u32,
 };
 
-const KB: f32 = 35.0;
+const KB: f32 = ${KB.toFixed(4)};
 const WG_SIZE: u32 = ${L.WG}u;
 const WALL_EV_STRIDE: u32 = ${L.WALL_EV_STRIDE}u;
 const SLICE_EV_STRIDE: u32 = ${L.SLICE_EV_STRIDE}u;

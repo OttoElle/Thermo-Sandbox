@@ -1,4 +1,5 @@
 import { Vector2 } from './Vector2.js';
+import { KB } from './Constants.js';
 
 export class Regulator {
   constructor(x, y, width = 80, height = 80, options = {}) {
@@ -106,8 +107,7 @@ export class Regulator {
     if (this.regulationState === 'emitting') {
       this.timer += dt;
       const interval = 1.0 / Math.max(1, this.rate);
-      const kB = 35.0;
-      const thermalSpeed = Math.sqrt((2 * kB * Math.max(5, this.temperature)) / this.mass);
+      const thermalSpeed = Math.sqrt((2 * KB * Math.max(5, this.temperature)) / this.mass);
 
       while (this.timer >= interval && this.currentCount < this.targetCount) {
         this.timer -= interval;

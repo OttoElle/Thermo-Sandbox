@@ -1,4 +1,5 @@
 import { particleComputeWGSL, GPU_LAYOUT } from './ParticleGPUComputeShader.js';
+import { WORLD_SIZE } from './Constants.js';
 
 // Bindings each entry point statically uses (pipelines use layout: 'auto').
 const PIPELINE_BINDINGS = {
@@ -510,8 +511,8 @@ export class ParticleGPUCompute {
     this.uniformU32[11] = this.sinkCount;
     this.uniformFloats[12] = hasBounds ? bounds.minX : 0;
     this.uniformFloats[13] = hasBounds ? bounds.minY : 0;
-    this.uniformFloats[14] = hasBounds ? bounds.maxX : 2500;
-    this.uniformFloats[15] = hasBounds ? bounds.maxY : 2500;
+    this.uniformFloats[14] = hasBounds ? bounds.maxX : WORLD_SIZE;
+    this.uniformFloats[15] = hasBounds ? bounds.maxY : WORLD_SIZE;
     this.uniformU32[16] = P.simModel ? 1 : 0;
     this.uniformU32[17] = this.regulatorCount;
     this.uniformU32[18] = this.sensorCount;

@@ -1,3 +1,5 @@
+import { KB } from './Constants.js';
+
 export class ParticleGroup {
   constructor(options = {}) {
     this.id = options.id || 'pg_' + Math.random().toString(36).substring(2, 9);
@@ -42,11 +44,10 @@ export class ParticleGroup {
   getAverageTemperature(engine) {
     const pts = this.getActiveParticles(engine);
     if (pts.length === 0) return this.temperature;
-    const kB = 35.0;
     let sumE = 0;
     for (let i = 0; i < pts.length; i++) {
       sumE += pts[i].getKineticEnergy();
     }
-    return Math.max(5, sumE / (pts.length * kB));
+    return Math.max(5, sumE / (pts.length * KB));
   }
 }

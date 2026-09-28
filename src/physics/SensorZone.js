@@ -1,4 +1,5 @@
 import { Vector2 } from './Vector2.js';
+import { KB, idealGasPressure } from './Constants.js';
 
 export class SensorZone {
   constructor(options = {}) {
@@ -97,11 +98,10 @@ export class SensorZone {
       this.driftAngle = Math.atan2(this.driftVy, this.driftVx);
 
       const sumThermal = Math.max(0, sampleKinetic - (rawMeanVx * sumMVx + rawMeanVy * sumMVy) + 0.5 * (rawMeanVx * rawMeanVx + rawMeanVy * rawMeanVy) * sumMass);
-      const kB = 35.0;
-      this.temperature = Math.max(5, sumThermal / (sampleCount * kB));
-      this.pressure = ((effectiveCount / (area || 1)) * kB * this.temperature * 100);
+      this.temperature = Math.max(5, sumThermal / (sampleCount * KB));
+      this.pressure = idealGasPressure(effectiveCount, area, this.temperature);
 
-      const vThermal = Math.sqrt((2 * kB * this.temperature) / 1.0);
+      const vThermal = Math.sqrt((2 * KB * this.temperature) / 1.0);
       const fluctuationThreshold = Math.max(12.0, (vThermal / Math.sqrt(Math.max(1, effectiveCount))) * 0.7);
 
       if (this.driftSpeed > fluctuationThreshold && this.driftSpeed > 15.0) {

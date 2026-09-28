@@ -1,3 +1,5 @@
+import { KB } from './Constants.js';
+
 export class Sink {
   constructor(x, y, width = 40, height = 40, options = {}) {
     this.id = options.id || Math.random().toString(36).substring(2, 9);
@@ -49,9 +51,8 @@ export class Sink {
 
       // Temperature Filter
       if (this.tempFilterMode !== 'all') {
-        const kB = 35.0;
         const vSq = particle.vel.x * particle.vel.x + particle.vel.y * particle.vel.y;
-        const pTemp = (particle.mass * vSq) / (2 * kB);
+        const pTemp = (particle.mass * vSq) / (2 * KB);
         if (this.tempFilterMode === 'above' && pTemp < this.filterTemperature) return false;
         if (this.tempFilterMode === 'below' && pTemp > this.filterTemperature) return false;
       }

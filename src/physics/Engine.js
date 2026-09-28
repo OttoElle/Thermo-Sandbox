@@ -17,9 +17,10 @@ import { ThrottleValve } from './ThrottleValve.js';
 import { CycleSequencer } from '../control/CycleSequencer.js';
 import { GPU_LAYOUT } from './ParticleGPUComputeShader.js';
 import { ParticleGPUCompute } from './ParticleGPUCompute.js';
+import { KB, WORLD_SIZE, idealGasPressure } from './Constants.js';
 
 export class Engine {
-  constructor(width = 2500, height = 2500) {
+  constructor(width = WORLD_SIZE, height = WORLD_SIZE) {
     this.width = width;
     this.height = height;
     this.sequencer = new CycleSequencer();
@@ -79,6 +80,8 @@ export class Engine {
       totalKineticEnergy: 0,
       meanSpeed: 0,
       systemTemperature: 0,
+      pressure: 0,
+      volume: width * height,
       fps: 60
     };
 
@@ -260,7 +263,6 @@ export class Engine {
   }
 
   spawnGasRaster(x, y, width, height, count, mass, temperature, velocityMode = 'uniform_speed', groupLabel = null) {
-    const kB = 35.0;
     const pad = 12;
     const effW = Math.max(20, width - pad * 2);
     const effH = Math.max(20, height - pad * 2);
@@ -291,12 +293,12 @@ export class Engine {
 
         let vx = 0, vy = 0;
         if (velocityMode === 'uniform_speed') {
-          const speed = Math.sqrt((2 * kB * Math.max(5, temperature)) / mass);
+          const speed = Math.sqrt((2 * KB * Math.max(5, temperature)) / mass);
           const theta = Math.random() * Math.PI * 2;
           vx = speed * Math.cos(theta);
           vy = speed * Math.sin(theta);
         } else {
-          const sigma = Math.sqrt((kB * Math.max(5, temperature)) / mass);
+          const sigma = Math.sqrt((KB * Math.max(5, temperature)) / mass);
           vx = this._randomGaussian(0, sigma);
           vy = this._randomGaussian(0, sigma);
         }
@@ -321,8 +323,7 @@ export class Engine {
 
   setGroupTemperature(group, newT) {
     group.temperature = newT;
-    const kB = 35.0;
-    const targetSpeed = Math.sqrt((2 * kB * Math.max(5, newT)) / group.mass);
+    const targetSpeed = Math.sqrt((2 * KB * Math.max(5, newT)) / group.mass);
     const pts = group.getActiveParticles(this);
     for (const p of pts) {
       const spd = p.getSpeed();
@@ -725,7 +726,6 @@ export class Engine {
     if (res.stale) return;
     const L = GPU_LAYOUT;
     const { stats, counters } = res;
-    const kB = 35.0;
 
     // Global system
     const g = ParticleGPUCompute.decodeTelemetryTarget(stats, 0);
@@ -734,7 +734,7 @@ export class Engine {
     this.stats.particleCount = n;
     this.stats.totalKineticEnergy = g.kineticEnergy;
     this.stats.meanSpeed = n > 0 ? g.sumSpeed / n : 0;
-    this.stats.systemTemperature = n > 0 ? g.kineticEnergy / (n * kB) : 0;
+    this.stats.systemTemperature = n > 0 ? g.kineticEnergy / (n * KB) : 0;
     this.latestSpeedSamples = ParticleGPUCompute.histogramToSamples(g.histogram, 1000);
     const drift = n > 0 ? Math.hypot(g.sumVx / n, g.sumVy / n) : 0;
     this._recordHistory(n, this.stats.systemTemperature, g.kineticEnergy, drift);
@@ -1035,9 +1035,8 @@ export class Engine {
           let newVy = p.vel.y - 2 * velAlongNormal * ny;
 
           if (wall.conductivity > 0) {
-            const kB = 35.0;
             // Surface contacts target 1.5 kB T (2D flux-weighted mean energy), see ParticleGPUComputeShader wallBounce()
-            const targetSpeedSq = (3 * kB * wall.temperature) / p.mass;
+            const targetSpeedSq = (3 * KB * wall.temperature) / p.mass;
             const curSpeedSq = newVx * newVx + newVy * newVy;
             const alpha = Math.min(1, wall.conductivity * 0.8);
             const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
@@ -1048,7 +1047,7 @@ export class Engine {
             newVy *= factor;
             const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
             wall.addHeat(-(eAfter - eBefore));
-            wall.addConductance(alpha * 1.5 * kB);
+            wall.addConductance(alpha * 1.5 * KB);
           }
 
           p.vel.x = newVx;
@@ -1090,8 +1089,7 @@ export class Engine {
         let newVy = p.vel.y - 2 * velAlongNormal * ny;
 
         if (wall.conductivity > 0) {
-          const kB = 35.0;
-          const targetSpeedSq = (3 * kB * wall.temperature) / p.mass;
+          const targetSpeedSq = (3 * KB * wall.temperature) / p.mass;
           const curSpeedSq = newVx * newVx + newVy * newVy;
           const alpha = Math.min(1, wall.conductivity * 0.8);
           const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
@@ -1102,7 +1100,7 @@ export class Engine {
           newVy *= factor;
           const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
           wall.addHeat(-(eAfter - eBefore));
-          wall.addConductance(alpha * 1.5 * kB);
+          wall.addConductance(alpha * 1.5 * KB);
         }
 
         p.vel.x = newVx;
@@ -1172,9 +1170,8 @@ export class Engine {
 
   _resolveHeatExchanger(p, hx, dt) {
     if (!hx.isActive || !hx.contains(p.pos.x, p.pos.y)) return;
-    const kB = 35.0;
     const targetTemp = Math.max(5, hx.temperature);
-    const targetSpeedSq = (2 * kB * targetTemp) / Math.max(0.01, p.mass);
+    const targetSpeedSq = (2 * KB * targetTemp) / Math.max(0.01, p.mass);
     const curSpeedSq = p.getSpeedSq();
     if (curSpeedSq < 0.0001) return;
 
@@ -1193,9 +1190,8 @@ export class Engine {
     const sliceIdx = reg.getSliceIndex(p.pos.x, p.pos.y);
     if (sliceIdx < 0 || sliceIdx >= reg.sliceCount) return;
 
-    const kB = 35.0;
     const sliceTemp = Math.max(5, reg.temperatures[sliceIdx] || 300);
-    const targetSpeedSq = (2 * kB * sliceTemp) / Math.max(0.01, p.mass);
+    const targetSpeedSq = (2 * KB * sliceTemp) / Math.max(0.01, p.mass);
     const curSpeedSq = p.getSpeedSq();
     if (curSpeedSq < 0.0001) return;
 
@@ -1208,7 +1204,7 @@ export class Engine {
         p.vel.multiplyScalar(factor);
         const eAfter = 0.5 * p.mass * p.getSpeedSq();
         reg.addHeatToSlice(sliceIdx, -(eAfter - eBefore));
-        reg.addConductanceToSlice(sliceIdx, alpha * kB);
+        reg.addConductanceToSlice(sliceIdx, alpha * KB);
       }
     }
   }
@@ -1235,9 +1231,8 @@ export class Engine {
       else { p.pos.y = bounds.bottom + pr; p.vel.y = Math.abs(p.vel.y); }
 
       if (block.isActive && block.conductivity > 0) {
-        const kB = 35.0;
         const targetTemp = Math.max(5, block.temperature);
-        const targetSpeedSq = (3 * kB * targetTemp) / Math.max(0.01, p.mass);
+        const targetSpeedSq = (3 * KB * targetTemp) / Math.max(0.01, p.mass);
         const curSpeedSq = p.getSpeedSq();
         if (curSpeedSq > 0.0001) {
           const alpha = Math.min(1.0, block.conductivity * 0.8);
@@ -1249,7 +1244,7 @@ export class Engine {
               p.vel.multiplyScalar(factor);
               const eAfter = 0.5 * p.mass * p.getSpeedSq();
               block.addHeat(-(eAfter - eBefore));
-              block.addConductance(alpha * 1.5 * kB);
+              block.addConductance(alpha * 1.5 * KB);
             }
           }
         }
@@ -1279,9 +1274,8 @@ export class Engine {
       else { p.pos.y = bounds.bottom + pr; p.vel.y = Math.abs(p.vel.y); }
 
       if (res.isActive && res.conductance > 0) {
-        const kB = 35.0;
         const targetTemp = Math.max(5, res.temperature);
-        const targetSpeedSq = (3 * kB * targetTemp) / Math.max(0.01, p.mass);
+        const targetSpeedSq = (3 * KB * targetTemp) / Math.max(0.01, p.mass);
         const curSpeedSq = p.getSpeedSq();
         if (curSpeedSq > 0.0001) {
           const alpha = Math.min(1.0, res.conductance * 0.8);
@@ -1321,22 +1315,23 @@ export class Engine {
     this.stats.particleCount = count;
     this.stats.totalKineticEnergy = totalE;
     this.stats.meanSpeed = count > 0 ? speedSum / count : 0;
-    const kB = 35.0;
-    this.stats.systemTemperature = count > 0 ? totalE / (count * kB) : 0;
+    this.stats.systemTemperature = count > 0 ? totalE / (count * KB) : 0;
     const globalDrift = count > 0 ? Math.hypot(sumVx / count, sumVy / count) : 0;
     this._recordHistory(count, this.stats.systemTemperature, totalE, globalDrift);
   }
 
   // Appends one sample to the global time series (throttled to ~22 Hz sim time).
+  // Also sets stats.volume/pressure (whole world, same formula as sensor zones).
   _recordHistory(count, temperature, kineticEnergy, drift) {
+    this.stats.volume = this.width * this.height;
+    this.stats.pressure = idealGasPressure(count, this.stats.volume, temperature);
     if (!this.historyTime) return;
     const last = this.historyTime.length > 0 ? this.historyTime[this.historyTime.length - 1] : null;
     if (last !== null && this.totalTime - last < 0.045) return;
-    const kB = 35.0;
     this.historyTime.push(this.totalTime);
     this.historyTemp.push(temperature);
-    this.historyPressure.push((count / 2500) * kB * temperature * 10);
-    this.historyVolume.push(2500 * 2500);
+    this.historyPressure.push(this.stats.pressure);
+    this.historyVolume.push(this.stats.volume);
     this.historyCount.push(count);
     this.historyKineticEnergy.push(kineticEnergy);
     this.historyDrift.push(drift);

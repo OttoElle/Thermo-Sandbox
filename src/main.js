@@ -20,6 +20,7 @@ import { ThrottleValve } from './physics/ThrottleValve.js';
 import { Presets } from './presets/index.js';
 import { SequencerUI } from './control/SequencerUI.js';
 import { ParticleGPUCompute } from './physics/ParticleGPUCompute.js';
+import { WORLD_SIZE } from './physics/Constants.js';
 
 // Canvas DOM Elements
 const canvas = document.getElementById('simCanvas');
@@ -159,7 +160,7 @@ window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
 // Master Physics Engine, Renderer & Analytics
-const engine = new Engine(2500, 2500);
+const engine = new Engine(WORLD_SIZE, WORLD_SIZE);
 const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;

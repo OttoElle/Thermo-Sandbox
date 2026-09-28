@@ -1,4 +1,5 @@
 import { Vector2 } from './Vector2.js';
+import { KB } from './Constants.js';
 
 export class Emitter {
   constructor(x, y, width = 40, height = 40, options = {}) {
@@ -42,8 +43,7 @@ export class Emitter {
     this.timer += dt;
     const interval = 1.0 / this.rate;
 
-    const kB = 35.0;
-    const thermalSpeed = Math.sqrt((2 * kB * Math.max(5, this.temperature)) / Math.max(0.01, this.mass));
+    const thermalSpeed = Math.sqrt((2 * KB * Math.max(5, this.temperature)) / Math.max(0.01, this.mass));
 
     while (this.timer >= interval) {
       this.timer -= interval;

@@ -1,4 +1,5 @@
 import { Vector2 } from './Vector2.js';
+import { KB } from './Constants.js';
 
 export class ThrottleValve {
   constructor(x1, y1, x2, y2, options = {}) {
@@ -184,8 +185,7 @@ export class ThrottleValve {
         let newVy = p.vel.y - 2 * velAlongNormal * ny;
 
         if (this.conductivity > 0) {
-          const kB = 35.0;
-          const targetSpeedSq = (3 * kB * this.temperature) / p.mass;
+          const targetSpeedSq = (3 * KB * this.temperature) / p.mass;
           const curSpeedSq = newVx * newVx + newVy * newVy;
           const alpha = Math.min(1, this.conductivity * 0.8);
           const blendSq = (1 - alpha) * curSpeedSq + alpha * targetSpeedSq;
@@ -196,7 +196,7 @@ export class ThrottleValve {
           newVy *= factor;
           const eAfter = 0.5 * p.mass * (newVx * newVx + newVy * newVy);
           this.addHeat(-(eAfter - eBefore));
-          this.addConductance(alpha * 1.5 * kB);
+          this.addConductance(alpha * 1.5 * KB);
         }
 
         p.vel.x = newVx;
