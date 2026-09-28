@@ -206,7 +206,7 @@ export class Renderer {
 
     // 2. Particles (Rendered on GPU with 2D overlay for selection/vectors)
     if (this.useWebGPU && this.gpuRenderer) {
-      if (engine.gpuCompute && engine.gpuCompute.count > 0 && engine.useGPUCompute) {
+      if (engine.isGPUSimulating()) {
         const outputBuffer = engine.gpuCompute.getOutputBuffer();
         this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
       } else {

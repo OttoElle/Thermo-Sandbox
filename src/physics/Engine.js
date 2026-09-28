@@ -15,6 +15,8 @@ import { TextLabel } from './TextLabel.js';
 import { Regulator } from './Regulator.js';
 import { ThrottleValve } from './ThrottleValve.js';
 import { CycleSequencer } from '../control/CycleSequencer.js';
+import { GPU_LAYOUT } from './ParticleGPUComputeShader.js';
+import { ParticleGPUCompute } from './ParticleGPUCompute.js';
 
 export class Engine {
   constructor(width = 2500, height = 2500) {
@@ -49,6 +51,16 @@ export class Engine {
     this.gpuCompute = null;
     this.useGPUCompute = false;
     this.ambientBounds = null;
+
+    // GPU-mode transient state. While simulating on the GPU, `this.particles`
+    // holds the edit-time particle set only; live state stays in VRAM.
+    this._deferToGPU = false;
+    this._gpuWallImpulseRate = new Float64Array(GPU_LAYOUT.MAX_WALLS);
+    this._gpuWallHeatRate = new Float64Array(GPU_LAYOUT.MAX_WALLS);
+    this._gpuRegulatorQuota = new Uint32Array(GPU_LAYOUT.MAX_REGULATORS);
+    this._gpuLastEventTime = 0;
+    this._gpuDeadSlots = 0;
+    this._gpuReadbacks = new Set();
     
     this.totalTime = 0;
     this.nextParticleId = 1;
@@ -90,8 +102,9 @@ export class Engine {
     this.elements = [];
     this.grid.clear();
     if (this.gpuCompute) {
-      this.gpuCompute.count = 0;
+      this.gpuCompute.reset();
     }
+    this._resetGPUTransientState();
     this.syncWallsToGPU();
     this.syncSinksToGPU();
     this.totalTime = 0;
@@ -110,6 +123,11 @@ export class Engine {
   }
 
   addParticle(x, y, vx, vy, mass = 1, groupId = null) {
+    if (this._deferToGPU) {
+      // Spawned during a GPU step (emitters, regulators): goes straight to VRAM.
+      this.gpuCompute.queueParticle(x, y, vx, vy, mass);
+      return null;
+    }
     const p = new Particle(x, y, vx, vy, mass, this.nextParticleId++, groupId);
     this.particles.push(p);
     return p;
@@ -391,9 +409,7 @@ export class Engine {
   enableGPUCompute(gpuCompute) {
     this.gpuCompute = gpuCompute;
     this.useGPUCompute = true;
-    if (this.particles.length > 0) {
-      this.gpuCompute.uploadParticles(this.particles);
-    }
+    this.syncParticlesToGPU();
     this.syncWallsToGPU();
     this.syncSinksToGPU();
   }
@@ -402,10 +418,45 @@ export class Engine {
     this.useGPUCompute = false;
   }
 
+  isGPUSimulating() {
+    return !!(this.gpuCompute && this.useGPUCompute && this.gpuCompute.isSupported);
+  }
+
+  // Replaces the GPU particle set with the CPU (edit-time) particle set.
   syncParticlesToGPU() {
     if (this.gpuCompute && this.useGPUCompute && this.particles) {
       this.gpuCompute.uploadParticles(this.particles);
+      this._resetGPUTransientState();
     }
+  }
+
+  // Called whenever the GPU particle set is replaced: discards event rates and
+  // re-derives regulator counts from the (now authoritative) CPU particles.
+  _resetGPUTransientState() {
+    this._gpuWallImpulseRate.fill(0);
+    this._gpuWallHeatRate.fill(0);
+    this._gpuRegulatorQuota.fill(0);
+    this._gpuLastEventTime = this.totalTime;
+    this._gpuDeadSlots = 0;
+    for (let i = 0; i < this.regulators.length; i++) {
+      const reg = this.regulators[i];
+      let inside = 0;
+      for (let j = 0; j < this.particles.length; j++) {
+        const p = this.particles[j];
+        if (reg.contains(p.pos.x, p.pos.y)) inside++;
+      }
+      reg.resetGPUCount(inside);
+    }
+  }
+
+  // Restores a step-back snapshot captured with gpuCompute.captureHistory().
+  restoreGPUHistory(slot) {
+    if (!this.gpuCompute || !slot) return;
+    this.gpuCompute.restoreHistory(slot);
+    this._gpuWallImpulseRate.fill(0);
+    this._gpuWallHeatRate.fill(0);
+    this._gpuLastEventTime = this.totalTime;
+    this._gpuDeadSlots = 0;
   }
 
   getGPUWalls() {
@@ -464,9 +515,18 @@ export class Engine {
     }
   }
 
+  // Structural sink sync (sink added/removed/reset): seeds GPU absorption counters.
   syncSinksToGPU() {
     if (this.gpuCompute && this.useGPUCompute) {
-      this.gpuCompute.uploadSinks(this.sinks || []);
+      this.gpuCompute.uploadSinkCounters(this.sinks || []);
+    }
+  }
+
+  // Queues `count` particle removals inside a regulator zone for the next GPU step.
+  requestGPURegulatorRemoval(regulator, count) {
+    const idx = this.regulators.indexOf(regulator);
+    if (idx >= 0 && idx < this._gpuRegulatorQuota.length && count > 0) {
+      this._gpuRegulatorQuota[idx] += count;
     }
   }
 
@@ -481,40 +541,25 @@ export class Engine {
     }
 
     // 1. Particle Emitters & Regulators & Throttle Valves (Active in both GPU and CPU modes)
-    for (let i = 0; i < this.emitters.length; i++) {
-      this.emitters[i].update(effectiveDt, this);
-    }
-    for (let i = 0; i < this.regulators.length; i++) {
-      this.regulators[i].update(effectiveDt, this);
+    const gpuMode = this.isGPUSimulating();
+    this._deferToGPU = gpuMode;
+    try {
+      for (let i = 0; i < this.emitters.length; i++) {
+        this.emitters[i].update(effectiveDt, this);
+      }
+      for (let i = 0; i < this.regulators.length; i++) {
+        this.regulators[i].update(effectiveDt, this);
+      }
+    } finally {
+      this._deferToGPU = false;
     }
     for (let i = 0; i < (this.throttleValves || []).length; i++) {
       this.throttleValves[i].update(effectiveDt);
     }
 
-    // GPU Compute Simulation Branch (Phase 2 Zero-Copy)
-    if (this.gpuCompute && this.useGPUCompute) {
-      if (this.particles.length > this.gpuCompute.count) {
-        const newPts = this.particles.slice(this.gpuCompute.count);
-        this.gpuCompute.appendParticles(newPts);
-      } else if (this.particles.length < this.gpuCompute.count) {
-        this.syncParticlesToGPU();
-      }
-      if (this.gpuCompute.count > 0) {
-        for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
-        for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
-        for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
-        for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
-        this.updateBoundSensors();
-
-        this.syncWallsToGPU();
-        this.syncSinksToGPU();
-
-        const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
-        this.gpuCompute.step(effectiveDt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this.subSteps, modelType);
-        this.totalTime += effectiveDt;
-        this.stats.particleCount = this.gpuCompute.count;
-        return;
-      }
+    if (gpuMode) {
+      this._stepGPU(effectiveDt);
+      return;
     }
 
     const subDt = effectiveDt / this.subSteps;
@@ -525,8 +570,134 @@ export class Engine {
     }
 
     this.totalTime += effectiveDt;
+    this._updateComponents(effectiveDt);
+    for (let i = 0; i < this.sensors.length; i++) this.sensors[i].updateMeasurements(this.particles, this.totalTime);
 
-    // 3. Thermal Coupling: Reservoirs -> Walls
+    this._updateStats();
+  }
+
+  _stepGPU(dt) {
+    const gpu = this.gpuCompute;
+    gpu.flushPendingParticles();
+    this._applyGPUEventRates(dt);
+    this._updateComponents(dt);
+
+    this.syncWallsToGPU();
+    gpu.uploadZones(this.sinks, this.regulators, this.sensors, this._gpuRegulatorQuota);
+    this._gpuRegulatorQuota.fill(0);
+
+    const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
+    gpu.step(dt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this.subSteps, modelType);
+    this.totalTime += dt;
+    this._submitGPUReadback();
+  }
+
+  // Feeds GPU-measured wall/piston momentum and heat back into the CPU-side
+  // element models, spread evenly over frames at the last measured rate.
+  _applyGPUEventRates(dt) {
+    const nWalls = Math.min(this.walls.length, GPU_LAYOUT.MAX_WALLS);
+    const impRate = this._gpuWallImpulseRate;
+    const heatRate = this._gpuWallHeatRate;
+    for (let i = 0; i < nWalls; i++) {
+      const w = this.walls[i];
+      w.accumulatedImpulse += impRate[i] * dt;
+      if (heatRate[i] !== 0) w.addHeat(heatRate[i] * dt);
+    }
+    // Piston faces are appended after the walls by getGPUWalls(): [left/top, right/bottom]
+    for (let k = 0; k < this.pistons.length; k++) {
+      const base = this.walls.length + 2 * k;
+      if (base + 1 >= GPU_LAYOUT.MAX_WALLS) break;
+      this.pistons[k].accumulatedImpulseLeft += impRate[base] * dt;
+      this.pistons[k].accumulatedImpulseRight += impRate[base + 1] * dt;
+    }
+  }
+
+  _submitGPUReadback() {
+    const gpu = this.gpuCompute;
+    const deadThreshold = Math.max(32, gpu.count * 0.05);
+    const compact = this._gpuDeadSlots >= deadThreshold;
+    const info = {
+      simTime: this.totalTime,
+      regulatorDelta: this.regulators.slice(0, GPU_LAYOUT.MAX_REGULATORS).map(r => r.gpuDelta)
+    };
+    const promise = gpu.submitReadback({ compact });
+    if (!promise) return null;
+    const tracked = promise
+      .then(res => { if (res) this._applyGPUReadback(res, info); })
+      .finally(() => this._gpuReadbacks.delete(tracked));
+    this._gpuReadbacks.add(tracked);
+    return tracked;
+  }
+
+  // Waits for in-flight readbacks, then forces a fresh one (tests, exports).
+  async awaitGPUTelemetry() {
+    if (!this.isGPUSimulating()) return false;
+    await Promise.all([...this._gpuReadbacks]);
+    const promise = this._submitGPUReadback();
+    if (promise) await promise;
+    return !!promise;
+  }
+
+  _applyGPUReadback(res, info) {
+    if (res.stale) return;
+    const L = GPU_LAYOUT;
+    const { stats, counters } = res;
+    const kB = 35.0;
+
+    // Global system
+    const g = ParticleGPUCompute.decodeTelemetryTarget(stats, 0);
+    this._gpuDeadSlots = res.compacted ? 0 : Math.max(0, res.countAtSubmit - g.count);
+    const n = g.count;
+    this.stats.particleCount = n;
+    this.stats.totalKineticEnergy = g.kineticEnergy;
+    this.stats.meanSpeed = n > 0 ? g.sumSpeed / n : 0;
+    this.stats.systemTemperature = n > 0 ? g.kineticEnergy / (n * kB) : 0;
+    this.latestSpeedSamples = ParticleGPUCompute.histogramToSamples(g.histogram, 1000);
+    const drift = n > 0 ? Math.hypot(g.sumVx / n, g.sumVy / n) : 0;
+    this._recordHistory(n, this.stats.systemTemperature, g.kineticEnergy, drift);
+
+    // Sensor chambers
+    const nSensors = Math.min(this.sensors.length, L.MAX_SENSORS);
+    for (let i = 0; i < nSensors; i++) {
+      const t = ParticleGPUCompute.decodeTelemetryTarget(stats, 1 + i);
+      this.sensors[i]._processMetrics(t.count, t.sumVx, t.sumVy, t.sumMVx, t.sumMVy, t.sumMass,
+        t.kineticEnergy, 1.0, this.totalTime, ParticleGPUCompute.histogramToSamples(t.histogram, 500));
+    }
+
+    // Regulator zone populations
+    const nRegs = Math.min(this.regulators.length, L.MAX_REGULATORS, info.regulatorDelta.length);
+    for (let i = 0; i < nRegs; i++) {
+      this.regulators[i].applyGPUCount(stats[L.STAT_REG_BASE + i], info.regulatorDelta[i]);
+    }
+
+    // Sink absorption (cumulative GPU counters)
+    const nSinks = Math.min(this.sinks.length, L.MAX_SINKS);
+    for (let i = 0; i < nSinks; i++) {
+      const sink = this.sinks[i];
+      sink.absorbedCount = counters[L.SINK_ABS_BASE + i];
+      if (sink.maxParticles > 0 && sink.absorbedCount >= sink.maxParticles) {
+        sink.isActive = false;
+      }
+    }
+
+    // Wall & piston-face momentum / heat rates over the covered sim interval
+    const covered = info.simTime - this._gpuLastEventTime;
+    this._gpuLastEventTime = info.simTime;
+    if (covered > 1e-6) {
+      const nWalls = this.gpuCompute.wallCount;
+      for (let i = 0; i < nWalls; i++) {
+        const b = i * L.WALL_EV_STRIDE;
+        const impulse = ParticleGPUCompute.readU64(counters, b) / L.EV_SCALE;
+        const heat = (ParticleGPUCompute.readU64(counters, b + 2) - ParticleGPUCompute.readU64(counters, b + 4)) / L.EV_SCALE;
+        this._gpuWallImpulseRate[i] = impulse / covered;
+        this._gpuWallHeatRate[i] = heat / covered;
+      }
+    }
+  }
+
+  // Thermal couplings and element updates shared by the CPU and GPU paths.
+  _updateComponents(effectiveDt) {
+    // Thermal Coupling: Reservoirs -> Walls
     for (let i = 0; i < this.reservoirs.length; i++) {
       const res = this.reservoirs[i];
       for (let j = 0; j < this.walls.length; j++) {
@@ -534,7 +705,7 @@ export class Engine {
       }
     }
 
-    // 4. Thermal Coupling: Walls -> Walls
+    // Thermal Coupling: Walls -> Walls
     for (let i = 0; i < this.walls.length; i++) {
       const w1 = this.walls[i];
       if (w1.conductivity <= 0) continue;
@@ -554,15 +725,12 @@ export class Engine {
       }
     }
 
-    // 5. Update Components
+    // Update Components
     for (let i = 0; i < this.walls.length; i++) this.walls[i].update(effectiveDt);
     for (let i = 0; i < this.pistons.length; i++) this.pistons[i].update(effectiveDt, this.totalTime);
     for (let i = 0; i < this.thermalBlocks.length; i++) this.thermalBlocks[i].update(effectiveDt);
     for (let i = 0; i < this.regenerators.length; i++) this.regenerators[i].update(effectiveDt);
     this.updateBoundSensors();
-    for (let i = 0; i < this.sensors.length; i++) this.sensors[i].updateMeasurements(this.particles, this.totalTime);
-
-    this._updateStats();
   }
 
   _subStep(dt) {
@@ -1060,143 +1228,31 @@ export class Engine {
     const kB = 35.0;
     this.stats.systemTemperature = count > 0 ? totalE / (count * kB) : 0;
     const globalDrift = count > 0 ? Math.hypot(sumVx / count, sumVy / count) : 0;
-
-    // Record continuous time series
-    if (this.historyTime && (this.historyTime.length === 0 || this.totalTime - this.historyTime[this.historyTime.length - 1] >= 0.045)) {
-      this.historyTime.push(this.totalTime);
-      this.historyTemp.push(this.stats.systemTemperature);
-      this.historyPressure.push((count / 2500) * kB * this.stats.systemTemperature * 10);
-      this.historyVolume.push(2500 * 2500);
-      this.historyCount.push(count);
-      this.historyKineticEnergy.push(totalE);
-      this.historyDrift.push(globalDrift);
-
-      if (this.historyTime.length > 600) {
-        this.historyTime.shift();
-        this.historyTemp.shift();
-        this.historyPressure.shift();
-        this.historyVolume.shift();
-        this.historyCount.shift();
-        this.historyKineticEnergy.shift();
-        this.historyDrift.shift();
-      }
-    }
+    this._recordHistory(count, this.stats.systemTemperature, totalE, globalDrift);
   }
 
-  updateTelemetryFromGPU(data) {
-    if (!data || !data.floats || data.count === 0) return;
-    const { floats, count, totalCount } = data;
-    const scaleFactor = totalCount / count;
-
-    let totalE = 0;
-    let speedSum = 0;
-    let sumVx = 0;
-    let sumVy = 0;
-    let liveCount = 0;
-    let deadCount = 0;
-    const speedSamples = [];
-    let ptr = 0;
-    let writePtr = 0;
-
-    for (let i = 0; i < count; i++) {
-      const px = floats[ptr];
-      const py = floats[ptr + 1];
-      const vx = floats[ptr + 2];
-      const vy = floats[ptr + 3];
-      const r = floats[ptr + 4];
-      const m = floats[ptr + 5];
-
-      // Culled/absorbed particle check (teleported to x <= -50000 or r <= 0)
-      if (r <= 0.0 || px < -50000.0) {
-        deadCount++;
-        ptr += 8;
-        continue;
-      }
-
-      if (writePtr !== ptr) {
-        for (let j = 0; j < 8; j++) {
-          floats[writePtr + j] = floats[ptr + j];
-        }
-      }
-      writePtr += 8;
-      liveCount++;
-
-      const spd = Math.hypot(vx, vy);
-      speedSum += spd;
-      sumVx += vx;
-      sumVy += vy;
-      totalE += 0.5 * m * (spd * spd);
-      if (speedSamples.length < 1000) {
-        speedSamples.push(spd);
-      }
-      ptr += 8;
-    }
-
-    // Attribute absorbed particles to sinks
-    if (deadCount > 0 && this.sinks && this.sinks.length > 0) {
-      let remainingDead = deadCount;
-      for (let s = 0; s < this.sinks.length && remainingDead > 0; s++) {
-        const sink = this.sinks[s];
-        if (sink.isActive !== false) {
-          if (sink.maxParticles > 0) {
-            const avail = Math.max(0, sink.maxParticles - sink.absorbedCount);
-            const take = Math.min(avail, remainingDead);
-            sink.absorbedCount += take;
-            remainingDead -= take;
-            if (sink.absorbedCount >= sink.maxParticles) {
-              sink.isActive = false;
-            }
-          } else {
-            sink.absorbedCount += remainingDead;
-            remainingDead = 0;
-          }
-        }
-      }
-    }
-
-    // In-place buffer compaction on GPU if sample is complete
-    if (deadCount > 0 && count === totalCount) {
-      const compactedFloats = floats.slice(0, liveCount * 8);
-      if (this.gpuCompute) {
-        this.gpuCompute.uploadRawParticleBuffer(compactedFloats, liveCount);
-      }
-      this.particles.length = liveCount;
-    }
-
-    const currentLiveTotal = Math.round(liveCount * scaleFactor);
-    this.latestSpeedSamples = speedSamples;
-    this.stats.particleCount = currentLiveTotal;
-    this.stats.totalKineticEnergy = totalE * scaleFactor;
-    this.stats.meanSpeed = liveCount > 0 ? speedSum / liveCount : 0;
+  // Appends one sample to the global time series (throttled to ~22 Hz sim time).
+  _recordHistory(count, temperature, kineticEnergy, drift) {
+    if (!this.historyTime) return;
+    const last = this.historyTime.length > 0 ? this.historyTime[this.historyTime.length - 1] : null;
+    if (last !== null && this.totalTime - last < 0.045) return;
     const kB = 35.0;
-    this.stats.systemTemperature = liveCount > 0 ? (totalE / (liveCount * kB)) : 0;
-    const globalDrift = liveCount > 0 ? Math.hypot(sumVx / liveCount, sumVy / liveCount) : 0;
+    this.historyTime.push(this.totalTime);
+    this.historyTemp.push(temperature);
+    this.historyPressure.push((count / 2500) * kB * temperature * 10);
+    this.historyVolume.push(2500 * 2500);
+    this.historyCount.push(count);
+    this.historyKineticEnergy.push(kineticEnergy);
+    this.historyDrift.push(drift);
 
-    // Record continuous time series
-    if (this.historyTime && (this.historyTime.length === 0 || this.totalTime - this.historyTime[this.historyTime.length - 1] >= 0.045)) {
-      this.historyTime.push(this.totalTime);
-      this.historyTemp.push(this.stats.systemTemperature);
-      this.historyPressure.push((currentLiveTotal / 2500) * kB * this.stats.systemTemperature * 10);
-      this.historyVolume.push(2500 * 2500);
-      this.historyCount.push(currentLiveTotal);
-      this.historyKineticEnergy.push(this.stats.totalKineticEnergy);
-      this.historyDrift.push(globalDrift);
-
-      if (this.historyTime.length > 600) {
-        this.historyTime.shift();
-        this.historyTemp.shift();
-        this.historyPressure.shift();
-        this.historyVolume.shift();
-        this.historyCount.shift();
-        this.historyKineticEnergy.shift();
-        this.historyDrift.shift();
-      }
-    }
-
-    // Forward telemetry to sensor chambers
-    this.updateBoundSensors();
-    for (let i = 0; i < this.sensors.length; i++) {
-      this.sensors[i].updateMeasurementsFromGPU(floats, liveCount, scaleFactor, this.totalTime);
+    if (this.historyTime.length > 600) {
+      this.historyTime.shift();
+      this.historyTemp.shift();
+      this.historyPressure.shift();
+      this.historyVolume.shift();
+      this.historyCount.shift();
+      this.historyKineticEnergy.shift();
+      this.historyDrift.shift();
     }
   }
 

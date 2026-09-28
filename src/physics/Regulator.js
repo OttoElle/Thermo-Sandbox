@@ -18,6 +18,23 @@ export class Regulator {
     this.regulationState = 'idle'; // 'idle', 'emitting', or 'absorbing'
     this.timer = 0;
     this.initialActive = this.isActive;
+
+    // GPU mode: last zone population measured on the GPU plus the net change
+    // this regulator requested since (emitted minus requested removals).
+    this.gpuCount = 0;
+    this.gpuDelta = 0;
+  }
+
+  resetGPUCount(count) {
+    this.gpuCount = count;
+    this.gpuDelta = 0;
+  }
+
+  // `deltaAtSubmit` is gpuDelta at the time the readback was submitted; those
+  // changes are already reflected in `count`.
+  applyGPUCount(count, deltaAtSubmit = 0) {
+    this.gpuCount = count;
+    this.gpuDelta -= deltaAtSubmit;
   }
 
   toggle() {
@@ -47,16 +64,21 @@ export class Regulator {
   update(dt, engine) {
     if (dt <= 0) return;
 
-    // 1. Count particles inside zone
+    // 1. Count particles inside zone (GPU mode: last GPU measurement + own pending changes)
+    const gpuMode = engine.isGPUSimulating();
     const insideParticles = [];
-    const allParticles = engine.particles;
-    for (let i = 0; i < allParticles.length; i++) {
-      const p = allParticles[i];
-      if (this.contains(p.pos.x, p.pos.y)) {
-        insideParticles.push(p);
+    if (gpuMode) {
+      this.currentCount = Math.max(0, this.gpuCount + this.gpuDelta);
+    } else {
+      const allParticles = engine.particles;
+      for (let i = 0; i < allParticles.length; i++) {
+        const p = allParticles[i];
+        if (this.contains(p.pos.x, p.pos.y)) {
+          insideParticles.push(p);
+        }
       }
+      this.currentCount = insideParticles.length;
     }
-    this.currentCount = insideParticles.length;
 
     if (!this.isActive) {
       this.regulationState = 'idle';
@@ -96,6 +118,7 @@ export class Regulator {
         const vy = thermalSpeed * Math.sin(theta);
         engine.addParticle(px, py, vx, vy, this.mass);
         this.currentCount++;
+        if (gpuMode) this.gpuDelta++;
       }
       if (this.currentCount >= this.targetCount) {
         this.regulationState = 'idle';
@@ -104,13 +127,21 @@ export class Regulator {
     } else if (this.regulationState === 'absorbing') {
       this.timer += dt;
       const interval = 1.0 / Math.max(1, this.rate);
+      const toRemove = [];
+      let gpuRemovals = 0;
 
-      while (this.timer >= interval && this.currentCount > this.targetCount && insideParticles.length > 0) {
+      while (this.timer >= interval && this.currentCount > this.targetCount && (gpuMode || insideParticles.length > 0)) {
         this.timer -= interval;
-        const pToRemove = insideParticles.pop();
-        engine.deleteParticles([pToRemove]);
+        if (gpuMode) {
+          gpuRemovals++;
+          this.gpuDelta--;
+        } else {
+          toRemove.push(insideParticles.pop());
+        }
         this.currentCount--;
       }
+      if (gpuRemovals > 0) engine.requestGPURegulatorRemoval(this, gpuRemovals);
+      if (toRemove.length > 0) engine.deleteParticles(toRemove);
       if (this.currentCount <= this.targetCount) {
         this.regulationState = 'idle';
         this.timer = 0;

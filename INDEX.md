@@ -44,8 +44,8 @@
 ## src/physics/ (Physics Engine & Geometry)
 - **Vector2.js**: 2D vector mathematics utility (dot, cross, norm, rot, dist).
 - **Particle.js**: Hard-sphere and Lennard-Jones particle model with position, velocity, mass, radius, and thermal coloring.
-- **ParticleGPUComputeShader.js**: WGSL compute shader kernel implementing spatial hash grid (cs_clear_grid, cs_build_grid, cs_integrate), dominant pairwise elastic impulse solver, Lennard-Jones potential, normalized Jacobi position relaxation, and startPos-anchored Continuous Collision Detection (CCD) Ray-vs-Segment swept tests.
-- **ParticleGPUCompute.js**: WebGPU GPGPU compute shader coordinator managing Ping-Pong storage buffers, wall storage buffer, spatial hash grid buffers, incremental VRAM streaming (appendParticles), multi-substep dispatch, zero-copy rendering output, and async particle readbacks.
+- **ParticleGPUComputeShader.js**: `GPU_LAYOUT` (shared buffer layout constants) and the WGSL kernels: spatial hash grid (cs_clear_grid, cs_build_grid, cs_find_pairs), cs_integrate (mutual pairwise elastic impulse / Lennard-Jones, CCD Ray-vs-Segment wall collisions with per-wall impulse & heat event counters, atomic sink/regulator removal), cs_telemetry (workgroup-atomic reduction of global/per-sensor sums, speed histograms, regulator counts) and cs_compact / cs_compact_tail (GPU stream compaction).
+- **ParticleGPUCompute.js**: WebGPU compute coordinator: ping-pong particle buffers (authoritative while simulating), queued particle appends, zone/wall/sink-counter uploads, single-pass multi-substep dispatch, `submitReadback()` (telemetry + event counters + optional compaction, epoch-tagged), telemetry decoding helpers, GPU step-back history snapshots, and debug `readbackParticles()`.
 - **ParticleGroup.js**: Represents grouped clusters of particles for collective tracking in canvas elements outline.
 - **SpatialGrid.js**: Spatial partitioning hash grid for optimized O(N) particle-particle collision detection.
 - **Wall.js**: Static and conductive line segments, manual valves, check valves, and pressure relief valves with zero-allocation scalar projection.
@@ -57,12 +57,12 @@
 - **RegeneratorMatrix.js**: Multi-slice thermal gradient matrix with directional parallel lines.
 - **ThermalBlock.js**: Solid thermal storage obstacles (Ressavoir) with finite heat capacity and cached bounds.
 - **ThermalNode.js**: Discrete thermal calculation node for segmented heat transfer matrices.
-- **Regulator.js**: Particle population regulator maintaining setpoint N with configurable hysteresis deadband.
+- **Regulator.js**: Particle population regulator maintaining setpoint N with configurable hysteresis deadband (GPU mode: counts via GPU telemetry + pending delta, removals via GPU quotas).
 - **Emitter.js**: Directional & radial particle generator with velocity and temperature distribution control.
 - **Sink.js**: Vacuum particle removal absorber with absorption efficiency.
 - **SensorZone.js**: Spatial measurement chamber computing real-time T, P, V, N, dynamic piston face binding, and filtered drift velocity with single-pass variance.
 - **TextLabel.js**: Canvas text annotations and formula labels.
-- **Engine.js**: Core simulation coordinator running numerical integration, zero-allocation in-place compaction, analytical Lennard-Jones, gravity, cycle sequencer execution, GPU compute coordination, Continuous Collision Detection (CCD), and state save/restore.
+- **Engine.js**: Core simulation coordinator: CPU sub-step physics (spatial grid, hard-sphere / Lennard-Jones, CCD, in-place compaction), GPU branch (`_stepGPU`, particle append queue, readback application to stats/sensors/sinks/regulators, wall & piston momentum/heat rates), shared element updates (`_updateComponents`), cycle sequencer execution, and state save/restore.
 
 ## src/render/ (Canvas & WebGPU Rendering)
 - **Colormap.js**: Thermal temperature-to-RGB gradient interpolator (Cold Blue -> Cyan -> Orange -> Hot Magenta).
@@ -82,6 +82,6 @@
 ## tests/ (Automated Verification & CDP Test Suites)
 - **verify_all.py**: Master test suite running file size audits (< 350 lines), CSS syntax checks, build verification, headless browser runtime test, WebGPU runtime test, and 50,000 particle Zero-Copy compute verification.
 - **test_webgpu_runtime.py**: Headless Chrome CDP test verifying WebGPU adapter, device, WGSL pipeline, and render pass.
-- **test_gpu_compute_cdp.py**: Headless Chrome CDP test verifying 50,000 particle Zero-Copy GPU compute, glancing/shallow-angle CCD anti-tunneling, continuous emitter streaming, and 180-frame confined gas anti-freezing.
+- **test_gpu_compute_cdp.py**: Headless Chrome CDP test verifying 50,000 particle Zero-Copy GPU compute, CCD anti-tunneling, emitter streaming, dense-gas anti-freezing, GPU telemetry, sinks, piston-bound sensors, and GPU coupling (free piston pressure, relief valve, regulator, compaction, step-back history).
 - **test_sequencer_modal_cdp.py**: Chrome DevTools Protocol end-to-end test verifying sequencer UI, dialogs, exclusive accordions, and scrolling.
 - **test_transition_cdp.py**: CDP test suite verifying 2D compound transition builder, Boolean precedence, square chip collapse, and cycle execution.

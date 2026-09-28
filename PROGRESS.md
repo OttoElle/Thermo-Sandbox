@@ -387,9 +387,25 @@
   - Abschnitt 11 verifiziert motorisierte Kolbenoszillation, synchrone Kantenverfolgung (`widthFollowedPiston: true`), dynamische Volumenänderung (`volumeChanged: true`), Entkopplung (`isUnbound: true`) und $P$-$V$-Chart-Rendering.
   - 100% Erfolgsquote über alle 6 Verifikationsstufen in `tests/verify_all.py`.
 
+### AA. GPU als Quelle der Wahrheit & GPU-Telemetrie-Reduktion (Claude Code, Schritt 1 des Optimierungsplans)
+- [x] **Architektur**: Während einer GPU-Simulation ist der Ping-Pong-Partikelpuffer die einzige Quelle der Wahrheit. `engine.particles` hält nur noch den Edit-/Startzustand. Emitter- und Regler-Partikel gehen über `Engine.addParticle()` → `gpuCompute.queueParticle()` direkt in eine Append-Queue (Flag `_deferToGPU` während `step()`). Der CPU-Fallback bei `gpuCompute.count === 0` entfällt.
+- [x] **Telemetrie-Reduktion auf der GPU** (`cs_telemetry`): Workgroup-Atomics → 64-bit-Festkomma-Akkumulatoren (lo/hi-u32) für global + bis zu 16 Kammern (N, E_kin, Σv, Σm·v, Σm, Σ|v|, 64-Bin-Geschwindigkeitshistogramm) und bis zu 16 Regler-Zonenzählungen. Readback ≈ 18 KB statt 1,6 MB; exakt für alle Partikel statt Stichprobe der ersten 50.000. Layout-Konstanten zentral in `GPU_LAYOUT` (`ParticleGPUComputeShader.js`).
+- [x] **Wand-/Kolben-Ereigniszähler** im Integrate-Kernel (`wallBounce()` → Impuls + Wärme pro GPU-Wand). `Engine._applyGPUEventRates()` speist die gemessenen Raten in `Wall.accumulatedImpulse`/`addHeat()` und `Piston.accumulatedImpulseLeft/Right` ein → **freie/Feder-/Dämpferkolben, Überdruckventile und leitende Wände funktionieren jetzt im GPU-Modus** (vorher wirkungslos). Wand-Wand- und Reservoir-Wand-Kopplung laufen jetzt in beiden Modi (`_updateComponents()`).
+- [x] **Absorber & Regler atomar auf der GPU**: kumulative Absorptionszähler pro Sink inkl. `maxParticles`-Limit; Regler-Entnahme über per-Frame-Quoten. Regler zählen im GPU-Modus über `gpuCount + gpuDelta` statt über veraltete CPU-Positionen (vorher: Vollupload alter Positionen → Gas sprang zurück).
+- [x] **GPU-Kompaktierung** (`cs_compact` + `cs_compact_tail`), ausgelöst ab ≥ max(32, 5 %) toten Slots; Appends werden während einer laufenden Kompaktierung zurückgehalten. Ersetzt das fehlerhafte Zurückschreiben veralteter Readbacks (Zeitsprung, verlorene Emitter-Partikel, Doppelzählung bei > 50k).
+- [x] **Epoch-Mechanismus**: Readbacks aus einem früheren Partikelsatz (Upload, Reset, History-Restore, Wand-Topologie) werden verworfen.
+- [x] **Step-Back im GPU-Modus** über GPU-seitige Puffer-Snapshots (`captureHistory`/`restoreHistory`, ≤ 16.384 Partikel) statt veralteter CPU-Positionen.
+- [x] **Kleinere Fixes**: Offenes bidirektionales PRV auf der GPU wie offenes Ventil; Einwegventile respektieren Flussrichtung auch im Proximity-Pass; alle Substeps in einem Compute-Pass; Wanddaten-Puffer wiederverwendet; Shader-Kompilierfehler werden geloggt; Renderer zeichnet im GPU-Modus nie mehr veraltete CPU-Partikel.
+- [x] **Tests**: `tests/test_gpu_compute_cdp.py` auf `engine.awaitGPUTelemetry()` umgestellt, neuer Abschnitt 12 (freier Kolben, PRV, Regler füllen/leeren, Kompaktierung, Step-Back). Alle Assertions grün; Smoke-Test aller 6 Presets ohne Konsolenfehler.
+- **Bekannt, vorbestehend**: Motorisierte Kolben pumpen massiv Energie ins Gas (Adiabatic-Cylinder-Preset erreicht > 10⁵ K nach 3 s; auf dem Stand vor diesem Umbau sogar > 10⁶ K).
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)
+- [ ] **Schritt 2 – Fehlende Elemente im GPU-Shader**: ThrottleValve, Reservoir, ThermalBlock, HeatExchanger, RegeneratorMatrix (im GPU-Modus derzeit für Partikel durchlässig/wirkungslos).
+- [ ] **Energiepumpen motorisierter Kolben** untersuchen (siehe AA, „Bekannt“).
+- [ ] **Schritt 3 – Performance**: Wand-Broadphase, zellsortiertes Spatial-Grid, fester Zeitschritt; vorher Benchmark-Test.
+- [ ] **Schritt 4 – Aufräumen**: `kB`/Weltgrößen-Konstanten zentralisieren, ES-Module für Dev, `main.js` aufteilen.
 - [ ] **CSV- & JSON-Export für Chamber- & Dashboard-Telemetriedaten**: Export von Zeitreihen ($T(t), P(t), V(t), W_\text{net}$) als CSV/JSON für externe thermodynamische Auswertungen (z. B. Python/Excel).
 - [ ] **Interaktiver Partikel-Inspektor**: Klick auf ein einzelnes Partikel zur Verfolgung von Trajektorie, Kollisionshistorie und Geschwindigkeitsvektor.
 - [ ] **GPU-Thermische Grenzflächen für poröse Medien**: WebGPU-Shader-Integration für volumetrischen Wärmeaustausch in Regeneratoren und Wärmetauschern (`RegeneratorMatrix` / `HeatExchanger`).

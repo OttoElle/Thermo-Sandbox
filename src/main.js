@@ -246,14 +246,28 @@ btnUndo.addEventListener('click', performUndo);
 btnRedo.addEventListener('click', performRedo);
 
 // Playback History buffer for Step Back (⏮)
+// In GPU mode particle state lives in VRAM, so frames hold GPU-side buffer
+// snapshots (gpuSlot) instead of CPU particle copies.
 const historyBuffer = [];
 const MAX_HISTORY = 120;
 
+function releaseHistoryFrame(frame) {
+  if (frame && frame.gpuSlot && engine.gpuCompute) engine.gpuCompute.releaseHistory(frame.gpuSlot);
+}
+
+function clearHistoryBuffer() {
+  for (let i = 0; i < historyBuffer.length; i++) releaseHistoryFrame(historyBuffer[i]);
+  historyBuffer.length = 0;
+}
+
 function pushHistoryFrame() {
-  if (historyBuffer.length >= MAX_HISTORY) historyBuffer.shift();
-  const shouldSaveParticles = engine.particles.length <= 2000;
+  if (historyBuffer.length >= MAX_HISTORY) releaseHistoryFrame(historyBuffer.shift());
+  const gpuMode = engine.isGPUSimulating();
+  const gpuSlot = gpuMode ? engine.gpuCompute.captureHistory() : null;
+  const shouldSaveParticles = !gpuMode && engine.particles.length <= 2000;
   historyBuffer.push({
     time: engine.totalTime,
+    gpuSlot,
     particles: shouldSaveParticles ? engine.particles.map(p => ({ x: p.pos.x, y: p.pos.y, vx: p.vel.x, vy: p.vel.y })) : [],
     pistons: engine.pistons.map(p => ({ x: p.x, y: p.y, v: p.velocity, temp: p.temperature })),
     walls: engine.walls.map(w => ({ temp: w.temperature, isOpen: w.isOpen })),
@@ -268,10 +282,6 @@ function popHistoryFrame() {
   }
   const frame = historyBuffer.pop();
   engine.totalTime = frame.time;
-  for (let i = 0; i < Math.min(engine.particles.length, frame.particles.length); i++) {
-    engine.particles[i].pos.set(frame.particles[i].x, frame.particles[i].y);
-    engine.particles[i].vel.set(frame.particles[i].vx, frame.particles[i].vy);
-  }
   for (let i = 0; i < Math.min(engine.pistons.length, frame.pistons.length); i++) {
     engine.pistons[i].x = frame.pistons[i].x;
     engine.pistons[i].y = frame.pistons[i].y;
@@ -285,7 +295,15 @@ function popHistoryFrame() {
   for (let i = 0; i < Math.min(engine.thermalBlocks.length, frame.thermalBlocks.length); i++) {
     engine.thermalBlocks[i].temperature = frame.thermalBlocks[i].temp;
   }
-  engine.syncParticlesToGPU();
+  if (frame.gpuSlot) {
+    engine.restoreGPUHistory(frame.gpuSlot);
+  } else if (frame.particles.length > 0) {
+    for (let i = 0; i < Math.min(engine.particles.length, frame.particles.length); i++) {
+      engine.particles[i].pos.set(frame.particles[i].x, frame.particles[i].y);
+      engine.particles[i].vel.set(frame.particles[i].vx, frame.particles[i].vy);
+    }
+    engine.syncParticlesToGPU();
+  }
   engine.syncWallsToGPU();
 }
 
@@ -2039,7 +2057,7 @@ function stopAndResetSimulationForNewScene() {
   
   engine.totalTime = 0;
   timeVal.textContent = '0.00 s';
-  historyBuffer.length = 0;
+  clearHistoryBuffer();
   undoStack.length = 0;
   redoStack.length = 0;
   selectedItems = [];
@@ -2065,7 +2083,7 @@ function resetToLoadedProfile() {
   selectedItems = [];
   resetPolygonDraft();
   arcSteps = [];
-  historyBuffer.length = 0;
+  clearHistoryBuffer();
   undoStack.length = 0;
   redoStack.length = 0;
   
@@ -2093,7 +2111,7 @@ document.getElementById('menuEntryClear').addEventListener('click', () => {
   resetPolygonDraft();
   arcSteps = [];
   selectedItems = [];
-  historyBuffer.length = 0;
+  clearHistoryBuffer();
   closePopup();
   closeContextMenu();
   updateElementsList();
@@ -2409,7 +2427,7 @@ btnStopReset.addEventListener('click', () => {
   engine.restoreSimStartSnapshot();
   
   selectedItems = [];
-  historyBuffer.length = 0;
+  clearHistoryBuffer();
   
   playIcon.classList.add('is-play');
   playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
@@ -3931,8 +3949,8 @@ function updateSystemStats() {
   if (statV) statV.textContent = `${Math.round(stats.meanSpeed)} px/s`;
 
   if (gpuStatusBadge) {
-    if (engine.useGPUCompute && engine.gpuCompute && engine.gpuCompute.count > 0) {
-      gpuStatusBadge.textContent = `WebGPU Active (${engine.gpuCompute.count.toLocaleString()})`;
+    if (engine.isGPUSimulating() && engine.gpuCompute.count > 0) {
+      gpuStatusBadge.textContent = `WebGPU Active (${engine.stats.particleCount.toLocaleString()})`;
       gpuStatusBadge.style.background = 'rgba(34,197,94,0.15)';
       gpuStatusBadge.style.color = '#22c55e';
       gpuStatusBadge.style.borderColor = 'rgba(34,197,94,0.3)';
@@ -4560,11 +4578,6 @@ function animate(now) {
   // Throttled Chart Updates (~15 Hz) to keep UI and Render loop at max FPS
   chartTimer += dt;
   if (chartTimer >= 0.066) {
-    if (engine.useGPUCompute && engine.gpuCompute && engine.gpuCompute.count > 0) {
-      engine.gpuCompute.fetchTelemetry(50000).then(data => {
-        if (data) engine.updateTelemetryFromGPU(data);
-      });
-    }
     tempChart.render(engine);
     velChart.render(engine);
 

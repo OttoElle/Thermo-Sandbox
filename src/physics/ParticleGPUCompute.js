@@ -1,41 +1,74 @@
-import { particleComputeWGSL } from './ParticleGPUComputeShader.js';
+import { particleComputeWGSL, GPU_LAYOUT } from './ParticleGPUComputeShader.js';
 
+// Bindings each entry point statically uses (pipelines use layout: 'auto').
+const PIPELINE_BINDINGS = {
+  clear: [0, 4],
+  build: [0, 1, 4, 5],
+  pairs: [0, 1, 4, 5, 6],
+  integrate: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+  telemetry: [0, 1, 7, 9],
+  compact: [0, 1, 2, 8],
+  compactTail: [0, 2, 8]
+};
+
+const MAX_STAGING_BUFFERS = 3;
+const HISTORY_CAPACITY = 16384;
+
+/**
+ * WebGPU particle simulation. While a simulation runs, the GPU buffers are the
+ * single source of truth for particle state: new particles are queued and
+ * appended, removals (sinks, regulators) happen on the GPU, and the CPU only
+ * receives compact telemetry via submitReadback().
+ *
+ * `epoch` increments whenever the particle set is replaced (upload, reset,
+ * history restore, topology change). Readbacks submitted in an older epoch are
+ * flagged `stale` and must be ignored.
+ */
 export class ParticleGPUCompute {
   constructor(device) {
     this.device = device;
     this.isSupported = !!device;
 
     this.capacity = 1000000;
-    this.count = 0;
-    this.maxWalls = 512;
+    this.count = 0;               // occupied slots (live + dead)
+    this.maxWalls = GPU_LAYOUT.MAX_WALLS;
     this.wallCount = 0;
+    this.sinkCount = 0;
+    this.regulatorCount = 0;
+    this.sensorCount = 0;
     this.pingPong = 0; // 0: A is in, B is out; 1: B is in, A is out
-
-    this.bufferA = null;
-    this.bufferB = null;
-    this.uniformBuffer = null;
-    this.wallsBuffer = null;
 
     this.gridTableSize = 131072;
     this.cellSize = 16.0;
 
-    this.cellHeadsBuffer = null;
-    this.particleNextBuffer = null;
-    this.bestPartnersBuffer = null;
+    this.epoch = 0;
+    this.compactPending = false;
 
-    this.telemetryStagingBuffer = null;
-    this.isTelemetryPending = false;
+    this._pending = new Float32Array(1024 * GPU_LAYOUT.PARTICLE_FLOATS);
+    this._pendingCount = 0;
 
     this.uniformData = new ArrayBuffer(80);
     this.uniformFloats = new Float32Array(this.uniformData);
     this.uniformU32 = new Uint32Array(this.uniformData);
+    this._params = {
+      dt: 0, gravityEnabled: false, gravity: 350, damping: 1.0, bounds: null,
+      maxSpeedReference: 380, subSteps: 4, simModel: 0
+    };
 
-    this.pipelineClearGrid = null;
-    this.pipelineBuildGrid = null;
-    this.pipelineFindPairs = null;
-    this.pipelineIntegrate = null;
-    this.bindGroupAB = null;
-    this.bindGroupBA = null;
+    this._wallData = new ArrayBuffer(this.maxWalls * 64);
+    this._wallF32 = new Float32Array(this._wallData);
+    this._wallU32 = new Uint32Array(this._wallData);
+
+    this._zoneData = new ArrayBuffer(GPU_LAYOUT.MAX_ZONES * GPU_LAYOUT.ZONE_WORDS * 4);
+    this._zoneF32 = new Float32Array(this._zoneData);
+    this._zoneU32 = new Uint32Array(this._zoneData);
+
+    this._statBytes = GPU_LAYOUT.STAT_WORDS * 4;
+    this._counterBytes = GPU_LAYOUT.COUNTER_WORDS * 4;
+    this._wallEventBytes = GPU_LAYOUT.SINK_ABS_BASE * 4;
+    this._stagingFree = [];
+    this._stagingTotal = 0;
+    this._historyPool = [];
 
     if (this.isSupported) {
       this._initBuffers();
@@ -47,75 +80,91 @@ export class ParticleGPUCompute {
     const dev = this.device, cap = this.capacity;
     const make = (label, size, usage) => dev.createBuffer({ label, size, usage });
     const s = GPUBufferUsage.STORAGE;
-    this.bufferA = make('ComputeBufA', cap * 32, s | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
-    this.bufferB = make('ComputeBufB', cap * 32, s | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    const particleUsage = s | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
+    this.bufferA = make('ComputeBufA', cap * 32, particleUsage);
+    this.bufferB = make('ComputeBufB', cap * 32, particleUsage);
     this.uniformBuffer = make('ComputeUniforms', 80, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.wallsBuffer = make('ComputeWalls', this.maxWalls * 64, s | GPUBufferUsage.COPY_DST);
     this.cellHeadsBuffer = make('ComputeCellHeads', this.gridTableSize * 4, s | GPUBufferUsage.COPY_DST);
     this.particleNextBuffer = make('ComputeParticleNext', cap * 4, s);
     this.bestPartnersBuffer = make('ComputeBestPartners', cap * 4, s);
-    this.sinksBuffer = make('ComputeSinks', 64 * 48, s | GPUBufferUsage.COPY_DST);
-    this.telemetryStagingBuffer = make('ComputeTelemetryStaging', 50000 * 32, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST);
+    this.zonesBuffer = make('ComputeZones', this._zoneData.byteLength, s | GPUBufferUsage.COPY_DST);
+    this.countersBuffer = make('ComputeCounters', this._counterBytes, s | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+    this.statsBuffer = make('ComputeStats', this._statBytes, s | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
   }
 
   _initPipeline() {
     const device = this.device;
-
-    const shaderModule = device.createShaderModule({
-      label: 'ParticleComputeShader',
-      code: particleComputeWGSL
+    const module = device.createShaderModule({ label: 'ParticleComputeShader', code: particleComputeWGSL });
+    module.getCompilationInfo().then(info => {
+      for (const m of info.messages) {
+        if (m.type === 'error') console.error(`ParticleComputeShader:${m.lineNum}:${m.linePos} ${m.message}`);
+      }
     });
-
-    const entry = (binding, type) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type } });
-    const bindGroupLayout = device.createBindGroupLayout({
-      label: 'ParticleComputeBindGroupLayout',
-      entries: [
-        entry(0, 'uniform'), entry(1, 'read-only-storage'), entry(2, 'storage'),
-        entry(3, 'read-only-storage'), entry(4, 'storage'), entry(5, 'storage'),
-        entry(6, 'storage'), entry(7, 'read-only-storage')
-      ]
+    const makePipe = (entryPoint) => device.createComputePipeline({
+      label: `ParticleCompute_${entryPoint}`, layout: 'auto', compute: { module, entryPoint }
     });
+    this.pipelines = {
+      clear: makePipe('cs_clear_grid'),
+      build: makePipe('cs_build_grid'),
+      pairs: makePipe('cs_find_pairs'),
+      integrate: makePipe('cs_integrate'),
+      telemetry: makePipe('cs_telemetry'),
+      compact: makePipe('cs_compact'),
+      compactTail: makePipe('cs_compact_tail')
+    };
+    // One bind group set per ping-pong direction: [A->B, B->A]
+    this.bindGroups = [
+      this._makeBindGroups(this.bufferA, this.bufferB),
+      this._makeBindGroups(this.bufferB, this.bufferA)
+    ];
+  }
 
-    const pipelineLayout = device.createPipelineLayout({
-      label: 'ParticleComputePipelineLayout',
-      bindGroupLayouts: [bindGroupLayout]
-    });
+  _makeBindGroups(inBuf, outBuf) {
+    const resources = {
+      0: this.uniformBuffer, 1: inBuf, 2: outBuf, 3: this.wallsBuffer,
+      4: this.cellHeadsBuffer, 5: this.particleNextBuffer, 6: this.bestPartnersBuffer,
+      7: this.zonesBuffer, 8: this.countersBuffer, 9: this.statsBuffer
+    };
+    const groups = {};
+    for (const name of Object.keys(PIPELINE_BINDINGS)) {
+      groups[name] = this.device.createBindGroup({
+        label: `ParticleCompute_${name}`,
+        layout: this.pipelines[name].getBindGroupLayout(0),
+        entries: PIPELINE_BINDINGS[name].map(binding => ({ binding, resource: { buffer: resources[binding] } }))
+      });
+    }
+    return groups;
+  }
 
-    const makePipe = (entryPoint, label) => device.createComputePipeline({
-      label, layout: pipelineLayout, compute: { module: shaderModule, entryPoint }
-    });
-    this.pipelineClearGrid = makePipe('cs_clear_grid', 'ParticleComputePipelineClearGrid');
-    this.pipelineBuildGrid = makePipe('cs_build_grid', 'ParticleComputePipelineBuildGrid');
-    this.pipelineFindPairs = makePipe('cs_find_pairs', 'ParticleComputePipelineFindPairs');
-    this.pipelineIntegrate = makePipe('cs_integrate', 'ParticleComputePipelineIntegrate');
+  _currentBindGroups() {
+    return this.bindGroups[this.pingPong];
+  }
 
-    const makeBG = (inBuf, outBuf, label) => device.createBindGroup({
-      label, layout: bindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: inBuf } },
-        { binding: 2, resource: { buffer: outBuf } },
-        { binding: 3, resource: { buffer: this.wallsBuffer } },
-        { binding: 4, resource: { buffer: this.cellHeadsBuffer } },
-        { binding: 5, resource: { buffer: this.particleNextBuffer } },
-        { binding: 6, resource: { buffer: this.bestPartnersBuffer } },
-        { binding: 7, resource: { buffer: this.sinksBuffer } }
-      ]
-    });
-    this.bindGroupAB = makeBG(this.bufferA, this.bufferB, 'ParticleComputeBindGroupAB');
-    this.bindGroupBA = makeBG(this.bufferB, this.bufferA, 'ParticleComputeBindGroupBA');
+  // Invalidates in-flight readbacks and transient GPU accumulators.
+  _bumpEpoch() {
+    this.epoch++;
+    this.compactPending = false;
+    this._pendingCount = 0;
+    if (this.isSupported) {
+      this.device.queue.writeBuffer(this.countersBuffer, 0, new Uint8Array(this._wallEventBytes));
+    }
+  }
+
+  reset() {
+    this.count = 0;
+    this._bumpEpoch();
   }
 
   uploadWalls(walls) {
     if (!this.isSupported || !walls) return;
     const count = Math.min(walls.length, this.maxWalls);
+    if (count !== this.wallCount) this._bumpEpoch();
     this.wallCount = count;
     if (count === 0) return;
 
-    const data = new ArrayBuffer(count * 64);
-    const f32 = new Float32Array(data);
-    const u32 = new Uint32Array(data);
-
+    const f32 = this._wallF32;
+    const u32 = this._wallU32;
     let ptr = 0;
     for (let i = 0; i < count; i++) {
       const w = walls[i];
@@ -131,7 +180,10 @@ export class ParticleGPUCompute {
       let typeCode = 0;
       if (w.type === 'manual_valve') typeCode = 1;
       else if (w.type === 'check_valve') typeCode = 2;
-      else if (w.type === 'relief_valve') typeCode = 3;
+      else if (w.type === 'relief_valve') {
+        // An open bidirectional relief valve lets flow pass both ways, like an open manual valve.
+        typeCode = (w.isOpen && w.reliefMode === 'bidirectional') ? 1 : 3;
+      }
       u32[ptr + 8] = typeCode;
 
       f32[ptr + 9] = w.allowedDirection !== undefined ? w.allowedDirection : 1.0;
@@ -141,73 +193,82 @@ export class ParticleGPUCompute {
       f32[ptr + 13] = w.vel ? w.vel.y : (w.velY || 0);
       f32[ptr + 14] = 0;
       f32[ptr + 15] = 0;
-
       ptr += 16;
     }
-
-    this.device.queue.writeBuffer(this.wallsBuffer, 0, data, 0, count * 64);
+    this.device.queue.writeBuffer(this.wallsBuffer, 0, this._wallData, 0, count * 64);
   }
 
-  uploadSinks(sinks) {
+  _writeZone(slot, x, y, w, h, active, direction, tempFilterMode, filterTemperature, maxCount) {
+    const base = slot * GPU_LAYOUT.ZONE_WORDS;
+    const f32 = this._zoneF32, u32 = this._zoneU32;
+    f32[base + 0] = x;
+    f32[base + 1] = y;
+    f32[base + 2] = x + w;
+    f32[base + 3] = y + h;
+    u32[base + 4] = active ? 1 : 0;
+    u32[base + 5] = direction;
+    u32[base + 6] = tempFilterMode;
+    f32[base + 7] = filterTemperature;
+    u32[base + 8] = maxCount;
+  }
+
+  // Per-frame upload of sink, regulator and sensor rectangles plus the
+  // regulator removal quotas for the upcoming step.
+  uploadZones(sinks = [], regulators = [], sensors = [], regulatorQuota = null) {
     if (!this.isSupported) return;
-    const list = sinks || [];
-    const count = Math.min(list.length, 64);
-    this.sinkCount = count;
-    if (count === 0) {
-      const zero = new Uint32Array(12);
-      this.device.queue.writeBuffer(this.sinksBuffer, 0, zero.buffer, 0, 48);
-      return;
-    }
+    const L = GPU_LAYOUT;
 
-    const data = new ArrayBuffer(count * 48);
-    const f32 = new Float32Array(data);
-    const u32 = new Uint32Array(data);
-
-    let ptr = 0;
-    for (let i = 0; i < count; i++) {
-      const s = list[i];
-      f32[ptr + 0] = s.x;
-      f32[ptr + 1] = s.y;
-      f32[ptr + 2] = s.x + s.width;
-      f32[ptr + 3] = s.y + s.height;
-
-      const isUnlimited = !s.maxParticles || s.maxParticles <= 0;
-      const isLimitReached = !isUnlimited && (s.absorbedCount >= s.maxParticles);
-      u32[ptr + 4] = (s.isActive !== false && !isLimitReached) ? 1 : 0;
-
+    this.sinkCount = Math.min(sinks.length, L.MAX_SINKS);
+    for (let i = 0; i < this.sinkCount; i++) {
+      const s = sinks[i];
       let dirCode = 0;
       if (s.direction === 'right') dirCode = 1;
       else if (s.direction === 'left') dirCode = 2;
       else if (s.direction === 'down') dirCode = 3;
       else if (s.direction === 'up') dirCode = 4;
-      u32[ptr + 5] = dirCode;
-
       let tempCode = 0;
       if (s.tempFilterMode === 'above') tempCode = 1;
       else if (s.tempFilterMode === 'below') tempCode = 2;
-      u32[ptr + 6] = tempCode;
-
-      f32[ptr + 7] = s.filterTemperature || 300;
-      f32[ptr + 8] = 0; f32[ptr + 9] = 0;
-      f32[ptr + 10] = 0; f32[ptr + 11] = 0;
-
-      ptr += 12;
+      const maxCount = s.maxParticles > 0 ? s.maxParticles : 0;
+      this._writeZone(L.ZONE_SINK_BASE + i, s.x, s.y, s.width, s.height,
+        s.isActive !== false, dirCode, tempCode, s.filterTemperature || 300, maxCount);
     }
-    this.device.queue.writeBuffer(this.sinksBuffer, 0, data, 0, count * 48);
+
+    this.regulatorCount = Math.min(regulators.length, L.MAX_REGULATORS);
+    for (let i = 0; i < this.regulatorCount; i++) {
+      const r = regulators[i];
+      this._writeZone(L.ZONE_REG_BASE + i, r.x, r.y, r.width, r.height, true, 0, 0, 0, 0);
+    }
+
+    this.sensorCount = Math.min(sensors.length, L.MAX_SENSORS);
+    for (let i = 0; i < this.sensorCount; i++) {
+      const s = sensors[i];
+      this._writeZone(L.ZONE_SENSOR_BASE + i, s.x, s.y, s.width, s.height, true, 0, 0, 0, 0);
+    }
+
+    this.device.queue.writeBuffer(this.zonesBuffer, 0, this._zoneData);
+    if (regulatorQuota) {
+      this.device.queue.writeBuffer(this.countersBuffer, L.REG_QUOTA_BASE * 4,
+        regulatorQuota.buffer, regulatorQuota.byteOffset, L.MAX_REGULATORS * 4);
+    }
   }
 
-  uploadRawParticleBuffer(compactedFloats, count) {
-    if (!this.isSupported || !compactedFloats) return;
-    this.count = count;
-    this.device.queue.writeBuffer(this.bufferA, 0, compactedFloats.buffer, compactedFloats.byteOffset, count * 32);
-    this.device.queue.writeBuffer(this.bufferB, 0, compactedFloats.buffer, compactedFloats.byteOffset, count * 32);
+  // Structural sink sync: seeds the cumulative GPU absorption counters.
+  uploadSinkCounters(sinks = []) {
+    if (!this.isSupported) return;
+    const L = GPU_LAYOUT;
+    const data = new Uint32Array(L.MAX_SINKS);
+    const n = Math.min(sinks.length, L.MAX_SINKS);
+    for (let i = 0; i < n; i++) data[i] = Math.max(0, sinks[i].absorbedCount | 0);
+    this.device.queue.writeBuffer(this.countersBuffer, L.SINK_ABS_BASE * 4, data);
+    this._bumpEpoch();
   }
 
-  _packParticles(particles, startIdx, count) {
-    const packed = new Float32Array(count * 8);
+  _packParticles(particles, count) {
+    const packed = new Float32Array(count * GPU_LAYOUT.PARTICLE_FLOATS);
     let ptr = 0;
     for (let i = 0; i < count; i++) {
-      const p = particles[startIdx + i];
+      const p = particles[i];
       packed[ptr++] = p.pos ? p.pos.x : 0;
       packed[ptr++] = p.pos ? p.pos.y : 0;
       packed[ptr++] = p.vel ? p.vel.x : 0;
@@ -220,103 +281,268 @@ export class ParticleGPUCompute {
     return packed;
   }
 
+  // Replaces the whole GPU particle set.
   uploadParticles(particles) {
     if (!this.isSupported || !particles) return;
+    this._bumpEpoch();
     this.count = Math.min(particles.length, this.capacity);
     if (this.count === 0) return;
-    const packed = this._packParticles(particles, 0, this.count);
-    this.device.queue.writeBuffer(this.bufferA, 0, packed);
-    this.device.queue.writeBuffer(this.bufferB, 0, packed);
+    const packed = this._packParticles(particles, this.count);
+    this.device.queue.writeBuffer(this.getOutputBuffer(), 0, packed);
   }
 
-  appendParticles(newParticles) {
-    if (!this.isSupported || !newParticles || newParticles.length === 0) return;
-    const appendCount = Math.min(newParticles.length, this.capacity - this.count);
-    if (appendCount <= 0) return;
-
-    const packed = this._packParticles(newParticles, 0, appendCount);
-    const byteOffset = this.count * 32;
-    this.device.queue.writeBuffer(this.bufferA, byteOffset, packed);
-    this.device.queue.writeBuffer(this.bufferB, byteOffset, packed);
-    this.count += appendCount;
+  // Queues a particle for GPU append; flushed at the start of the next step.
+  queueParticle(x, y, vx, vy, mass = 1) {
+    const F = GPU_LAYOUT.PARTICLE_FLOATS;
+    if ((this._pendingCount + 1) * F > this._pending.length) {
+      const grown = new Float32Array(this._pending.length * 2);
+      grown.set(this._pending);
+      this._pending = grown;
+    }
+    const m = Math.max(0.1, mass);
+    const base = this._pendingCount * F;
+    this._pending[base + 0] = x;
+    this._pending[base + 1] = y;
+    this._pending[base + 2] = vx;
+    this._pending[base + 3] = vy;
+    this._pending[base + 4] = 3.5 * Math.sqrt(m);
+    this._pending[base + 5] = m;
+    this._pending[base + 6] = 0;
+    this._pending[base + 7] = 0;
+    this._pendingCount++;
   }
 
-  step(dt, gravityEnabled = false, gravity = 350, damping = 1.0, bounds = null, maxSpeedReference = 380, subSteps = 4, simModel = 0) {
-    if (!this.isSupported || this.count === 0) return this.getOutputBuffer();
+  get pendingCount() {
+    return this._pendingCount;
+  }
 
-    const effectiveSubSteps = Math.max(1, subSteps);
-    const subDt = dt / effectiveSubSteps;
+  // Appends are deferred while a compaction is in flight because the final
+  // slot count is only known once its readback resolves.
+  flushPendingParticles() {
+    if (!this.isSupported || this._pendingCount === 0 || this.compactPending) return;
+    const n = Math.min(this._pendingCount, this.capacity - this.count);
+    if (n > 0) {
+      const F = GPU_LAYOUT.PARTICLE_FLOATS;
+      this.device.queue.writeBuffer(this.getOutputBuffer(), this.count * 32, this._pending, 0, n * F);
+      this.count += n;
+    }
+    this._pendingCount = 0;
+  }
 
+  _writeUniforms() {
+    const P = this._params;
+    const bounds = P.bounds;
     const hasBounds = !!(bounds && typeof bounds.minX === 'number' && typeof bounds.maxX === 'number');
-
-    // 80 bytes uniform layout conforming to SimParams
-    this.uniformFloats[0] = subDt;
-    this.uniformFloats[1] = gravity;
-    this.uniformU32[2] = gravityEnabled ? 1 : 0;
-    this.uniformFloats[3] = damping;
+    const subSteps = Math.max(1, P.subSteps | 0);
+    this.uniformFloats[0] = P.dt / subSteps;
+    this.uniformFloats[1] = P.gravity;
+    this.uniformU32[2] = P.gravityEnabled ? 1 : 0;
+    this.uniformFloats[3] = P.damping;
     this.uniformU32[4] = this.count;
-    this.uniformFloats[5] = maxSpeedReference;
+    this.uniformFloats[5] = P.maxSpeedReference;
     this.uniformU32[6] = this.wallCount;
-    this.uniformU32[7] = effectiveSubSteps;
+    this.uniformU32[7] = subSteps;
     this.uniformU32[8] = hasBounds ? 1 : 0;
     this.uniformFloats[9] = this.cellSize;
     this.uniformU32[10] = this.gridTableSize;
-    this.uniformU32[11] = this.sinkCount || 0;
+    this.uniformU32[11] = this.sinkCount;
     this.uniformFloats[12] = hasBounds ? bounds.minX : 0;
     this.uniformFloats[13] = hasBounds ? bounds.minY : 0;
     this.uniformFloats[14] = hasBounds ? bounds.maxX : 2500;
     this.uniformFloats[15] = hasBounds ? bounds.maxY : 2500;
-    this.uniformU32[16] = simModel ? 1 : 0;
-    this.uniformU32[17] = 0;
-    this.uniformU32[18] = 0;
+    this.uniformU32[16] = P.simModel ? 1 : 0;
+    this.uniformU32[17] = this.regulatorCount;
+    this.uniformU32[18] = this.sensorCount;
     this.uniformU32[19] = 0;
-
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
+  }
 
-    const commandEncoder = this.device.createCommandEncoder({
-      label: 'ParticleComputeEncoder'
-    });
+  step(dt, gravityEnabled = false, gravity = 350, damping = 1.0, bounds = null, maxSpeedReference = 380, subSteps = 4, simModel = 0) {
+    Object.assign(this._params, { dt, gravityEnabled, gravity, damping, bounds, maxSpeedReference, subSteps, simModel });
+    if (!this.isSupported || this.count === 0) return this.getOutputBuffer();
 
-    const clearGridWorkgroups = Math.ceil(this.gridTableSize / 64);
-    const particleWorkgroups = Math.ceil(this.count / 64);
+    this._writeUniforms();
+    const effectiveSubSteps = Math.max(1, subSteps | 0);
+    const clearGridWorkgroups = Math.ceil(this.gridTableSize / GPU_LAYOUT.WG);
+    const particleWorkgroups = Math.ceil(this.count / GPU_LAYOUT.WG);
 
+    const encoder = this.device.createCommandEncoder({ label: 'ParticleComputeEncoder' });
+    // A single pass: WebGPU synchronizes storage writes between dispatches.
+    const pass = encoder.beginComputePass({ label: 'ParticleComputeSubSteps' });
     for (let s = 0; s < effectiveSubSteps; s++) {
-      const activeBindGroup = (this.pingPong === 0) ? this.bindGroupAB : this.bindGroupBA;
+      const bg = this._currentBindGroups();
+      pass.setPipeline(this.pipelines.clear);
+      pass.setBindGroup(0, bg.clear);
+      pass.dispatchWorkgroups(clearGridWorkgroups);
 
-      // Pass 1: Clear Spatial Hash Grid
-      const passClear = commandEncoder.beginComputePass({ label: `ClearGrid_${s}` });
-      passClear.setPipeline(this.pipelineClearGrid);
-      passClear.setBindGroup(0, activeBindGroup);
-      passClear.dispatchWorkgroups(clearGridWorkgroups);
-      passClear.end();
+      pass.setPipeline(this.pipelines.build);
+      pass.setBindGroup(0, bg.build);
+      pass.dispatchWorkgroups(particleWorkgroups);
 
-      // Pass 2: Populate Spatial Hash Grid
-      const passBuild = commandEncoder.beginComputePass({ label: `BuildGrid_${s}` });
-      passBuild.setPipeline(this.pipelineBuildGrid);
-      passBuild.setBindGroup(0, activeBindGroup);
-      passBuild.dispatchWorkgroups(particleWorkgroups);
-      passBuild.end();
+      pass.setPipeline(this.pipelines.pairs);
+      pass.setBindGroup(0, bg.pairs);
+      pass.dispatchWorkgroups(particleWorkgroups);
 
-      // Pass 3: Find Mutual Collision Pairs
-      const passPairs = commandEncoder.beginComputePass({ label: `FindPairs_${s}` });
-      passPairs.setPipeline(this.pipelineFindPairs);
-      passPairs.setBindGroup(0, activeBindGroup);
-      passPairs.dispatchWorkgroups(particleWorkgroups);
-      passPairs.end();
-
-      // Pass 4: Mutual Elastic Impulse & Wall-CCD Collision + Integration
-      const passIntegrate = commandEncoder.beginComputePass({ label: `Integrate_${s}` });
-      passIntegrate.setPipeline(this.pipelineIntegrate);
-      passIntegrate.setBindGroup(0, activeBindGroup);
-      passIntegrate.dispatchWorkgroups(particleWorkgroups);
-      passIntegrate.end();
+      pass.setPipeline(this.pipelines.integrate);
+      pass.setBindGroup(0, bg.integrate);
+      pass.dispatchWorkgroups(particleWorkgroups);
 
       this.pingPong = 1 - this.pingPong;
     }
-
-    this.device.queue.submit([commandEncoder.finish()]);
-
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
     return this.getOutputBuffer();
+  }
+
+  /**
+   * Runs the telemetry reduction (optionally preceded by a compaction) and
+   * reads back stats + event counters. Wall event counters are cleared in the
+   * same submission, so each result covers exactly the steps since the
+   * previous readback. Returns null when all staging buffers are busy.
+   */
+  submitReadback({ compact = false } = {}) {
+    if (!this.isSupported) return null;
+    let staging = this._stagingFree.pop();
+    if (!staging) {
+      if (this._stagingTotal >= MAX_STAGING_BUFFERS) return null;
+      staging = this.device.createBuffer({
+        label: 'ComputeReadbackStaging',
+        size: this._statBytes + this._counterBytes,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+      });
+      this._stagingTotal++;
+    }
+
+    const L = GPU_LAYOUT;
+    const epoch = this.epoch;
+    const countAtSubmit = this.count;
+    const workgroups = Math.ceil(this.count / L.WG);
+    this._writeUniforms();
+
+    const encoder = this.device.createCommandEncoder({ label: 'ComputeReadbackEncoder' });
+    let compacted = false;
+    if (compact && !this.compactPending && this.count > 0) {
+      encoder.clearBuffer(this.countersBuffer, L.COMPACT_IDX * 4, 4);
+      const bg = this._currentBindGroups();
+      const pass = encoder.beginComputePass({ label: 'ParticleCompaction' });
+      pass.setPipeline(this.pipelines.compact);
+      pass.setBindGroup(0, bg.compact);
+      pass.dispatchWorkgroups(workgroups);
+      pass.setPipeline(this.pipelines.compactTail);
+      pass.setBindGroup(0, bg.compactTail);
+      pass.dispatchWorkgroups(workgroups);
+      pass.end();
+      this.pingPong = 1 - this.pingPong;
+      this.compactPending = true;
+      compacted = true;
+    }
+
+    encoder.clearBuffer(this.statsBuffer);
+    if (this.count > 0) {
+      const pass = encoder.beginComputePass({ label: 'ParticleTelemetry' });
+      pass.setPipeline(this.pipelines.telemetry);
+      pass.setBindGroup(0, this._currentBindGroups().telemetry);
+      pass.dispatchWorkgroups(workgroups);
+      pass.end();
+    }
+    encoder.copyBufferToBuffer(this.statsBuffer, 0, staging, 0, this._statBytes);
+    encoder.copyBufferToBuffer(this.countersBuffer, 0, staging, this._statBytes, this._counterBytes);
+    encoder.clearBuffer(this.countersBuffer, 0, this._wallEventBytes);
+    this.device.queue.submit([encoder.finish()]);
+
+    return staging.mapAsync(GPUMapMode.READ).then(() => {
+      const words = new Uint32Array(staging.getMappedRange().slice(0));
+      staging.unmap();
+      this._stagingFree.push(staging);
+      const stats = words.subarray(0, L.STAT_WORDS);
+      const counters = words.subarray(L.STAT_WORDS);
+      const stale = epoch !== this.epoch;
+      if (compacted && !stale) {
+        this.count = counters[L.COMPACT_IDX];
+        this.compactPending = false;
+      }
+      return { epoch, stale, stats, counters, compacted, countAtSubmit };
+    }).catch(() => {
+      this._stagingFree.push(staging);
+      if (compacted && epoch === this.epoch) this.compactPending = false;
+      return null;
+    });
+  }
+
+  static readU64(words, idx) {
+    return words[idx] + words[idx + 1] * 4294967296;
+  }
+
+  // Decodes one telemetry target (0 = global, 1 + i = sensor i) into plain sums.
+  static decodeTelemetryTarget(stats, target) {
+    const L = GPU_LAYOUT;
+    const b = target * L.STAT_TARGET_STRIDE;
+    const r = (ch) => ParticleGPUCompute.readU64(stats, b + 2 * ch);
+    const histStart = b + 2 * L.TELEM_SCALARS;
+    return {
+      count: r(0),
+      kineticEnergy: r(1) / L.KE_SCALE,
+      sumVx: (r(2) - r(3)) / L.V_SCALE,
+      sumVy: (r(4) - r(5)) / L.V_SCALE,
+      sumMVx: (r(6) - r(7)) / L.MV_SCALE,
+      sumMVy: (r(8) - r(9)) / L.MV_SCALE,
+      sumMass: r(10) / L.M_SCALE,
+      sumSpeed: r(11) / L.V_SCALE,
+      histogram: stats.subarray(histStart, histStart + L.HIST_BINS)
+    };
+  }
+
+  // Expands a speed histogram into representative samples (bin centres) so
+  // chart code written against raw speed samples keeps working.
+  static histogramToSamples(histogram, maxSamples) {
+    let total = 0;
+    for (let b = 0; b < histogram.length; b++) total += histogram[b];
+    const samples = [];
+    if (total === 0) return samples;
+    const scale = Math.min(1, maxSamples / total);
+    const width = GPU_LAYOUT.HIST_BIN_WIDTH;
+    for (let b = 0; b < histogram.length; b++) {
+      const k = Math.round(histogram[b] * scale);
+      const centre = (b + 0.5) * width;
+      for (let j = 0; j < k; j++) samples.push(centre);
+    }
+    return samples;
+  }
+
+  // Step-back history: GPU-side copies of the particle buffer.
+  captureHistory() {
+    if (!this.isSupported || this.count > HISTORY_CAPACITY) return null;
+    const slot = this._historyPool.pop() || {
+      buffer: this.device.createBuffer({
+        label: 'ComputeHistorySlot',
+        size: HISTORY_CAPACITY * 32,
+        usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+      }),
+      count: 0
+    };
+    slot.count = this.count;
+    if (slot.count > 0) {
+      const encoder = this.device.createCommandEncoder({ label: 'ComputeHistoryCapture' });
+      encoder.copyBufferToBuffer(this.getOutputBuffer(), 0, slot.buffer, 0, slot.count * 32);
+      this.device.queue.submit([encoder.finish()]);
+    }
+    return slot;
+  }
+
+  restoreHistory(slot) {
+    if (!this.isSupported || !slot) return;
+    this._bumpEpoch();
+    this.count = slot.count;
+    if (slot.count > 0) {
+      const encoder = this.device.createCommandEncoder({ label: 'ComputeHistoryRestore' });
+      encoder.copyBufferToBuffer(slot.buffer, 0, this.getOutputBuffer(), 0, slot.count * 32);
+      this.device.queue.submit([encoder.finish()]);
+    }
+    this.releaseHistory(slot);
+  }
+
+  releaseHistory(slot) {
+    if (slot) this._historyPool.push(slot);
   }
 
   getOutputBuffer() {
@@ -327,45 +553,26 @@ export class ParticleGPUCompute {
     return this.count;
   }
 
-  async fetchTelemetry(sampleCap = 50000) {
-    if (!this.isSupported || this.count === 0 || this.isTelemetryPending) return null;
-    const readCount = Math.min(this.count, sampleCap);
-    const byteSize = readCount * 32;
-
-    if (!this.telemetryStagingBuffer || this.telemetryStagingBuffer.size < byteSize) {
-      if (this.telemetryStagingBuffer) this.telemetryStagingBuffer.destroy();
-      this.telemetryStagingBuffer = this.device.createBuffer({
-        label: 'ComputeTelemetryStaging',
-        size: Math.max(byteSize, 50000 * 32),
-        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
-      });
-    }
-
-    this.isTelemetryPending = true;
-    const enc = this.device.createCommandEncoder({ label: 'TelemetryEncoder' });
-    enc.copyBufferToBuffer(this.getOutputBuffer(), 0, this.telemetryStagingBuffer, 0, byteSize);
-    this.device.queue.submit([enc.finish()]);
-
-    try {
-      await this.telemetryStagingBuffer.mapAsync(GPUMapMode.READ);
-      const mapped = this.telemetryStagingBuffer.getMappedRange(0, byteSize);
-      const floats = new Float32Array(mapped.slice(0));
-      this.telemetryStagingBuffer.unmap();
-      this.isTelemetryPending = false;
-      return { floats, count: readCount, totalCount: this.count };
-    } catch (e) {
-      this.isTelemetryPending = false;
-      return null;
-    }
-  }
-
+  // Full particle readback. Expensive; intended for tests and debugging.
   async readbackParticles(maxCount = this.count) {
-    const data = await this.fetchTelemetry(maxCount);
-    if (!data) return [];
-    const { floats, count } = data;
+    if (!this.isSupported) return [];
+    const readCount = Math.min(this.count, maxCount);
+    if (readCount === 0) return [];
+    const byteSize = readCount * 32;
+    const staging = this.device.createBuffer({
+      label: 'ComputeParticleReadback', size: byteSize,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+    });
+    const encoder = this.device.createCommandEncoder({ label: 'ComputeParticleReadback' });
+    encoder.copyBufferToBuffer(this.getOutputBuffer(), 0, staging, 0, byteSize);
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const floats = new Float32Array(staging.getMappedRange().slice(0));
+    staging.unmap();
+    staging.destroy();
+
     const result = [];
-    let ptr = 0;
-    for (let i = 0; i < count; i++) {
+    for (let i = 0, ptr = 0; i < readCount; i++, ptr += 8) {
       result.push({
         pos: { x: floats[ptr], y: floats[ptr + 1] },
         vel: { x: floats[ptr + 2], y: floats[ptr + 3] },
@@ -373,7 +580,6 @@ export class ParticleGPUCompute {
         mass: floats[ptr + 5],
         speedNorm: floats[ptr + 6]
       });
-      ptr += 8;
     }
     return result;
   }

@@ -1,10 +1,52 @@
-export const particleComputeWGSL = `
+// Shared memory layout between the WGSL kernels and the JS coordinator.
+// Every buffer offset below is expressed in 32-bit words.
+export const GPU_LAYOUT = (() => {
+  const L = {
+    WG: 64,
+    PARTICLE_FLOATS: 8,
+    MAX_WALLS: 512,
+    MAX_SINKS: 64,
+    MAX_REGULATORS: 16,
+    MAX_SENSORS: 16,
+    ZONE_WORDS: 12,
+    WALL_EV_STRIDE: 6,     // impulse(lo,hi), heatIntoWall(lo,hi), heatOutOfWall(lo,hi)
+    TELEM_SCALARS: 12,     // N, KE, vx+, vx-, vy+, vy-, mvx+, mvx-, mvy+, mvy-, m, |v|
+    HIST_BINS: 64,
+    HIST_BIN_WIDTH: 10,    // px/s per histogram bin
+    KE_SCALE: 4,           // fixed-point scales for atomic accumulation
+    V_SCALE: 16,
+    MV_SCALE: 4,
+    M_SCALE: 64,
+    EV_SCALE: 16
+  };
+  L.SINK_ABS_BASE = L.MAX_WALLS * L.WALL_EV_STRIDE;
+  L.REG_QUOTA_BASE = L.SINK_ABS_BASE + L.MAX_SINKS;
+  L.COMPACT_IDX = L.REG_QUOTA_BASE + L.MAX_REGULATORS;
+  L.COUNTER_WORDS = L.COMPACT_IDX + 1;
+
+  L.ZONE_SINK_BASE = 0;
+  L.ZONE_REG_BASE = L.MAX_SINKS;
+  L.ZONE_SENSOR_BASE = L.MAX_SINKS + L.MAX_REGULATORS;
+  L.MAX_ZONES = L.ZONE_SENSOR_BASE + L.MAX_SENSORS;
+
+  L.TELEM_TARGETS = 1 + L.MAX_SENSORS; // target 0 = global system
+  L.WG_TARGET_STRIDE = L.TELEM_SCALARS + L.HIST_BINS;
+  L.WG_REG_BASE = L.TELEM_TARGETS * L.WG_TARGET_STRIDE;
+  L.WG_ACC_SIZE = L.WG_REG_BASE + L.MAX_REGULATORS;
+  L.STAT_TARGET_STRIDE = 2 * L.TELEM_SCALARS + L.HIST_BINS;
+  L.STAT_REG_BASE = L.TELEM_TARGETS * L.STAT_TARGET_STRIDE;
+  L.STAT_WORDS = L.STAT_REG_BASE + L.MAX_REGULATORS;
+  return Object.freeze(L);
+})();
+
+// Wrapped so the layout alias does not leak into the bundled global scope.
+export const particleComputeWGSL = ((L) => `
 struct SimParams {
   dt: f32, gravity: f32, gravityEnabled: u32, damping: f32,
   particleCount: u32, maxSpeedReference: f32, wallCount: u32, subSteps: u32,
   boundsEnabled: u32, cellSize: f32, gridTableSize: u32, sinkCount: u32,
   boundMin: vec2f, boundMax: vec2f,
-  simModel: u32, pad2: u32, pad3: u32, pad4: u32,
+  simModel: u32, regulatorCount: u32, sensorCount: u32, pad0: u32,
 };
 
 struct Particle {
@@ -17,11 +59,38 @@ struct WallData {
   temperature: f32, conductivity: f32, vel: vec2f, pad: vec2f,
 };
 
-struct SinkData {
+// Axis-aligned zone shared by sinks, regulators and sensor chambers.
+struct ZoneData {
   minPos: vec2f, maxPos: vec2f,
   isActive: u32, direction: u32, tempFilterMode: u32, filterTemperature: f32,
-  pad1: vec2f, pad2: vec2f,
+  maxCount: u32, pad0: u32, pad1: u32, pad2: u32,
 };
+
+const KB: f32 = 35.0;
+const WG_SIZE: u32 = ${L.WG}u;
+const WALL_EV_STRIDE: u32 = ${L.WALL_EV_STRIDE}u;
+const SINK_ABS_BASE: u32 = ${L.SINK_ABS_BASE}u;
+const REG_QUOTA_BASE: u32 = ${L.REG_QUOTA_BASE}u;
+const COMPACT_IDX: u32 = ${L.COMPACT_IDX}u;
+const ZONE_SINK_BASE: u32 = ${L.ZONE_SINK_BASE}u;
+const ZONE_REG_BASE: u32 = ${L.ZONE_REG_BASE}u;
+const ZONE_SENSOR_BASE: u32 = ${L.ZONE_SENSOR_BASE}u;
+const TELEM_SCALARS: u32 = ${L.TELEM_SCALARS}u;
+const HIST_BINS: u32 = ${L.HIST_BINS}u;
+const HIST_BIN_WIDTH: f32 = ${L.HIST_BIN_WIDTH}.0;
+const WG_TARGET_STRIDE: u32 = ${L.WG_TARGET_STRIDE}u;
+const WG_REG_BASE: u32 = ${L.WG_REG_BASE}u;
+const WG_ACC_SIZE: u32 = ${L.WG_ACC_SIZE}u;
+const STAT_TARGET_STRIDE: u32 = ${L.STAT_TARGET_STRIDE}u;
+const STAT_REG_BASE: u32 = ${L.STAT_REG_BASE}u;
+const KE_SCALE: f32 = ${L.KE_SCALE}.0;
+const V_SCALE: f32 = ${L.V_SCALE}.0;
+const MV_SCALE: f32 = ${L.MV_SCALE}.0;
+const M_SCALE: f32 = ${L.M_SCALE}.0;
+const EV_SCALE: f32 = ${L.EV_SCALE}.0;
+// Per-particle fixed-point cap: WG_SIZE * FX_MAX must stay below 2^32 so a
+// workgroup-local u32 accumulator can never overflow.
+const FX_MAX: f32 = 6.0e7;
 
 @group(0) @binding(0) var<uniform> params: SimParams;
 @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
@@ -30,7 +99,13 @@ struct SinkData {
 @group(0) @binding(4) var<storage, read_write> cellHeads: array<atomic<i32>>;
 @group(0) @binding(5) var<storage, read_write> particleNext: array<i32>;
 @group(0) @binding(6) var<storage, read_write> bestPartners: array<i32>;
-@group(0) @binding(7) var<storage, read> sinks: array<SinkData>;
+@group(0) @binding(7) var<storage, read> zones: array<ZoneData>;
+@group(0) @binding(8) var<storage, read_write> counters: array<atomic<u32>>;
+@group(0) @binding(9) var<storage, read_write> stats: array<atomic<u32>>;
+
+var<workgroup> wgAcc: array<atomic<u32>, ${L.WG_ACC_SIZE}>;
+var<workgroup> wgLiveCount: atomic<u32>;
+var<workgroup> wgBase: u32;
 
 fn hashCell(cx: i32, cy: i32, tableSize: u32) -> u32 {
   let p1 = 73856093u;
@@ -38,6 +113,71 @@ fn hashCell(cx: i32, cy: i32, tableSize: u32) -> u32 {
   let ux = bitcast<u32>(cx);
   let uy = bitcast<u32>(cy);
   return ((ux * p1) ^ (uy * p2)) % tableSize;
+}
+
+fn isDead(p: Particle) -> bool {
+  return p.radius <= 0.0 || p.pos.x < -50000.0;
+}
+
+fn deadParticle(mass: f32) -> Particle {
+  return Particle(vec2f(-99999.0, -99999.0), vec2f(0.0, 0.0), 0.0, mass, 0.0, 0.0);
+}
+
+fn inZone(pos: vec2f, z: ZoneData) -> bool {
+  return pos.x >= z.minPos.x && pos.x <= z.maxPos.x && pos.y >= z.minPos.y && pos.y <= z.maxPos.y;
+}
+
+fn fx(x: f32, scale: f32) -> u32 {
+  return u32(clamp(x * scale + 0.5, 0.0, FX_MAX));
+}
+
+// 64-bit accumulation emulated with a (lo, hi) pair of u32 atomics.
+fn addCounter64(idx: u32, v: u32) {
+  let old = atomicAdd(&counters[idx], v);
+  if (old > 0xFFFFFFFFu - v) { atomicAdd(&counters[idx + 1u], 1u); }
+}
+
+fn addStat64(idx: u32, v: u32) {
+  let old = atomicAdd(&stats[idx], v);
+  if (old > 0xFFFFFFFFu - v) { atomicAdd(&stats[idx + 1u], 1u); }
+}
+
+fn recordWallEvent(wallIdx: u32, impulse: f32, heatIntoWall: f32) {
+  let base = wallIdx * WALL_EV_STRIDE;
+  let imp = fx(impulse, EV_SCALE);
+  if (imp > 0u) { addCounter64(base, imp); }
+  if (heatIntoWall > 0.0) {
+    addCounter64(base + 2u, fx(heatIntoWall, EV_SCALE));
+  } else if (heatIntoWall < 0.0) {
+    addCounter64(base + 4u, fx(-heatIntoWall, EV_SCALE));
+  }
+}
+
+// Reflects a particle off a (possibly moving, possibly conductive) wall and
+// records the momentum and heat exchanged so the CPU can drive pistons,
+// relief valves and wall temperatures from it.
+fn wallBounce(vel: vec2f, mass: f32, n: vec2f, wallIdx: u32) -> vec2f {
+  let w = walls[wallIdx];
+  let vn = dot(vel - w.vel, n);
+  if (vn >= 0.0) { return vel; }
+  var v = vel - 2.0 * vn * n;
+  var heatIntoWall = 0.0;
+  if (w.conductivity > 0.0) {
+    let curSpeedSq = dot(v, v);
+    if (curSpeedSq > 0.001) {
+      let targetSpeedSq = (2.0 * KB * w.temperature) / mass;
+      let alpha = w.conductivity * 0.8;
+      let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
+      v *= sqrt(blendSq / curSpeedSq);
+      heatIntoWall = 0.5 * mass * (curSpeedSq - blendSq);
+    }
+  }
+  recordWallEvent(wallIdx, 2.0 * mass * (-vn), heatIntoWall);
+  return v;
+}
+
+fn isOneWayWall(w: WallData) -> bool {
+  return (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
 }
 
 @compute @workgroup_size(64)
@@ -55,7 +195,7 @@ fn cs_build_grid(@builtin(global_invocation_id) global_id: vec3u) {
     return;
   }
   let p = particlesIn[idx];
-  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+  if (isDead(p)) {
     particleNext[idx] = -1;
     return;
   }
@@ -71,7 +211,7 @@ fn cs_find_pairs(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
   if (idx >= params.particleCount) { return; }
   let p = particlesIn[idx];
-  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+  if (isDead(p)) {
     bestPartners[idx] = -1;
     return;
   }
@@ -132,7 +272,7 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   let idx = global_id.x;
   if (idx >= params.particleCount) { return; }
   var p = particlesIn[idx];
-  if (p.radius <= 0.0 || p.pos.x < -50000.0) {
+  if (isDead(p)) {
     particlesOut[idx] = p;
     return;
   }
@@ -231,15 +371,13 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
   var hitWallIdx = -1;
   var hitNormal = vec2f(0.0, 0.0);
   var hitEffRad = 0.0;
-  var hitWallVel = vec2f(0.0, 0.0);
 
   for (var i = 0u; i < params.wallCount; i++) {
     let w = walls[i];
     if (w.wallType == 1u && w.isOpen != 0u) { continue; }
     let vRel = p.vel - w.vel;
     let vDotN = dot(vRel, w.normal);
-    let isOneWay = (w.wallType == 2u) || (w.wallType == 3u && w.isOpen != 0u);
-    if (isOneWay && (vDotN * w.allowedDir > 0.0)) { continue; }
+    if (isOneWayWall(w) && (vDotN * w.allowedDir > 0.0)) { continue; }
 
     let effRad = p.radius + w.thickness * 0.5;
     let seg = w.p2 - w.p1;
@@ -268,28 +406,12 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
         hitWallIdx = i32(i);
         hitNormal = norm;
         hitEffRad = effRad;
-        hitWallVel = w.vel;
       }
     }
   }
 
   if (hitWallIdx >= 0) {
-    let w = walls[u32(hitWallIdx)];
-    let vRel = p.vel - hitWallVel;
-    let velAlongNormal = dot(vRel, hitNormal);
-    if (velAlongNormal < 0.0) {
-      // Elastic bounce with moving wall (Piston PV work)
-      p.vel -= 2.0 * velAlongNormal * hitNormal;
-      if (w.conductivity > 0.0) {
-        let kB = 35.0;
-        let targetSpeedSq = (2.0 * kB * w.temperature) / p.mass;
-        let curSpeedSq = dot(p.vel, p.vel);
-        let alpha = w.conductivity * 0.8;
-        let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
-        let factor = select(1.0, sqrt(blendSq / curSpeedSq), curSpeedSq > 0.001);
-        p.vel *= factor;
-      }
-    }
+    p.vel = wallBounce(p.vel, p.mass, hitNormal, u32(hitWallIdx));
     let hitPoint = startPos + moveVec * earliestT;
     let remainT = (1.0 - earliestT) * params.dt;
     candidatePos = hitPoint + hitNormal * (hitEffRad + 0.05) + p.vel * remainT;
@@ -301,6 +423,7 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     if (i32(i) == hitWallIdx) { continue; }
     let w = walls[i];
     if (w.wallType == 1u && w.isOpen != 0u) { continue; }
+    if (isOneWayWall(w) && (dot(p.vel - w.vel, w.normal) * w.allowedDir > 0.0)) { continue; }
     let effRad = p.radius + w.thickness * 0.5;
     let seg = w.p2 - w.p1;
     let segLenSq = dot(seg, seg);
@@ -315,41 +438,46 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
       let dist = sqrt(distSq);
       let norm = diff / dist;
       p.pos = closest + norm * (effRad + 0.05);
-      let vRel = p.vel - w.vel;
-      let vn = dot(vRel, norm);
-      if (vn < 0.0) {
-        p.vel -= 2.0 * vn * norm;
-      }
+      p.vel = wallBounce(p.vel, p.mass, norm, i);
     }
   }
 
-  // 4b. Sink (Absorber) Absorption
+  // 4b. Sink (Absorber) Absorption with atomic per-sink capacity accounting
   for (var s = 0u; s < params.sinkCount; s++) {
-    let sk = sinks[s];
-    if (sk.isActive == 0u) { continue; }
-    if (p.pos.x >= sk.minPos.x && p.pos.x <= sk.maxPos.x &&
-        p.pos.y >= sk.minPos.y && p.pos.y <= sk.maxPos.y) {
-      var canAbsorb = true;
-      if (sk.direction == 1u && p.vel.x <= 0.0) { canAbsorb = false; }
-      else if (sk.direction == 2u && p.vel.x >= 0.0) { canAbsorb = false; }
-      else if (sk.direction == 3u && p.vel.y <= 0.0) { canAbsorb = false; }
-      else if (sk.direction == 4u && p.vel.y >= 0.0) { canAbsorb = false; }
-
-      if (canAbsorb && sk.tempFilterMode != 0u) {
-        let kB = 35.0;
-        let vSq = dot(p.vel, p.vel);
-        let pTemp = (p.mass * vSq) / (2.0 * kB);
-        if (sk.tempFilterMode == 1u && pTemp < sk.filterTemperature) { canAbsorb = false; }
-        else if (sk.tempFilterMode == 2u && pTemp > sk.filterTemperature) { canAbsorb = false; }
-      }
-
-      if (canAbsorb) {
-        p.pos = vec2f(-99999.0, -99999.0);
-        p.vel = vec2f(0.0, 0.0);
-        p.radius = 0.0;
-        break;
-      }
+    let z = zones[ZONE_SINK_BASE + s];
+    if (z.isActive == 0u || !inZone(p.pos, z)) { continue; }
+    if (z.direction == 1u && p.vel.x <= 0.0) { continue; }
+    if (z.direction == 2u && p.vel.x >= 0.0) { continue; }
+    if (z.direction == 3u && p.vel.y <= 0.0) { continue; }
+    if (z.direction == 4u && p.vel.y >= 0.0) { continue; }
+    if (z.tempFilterMode != 0u) {
+      let pTemp = (p.mass * dot(p.vel, p.vel)) / (2.0 * KB);
+      if (z.tempFilterMode == 1u && pTemp < z.filterTemperature) { continue; }
+      if (z.tempFilterMode == 2u && pTemp > z.filterTemperature) { continue; }
     }
+    let slot = SINK_ABS_BASE + s;
+    let old = atomicAdd(&counters[slot], 1u);
+    if (z.maxCount != 0u && old >= z.maxCount) {
+      atomicSub(&counters[slot], 1u);
+      continue;
+    }
+    particlesOut[idx] = deadParticle(p.mass);
+    return;
+  }
+
+  // 4c. Regulator extraction: consume the per-frame removal quota set by the CPU
+  for (var r = 0u; r < params.regulatorCount; r++) {
+    let z = zones[ZONE_REG_BASE + r];
+    if (!inZone(p.pos, z)) { continue; }
+    let q = REG_QUOTA_BASE + r;
+    let cur = atomicLoad(&counters[q]);
+    if (cur == 0u || cur >= 0x80000000u) { continue; }
+    let old = atomicSub(&counters[q], 1u);
+    if (old >= 1u && old < 0x80000000u) {
+      particlesOut[idx] = deadParticle(p.mass);
+      return;
+    }
+    atomicAdd(&counters[q], 1u);
   }
 
   // 5. Bounds (Splash Mode)
@@ -378,4 +506,109 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
 
   particlesOut[idx] = p;
 }
-`;
+
+fn accumulateTarget(t: u32, p: Particle, speed: f32, ke: f32) {
+  let b = t * WG_TARGET_STRIDE;
+  atomicAdd(&wgAcc[b], 1u);
+  atomicAdd(&wgAcc[b + 1u], fx(ke, KE_SCALE));
+  if (p.vel.x >= 0.0) { atomicAdd(&wgAcc[b + 2u], fx(p.vel.x, V_SCALE)); }
+  else { atomicAdd(&wgAcc[b + 3u], fx(-p.vel.x, V_SCALE)); }
+  if (p.vel.y >= 0.0) { atomicAdd(&wgAcc[b + 4u], fx(p.vel.y, V_SCALE)); }
+  else { atomicAdd(&wgAcc[b + 5u], fx(-p.vel.y, V_SCALE)); }
+  let mv = p.mass * p.vel;
+  if (mv.x >= 0.0) { atomicAdd(&wgAcc[b + 6u], fx(mv.x, MV_SCALE)); }
+  else { atomicAdd(&wgAcc[b + 7u], fx(-mv.x, MV_SCALE)); }
+  if (mv.y >= 0.0) { atomicAdd(&wgAcc[b + 8u], fx(mv.y, MV_SCALE)); }
+  else { atomicAdd(&wgAcc[b + 9u], fx(-mv.y, MV_SCALE)); }
+  atomicAdd(&wgAcc[b + 10u], fx(p.mass, M_SCALE));
+  atomicAdd(&wgAcc[b + 11u], fx(speed, V_SCALE));
+  let bin = min(u32(speed / HIST_BIN_WIDTH), HIST_BINS - 1u);
+  atomicAdd(&wgAcc[b + TELEM_SCALARS + bin], 1u);
+}
+
+// Telemetry reduction: global + per-sensor sums, speed histograms and
+// regulator zone counts. Workgroup-local atomics first, then one global
+// atomic per non-zero channel per workgroup.
+@compute @workgroup_size(64)
+fn cs_telemetry(@builtin(global_invocation_id) global_id: vec3u,
+                @builtin(local_invocation_index) lid: u32) {
+  for (var i = lid; i < WG_ACC_SIZE; i += WG_SIZE) {
+    atomicStore(&wgAcc[i], 0u);
+  }
+  workgroupBarrier();
+
+  let idx = global_id.x;
+  if (idx < params.particleCount) {
+    let p = particlesIn[idx];
+    if (!isDead(p)) {
+      let speedSq = dot(p.vel, p.vel);
+      let speed = sqrt(speedSq);
+      let ke = 0.5 * p.mass * speedSq;
+      accumulateTarget(0u, p, speed, ke);
+      for (var s = 0u; s < params.sensorCount; s++) {
+        if (inZone(p.pos, zones[ZONE_SENSOR_BASE + s])) {
+          accumulateTarget(1u + s, p, speed, ke);
+        }
+      }
+      for (var r = 0u; r < params.regulatorCount; r++) {
+        if (inZone(p.pos, zones[ZONE_REG_BASE + r])) {
+          atomicAdd(&wgAcc[WG_REG_BASE + r], 1u);
+        }
+      }
+    }
+  }
+  workgroupBarrier();
+
+  for (var i = lid; i < WG_ACC_SIZE; i += WG_SIZE) {
+    let v = atomicLoad(&wgAcc[i]);
+    if (v == 0u) { continue; }
+    if (i >= WG_REG_BASE) {
+      atomicAdd(&stats[STAT_REG_BASE + (i - WG_REG_BASE)], v);
+      continue;
+    }
+    let t = i / WG_TARGET_STRIDE;
+    let c = i % WG_TARGET_STRIDE;
+    if (c < TELEM_SCALARS) {
+      addStat64(t * STAT_TARGET_STRIDE + c * 2u, v);
+    } else {
+      atomicAdd(&stats[t * STAT_TARGET_STRIDE + 2u * TELEM_SCALARS + (c - TELEM_SCALARS)], v);
+    }
+  }
+}
+
+// Stream compaction: live particles are packed to the front of particlesOut.
+@compute @workgroup_size(64)
+fn cs_compact(@builtin(global_invocation_id) global_id: vec3u,
+              @builtin(local_invocation_index) lid: u32) {
+  if (lid == 0u) { atomicStore(&wgLiveCount, 0u); }
+  workgroupBarrier();
+
+  let idx = global_id.x;
+  var alive = false;
+  var p: Particle;
+  if (idx < params.particleCount) {
+    p = particlesIn[idx];
+    alive = !isDead(p);
+  }
+  var localSlot = 0u;
+  if (alive) { localSlot = atomicAdd(&wgLiveCount, 1u); }
+  workgroupBarrier();
+
+  if (lid == 0u) {
+    wgBase = atomicAdd(&counters[COMPACT_IDX], atomicLoad(&wgLiveCount));
+  }
+  workgroupBarrier();
+
+  if (alive) { particlesOut[wgBase + localSlot] = p; }
+}
+
+// Marks every slot behind the compacted range as dead.
+@compute @workgroup_size(64)
+fn cs_compact_tail(@builtin(global_invocation_id) global_id: vec3u) {
+  let idx = global_id.x;
+  if (idx >= params.particleCount) { return; }
+  if (idx >= atomicLoad(&counters[COMPACT_IDX])) {
+    particlesOut[idx] = deadParticle(1.0);
+  }
+}
+`)(GPU_LAYOUT);

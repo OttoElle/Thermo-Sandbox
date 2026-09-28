@@ -78,30 +78,6 @@ export class SensorZone {
     this._processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, 1.0, currentTime, speedSamples);
   }
 
-  updateMeasurementsFromGPU(floats, count, scaleFactor = 1.0, currentTime = 0) {
-    let sampleCount = 0, sumVx = 0, sumVy = 0, sumMVx = 0, sumMVy = 0, sumMass = 0, sampleKinetic = 0;
-    const speedSamples = [];
-    const minX = this.x, maxX = this.x + this.width;
-    const minY = this.y, maxY = this.y + this.height;
-
-    let ptr = 0;
-    for (let i = 0; i < count; i++) {
-      const px = floats[ptr], py = floats[ptr + 1];
-      if (px >= minX && px <= maxX && py >= minY && py <= maxY) {
-        sampleCount++;
-        const vx = floats[ptr + 2], vy = floats[ptr + 3], m = floats[ptr + 5];
-        sumVx += vx; sumVy += vy;
-        sumMVx += m * vx; sumMVy += m * vy;
-        sumMass += m;
-        const spdSq = vx * vx + vy * vy;
-        sampleKinetic += 0.5 * m * spdSq;
-        if (speedSamples.length < 500) speedSamples.push(Math.sqrt(spdSq));
-      }
-      ptr += 8;
-    }
-    this._processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, scaleFactor, currentTime, speedSamples);
-  }
-
   _processMetrics(sampleCount, sumVx, sumVy, sumMVx, sumMVy, sumMass, sampleKinetic, scaleFactor = 1.0, currentTime = 0, speedSamples = []) {
     const effectiveCount = Math.round(sampleCount * scaleFactor);
     this.particleCount = effectiveCount;

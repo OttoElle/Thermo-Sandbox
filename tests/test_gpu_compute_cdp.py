@@ -112,7 +112,7 @@ def run_test():
 
                 // Run 10 compute steps on GPU
                 for (let s = 0; s < 10; s++) {
-                    window.gpuCompute.step(0.016, true, 350, 0.98, 2500, 2500, 380);
+                    window.gpuCompute.step(0.016, true, 350, 0.98, null, 380, 4, 0);
                 }
 
                 const outBuffer = window.gpuCompute.getOutputBuffer();
@@ -144,7 +144,7 @@ def run_test():
                 window.gpuCompute.uploadParticles(fastParticles);
 
                 // Step 1 frame at dt = 0.016 (displacement = 48 px across 4 px wall)
-                window.gpuCompute.step(0.016, false, 0, 1.0, 2500, 2500, 3000, 1);
+                window.gpuCompute.step(0.016, false, 0, 1.0, null, 3000, 1);
 
                 const afterStep = await window.gpuCompute.readbackParticles(100);
                 let gpuTunneled = 0;
@@ -195,8 +195,9 @@ def run_test():
                 for (let emStep = 0; emStep < 15; emStep++) {
                     window.engine.step(0.016);
                 }
-                const emitterActive = window.engine.particles.length > 0;
+                // Emitted particles live only in VRAM while simulating on the GPU
                 const emitterGpuCount = window.gpuCompute.count;
+                const emitterActive = emitterGpuCount > 0 && window.engine.particles.length === 0;
 
                 // 5. Test Ideal Gas Energy Conservation (No Freezing / Damping)
                 window.engine.clear();
@@ -286,12 +287,7 @@ def run_test():
                     window.engine.step(0.016);
                 }
 
-                const telem = await window.gpuCompute.fetchTelemetry(50000);
-                let telemSuccess = false;
-                if (telem) {
-                    window.engine.updateTelemetryFromGPU(telem);
-                    telemSuccess = true;
-                }
+                const telemSuccess = await window.engine.awaitGPUTelemetry();
 
                 const telemStats = {
                     hasTelem: telemSuccess,
@@ -339,10 +335,7 @@ def run_test():
                     window.engine.step(0.016);
                 }
 
-                const sinkTelem = await window.gpuCompute.fetchTelemetry(50000);
-                if (sinkTelem) {
-                    window.engine.updateTelemetryFromGPU(sinkTelem);
-                }
+                await window.engine.awaitGPUTelemetry();
 
                 const sinkAbsorbedCount = testSink.absorbedCount;
                 const particleCountAfterAbsorb = window.engine.stats.particleCount;
@@ -367,10 +360,7 @@ def run_test():
                     window.engine.step(0.016);
                 }
 
-                const postDeleteTelem = await window.gpuCompute.fetchTelemetry(50000);
-                if (postDeleteTelem) {
-                    window.engine.updateTelemetryFromGPU(postDeleteTelem);
-                }
+                await window.engine.awaitGPUTelemetry();
                 const particleCountAfterDelete = window.engine.stats.particleCount;
 
                 // 10. Test Drift Chart & History Rendering
@@ -419,6 +409,98 @@ def run_test():
                 boundSensor.unbindPiston();
                 const isUnbound = (boundSensor.pistonBinding === null);
 
+                // 12. GPU <-> element coupling (wall/piston momentum, relief valves, regulators, compaction, history)
+                const E = window.engine;
+                // Stop the splash-screen ambient loop from stepping the engine concurrently
+                isAmbientSim = false;
+                E.ambientBounds = null;
+                // Readbacks resolve asynchronously; yield like real frames so rates reach the CPU
+                const run = async (n) => {
+                    for (let i = 0; i < n; i++) {
+                        E.step(0.016);
+                        if (i % 2 === 1) await E.awaitGPUTelemetry();
+                    }
+                    await E.awaitGPUTelemetry();
+                };
+                const makeBox = (x0, y0, x1, y1, rightWallOpts = null) => {
+                    E.addWall(x0, y0, x1, y0, { thickness: 4 });
+                    E.addWall(x0, y1, x1, y1, { thickness: 4 });
+                    E.addWall(x0, y0, x0, y1, { thickness: 4 });
+                    if (rightWallOpts) E.addWall(x1, y0, x1, y1, rightWallOpts);
+                    else E.addWall(x1, y0, x1, y1, { thickness: 4 });
+                };
+
+                // 12a. Free piston is pushed by gas pressure (gas left, vacuum right)
+                E.clear();
+                E.subSteps = 4;
+                makeBox(100, 100, 900, 300);
+                const freePiston = E.addPiston({ x: 300, y: 200, width: 20, height: 200, orientation: 'horizontal', mode: 'free', mass: 30, minPos: 150, maxPos: 850 });
+                E.spawnGasRaster(110, 110, 170, 180, 300, 1.0, 600);
+                E.syncParticlesToGPU();
+                E.syncWallsToGPU();
+                const pistonStartX = freePiston.x;
+                await run(90);
+                await E.awaitGPUTelemetry();
+                const pistonDisplacement = freePiston.x - pistonStartX;
+
+                // 12b. Relief valve sees gas pressure and opens
+                E.clear();
+                makeBox(100, 100, 400, 300, { type: 'relief_valve', triggerPressure: 1, pressureHysteresis: 0.5, thickness: 4 });
+                const prv = E.walls[3];
+                E.spawnGasRaster(110, 110, 280, 180, 400, 1.0, 300);
+                E.syncParticlesToGPU();
+                E.syncWallsToGPU();
+                let prvOpened = false;
+                for (let i = 0; i < 60; i++) {
+                    E.step(0.016);
+                    if (i % 2 === 1) await E.awaitGPUTelemetry();
+                    if (prv.isOpen) prvOpened = true;
+                }
+                const prvPressure = prv.smoothedPressure;
+
+                // 12c. Regulator fills an empty zone to its setpoint, then drains to a lower one
+                E.clear();
+                makeBox(100, 100, 500, 500);
+                const reg = E.addRegulator(150, 150, 300, 300, { targetCount: 40, hysteresis: 3, rate: 120 });
+                E.syncParticlesToGPU();
+                await run(120);
+                await E.awaitGPUTelemetry();
+                const regFilledCount = reg.gpuCount;
+                reg.targetCount = 10;
+                await run(180);
+                await E.awaitGPUTelemetry();
+                const regDrainedCount = reg.gpuCount;
+
+                // 12d. Sink absorption triggers GPU-side compaction
+                E.clear();
+                makeBox(100, 100, 700, 500);
+                const bigSink = E.addSink(110, 110, 280, 380, {});
+                E.spawnGasRaster(110, 110, 580, 380, 2000, 1.0, 300);
+                E.syncParticlesToGPU();
+                for (let i = 0; i < 60; i++) E.step(0.016);
+                await E.awaitGPUTelemetry();
+                await E.awaitGPUTelemetry();
+                const compaction = {
+                    slots: E.gpuCompute.count,
+                    live: E.stats.particleCount,
+                    absorbed: bigSink.absorbedCount
+                };
+
+                // 12e. Step-back history restores the exact GPU particle state
+                E.clear();
+                makeBox(100, 100, 500, 500);
+                E.spawnGasRaster(110, 110, 380, 380, 500, 1.0, 300);
+                E.syncParticlesToGPU();
+                for (let i = 0; i < 5; i++) E.step(0.016);
+                const histSlot = E.gpuCompute.captureHistory();
+                const beforeHist = await E.gpuCompute.readbackParticles(5);
+                for (let i = 0; i < 20; i++) E.step(0.016);
+                const movedHist = await E.gpuCompute.readbackParticles(5);
+                E.restoreGPUHistory(histSlot);
+                const afterHist = await E.gpuCompute.readbackParticles(5);
+                const historyRestored = beforeHist.every((p, i) => p.pos.x === afterHist[i].pos.x && p.pos.y === afterHist[i].pos.y)
+                    && beforeHist.some((p, i) => p.pos.x !== movedHist[i].pos.x);
+
                 return {
                     success: true,
                     count: 50000,
@@ -445,6 +527,13 @@ def run_test():
                     widthFollowedPiston,
                     volumeChanged,
                     isUnbound,
+                    pistonDisplacement,
+                    prvOpened,
+                    prvPressure,
+                    regFilledCount,
+                    regDrainedCount,
+                    compaction,
+                    historyRestored,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -504,6 +593,18 @@ def run_test():
         assert val.get('widthFollowedPiston') == True, "Bound sensor chamber width failed to follow piston left face!"
         assert val.get('volumeChanged') == True, "Bound sensor chamber volume did not dynamically change as piston moved!"
         assert val.get('isUnbound') == True, "Sensor unbindPiston failed to clear pistonBinding!"
+
+        # GPU <-> element coupling assertions
+        assert val.get('pistonDisplacement', 0) > 5, f"Free piston was not pushed by GPU gas pressure (moved {val.get('pistonDisplacement')} px)"
+        assert val.get('prvPressure', 0) > 0, f"Relief valve measured no pressure in GPU mode ({val.get('prvPressure')})"
+        assert val.get('prvOpened') == True, "Relief valve never opened under GPU gas pressure"
+        assert 34 <= val.get('regFilledCount', 0) <= 46, f"Regulator failed to fill zone to setpoint 40 (got {val.get('regFilledCount')})"
+        assert 4 <= val.get('regDrainedCount', 0) <= 16, f"Regulator failed to drain zone to setpoint 10 (got {val.get('regDrainedCount')})"
+        comp = val.get('compaction', {})
+        assert comp.get('absorbed', 0) > 0, "Big sink absorbed nothing"
+        assert comp.get('slots') == comp.get('live'), f"GPU compaction left dead slots: {comp}"
+        assert comp.get('live', 0) + comp.get('absorbed', 0) == 2000, f"Particles lost or duplicated during compaction: {comp}"
+        assert val.get('historyRestored') == True, "GPU step-back history did not restore particle state"
 
         print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter, Telemetry & Sensor Zone tests PASSED!")
 
