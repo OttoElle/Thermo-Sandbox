@@ -42,8 +42,13 @@ def start_server():
     class QuietHandler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, format, *args):
             pass
-    socketserver.TCPServer.allow_reuse_address = True
-    server = socketserver.TCPServer(('127.0.0.1', PORT), QuietHandler)
+    # Threaded with a long accept queue: dev mode requests ~40 modules at once,
+    # which overflows the single-threaded default server (fetch failures).
+    class Server(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+        request_queue_size = 128
+    server = Server(('127.0.0.1', PORT), QuietHandler)
     server.serve_forever()
 
 

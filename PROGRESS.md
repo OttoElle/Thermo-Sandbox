@@ -431,6 +431,13 @@
 - [x] **Tote Dateien entfernt**: `MaxwellBoltzmann.js`, `StateDiagrams.js`, `Regenerator.js`, `ThermalNode.js` (nie gebündelt/importiert). Veraltete `src/ui/...`-Verweise in `TOOL_CATALOG.md` korrigiert.
 - [x] **Tests**: `tests/test_ui_smoke_cdp.py` (in verify_all) läuft gegen Bundle, Dev-Modus und Standalone-HTML: alle Werkzeuge, Zeichnen aller Elementtypen mit echten Maus-Events, Auswahl/Popup/Kontextmenü, Entf + Undo/Redo, Ansicht-Menü, Wiedergabe; schlägt bei jeder Exception/Konsolenfehler fehl.
 
+### AE. Fix: Gas heizt sich in Box aus leitfähigen Wänden auf (GPU)
+- [x] **Ursache**: Readback-Latenz (2–3 Frames) × kleine Wärmekapazität (Wand C = 80 J/K ≈ 2 Teilchen): Die GPU stieß gegen veraltete Wandtemperaturen, die Wände schossen jedes Frame über (5 K ↔ 10⁵ K), und der 5-K-Boden erzeugte bei jedem Ausschlag Energie. Gemessen: Gas 300 K → ≈ 200.000 K in 20 s; CPU-Pfad stabil.
+- [x] **Thermische Körper auf der GPU**: pro Element mit endlicher Kapazität ein Zähler für noch nicht quittierte Wärme; die GPU rechnet mit `T + Q_offen / C`, die CPU verbucht die Wärme einmal exakt und quittiert dieselben Festkomma-Einheiten (`cs_ack_bodies`). Leitwert-Zähler und Wärme-Verteilpuffer entfallen.
+- [x] **Implizit pro Stoß** (`α / (1 + α·1,5·kB/C)`) gegen Überschwingen innerhalb eines Substeps; **5-K-Boden ohne Energieerzeugung** (Defizit bleibt als Wärmeschuld stehen, wird mit hochgeladen).
+- [x] **Ergebnis**: Box mit C = 80: 300 K stabil, Energiedrift 0,003 %; Extremfall C = 10, Leitfähigkeit 1: 305 K stabil. Kein messbarer Performance-Unterschied.
+- [x] **Tests**: Abschnitt 15 in `test_gpu_compute_cdp.py` (GPU + CPU, Readbacks nur alle 4 Frames wie in der App; auf dem alten Code: 218.000 K → rot). UI-Smoke-Test nutzt einen Server mit Threads (sporadische Fetch-Fehler im Dev-Modus).
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)

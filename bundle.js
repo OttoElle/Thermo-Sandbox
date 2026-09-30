@@ -568,7 +568,11 @@ class Wall {
       this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
       this.conductanceAccumulator = 0;
-      if (this.temperature < 5) this.temperature = 5;
+      // Floor at 5 K: the deficit stays as heat owed, so clamping creates no energy
+      if (this.temperature < 5) {
+        this.heatAccumulator = (this.temperature - 5) * this.heatCapacity;
+        this.temperature = 5;
+      }
     }
 
     if (dt > 0 && this.length > 0) {
@@ -798,7 +802,11 @@ class Piston {
       this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
       this.conductanceAccumulator = 0;
-      if (this.temperature < 5) this.temperature = 5;
+      // Floor at 5 K: the deficit stays as heat owed, so clamping creates no energy
+      if (this.temperature < 5) {
+        this.heatAccumulator = (this.temperature - 5) * this.heatCapacity;
+        this.temperature = 5;
+      }
     }
 
     if (!this.isActive) {
@@ -1531,7 +1539,11 @@ class ThermalBlock {
       this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
       this.conductanceAccumulator = 0;
-      if (this.temperature < 5) this.temperature = 5;
+      // Floor at 5 K: the deficit stays as heat owed, so clamping creates no energy
+      if (this.temperature < 5) {
+        this.heatAccumulator = (this.temperature - 5) * this.heatCapacity;
+        this.temperature = 5;
+      }
     }
   }
 
@@ -1722,7 +1734,11 @@ class RegeneratorMatrix {
         this.temperatures[i] += this.heatAccumulators[i] / (sliceCapacity + this.conductanceAccumulators[i]);
         this.heatAccumulators[i] = 0;
         this.conductanceAccumulators[i] = 0;
-        if (this.temperatures[i] < 5) this.temperatures[i] = 5;
+        // Floor at 5 K: the deficit stays as heat owed, so clamping creates no energy
+        if (this.temperatures[i] < 5) {
+          this.heatAccumulators[i] = (this.temperatures[i] - 5) * sliceCapacity;
+          this.temperatures[i] = 5;
+        }
       }
     }
 
@@ -2125,7 +2141,11 @@ class ThrottleValve {
       this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
       this.conductanceAccumulator = 0;
-      if (this.temperature < 5) this.temperature = 5;
+      // Floor at 5 K: the deficit stays as heat owed, so clamping creates no energy
+      if (this.temperature < 5) {
+        this.heatAccumulator = (this.temperature - 5) * this.heatCapacity;
+        this.temperature = 5;
+      }
     }
 
     if (dt > 0 && this.length > 0) {
@@ -3016,8 +3036,8 @@ const GPU_LAYOUT = (() => {
     MAX_THERMAL_ZONES: 16, // heat exchangers + regenerator matrices
     MAX_SLICES: 512,       // thermal zone temperature slots (regenerator slices)
     ZONE_WORDS: 12,
-    WALL_EV_STRIDE: 10,    // impulseFront, impulseBack, heatIn, heatOut, conductance (each lo,hi)
-    SLICE_EV_STRIDE: 6,    // heatIn, heatOut, conductance (each lo,hi)
+    WALL_EV_STRIDE: 8,     // impulseFront, impulseBack, heatIn, heatOut (each lo,hi)
+    SLICE_EV_STRIDE: 4,    // heatIn, heatOut (each lo,hi)
     TELEM_SCALARS: 12,     // N, KE, vx+, vx-, vy+, vy-, mvx+, mvx-, mvy+, mvy-, m, |v|
     HIST_BINS: 64,
     HIST_BIN_WIDTH: 10,    // px/s per histogram bin
@@ -3025,9 +3045,12 @@ const GPU_LAYOUT = (() => {
     V_SCALE: 16,
     MV_SCALE: 4,
     M_SCALE: 64,
-    EV_SCALE: 16,
-    G_SCALE: 256           // coupling conductance (alpha * 1.5 kB per wall hit, alpha * kB per volume exchange)
+    EV_SCALE: 16
   };
+  // Thermal bodies: finite-capacity elements whose temperature the GPU reads
+  // (walls/piston/throttle/block owners, then regenerator slices). See BODY_HEAT_BASE.
+  L.SLICE_BODY_BASE = L.MAX_WALLS;
+  L.MAX_BODIES = L.MAX_WALLS + L.MAX_SLICES;
   // Counters: [wall events][slice heat] are cleared on every readback; the rest persists.
   L.SLICE_HEAT_BASE = L.MAX_WALLS * L.WALL_EV_STRIDE;
   L.SINK_ABS_BASE = L.SLICE_HEAT_BASE + L.MAX_SLICES * L.SLICE_EV_STRIDE;
@@ -3035,7 +3058,13 @@ const GPU_LAYOUT = (() => {
   L.COMPACT_IDX = L.REG_QUOTA_BASE + L.MAX_REGULATORS;
   L.SUBSTEP_IDX = L.COMPACT_IDX + 1; // index of the running substep within a frame
   L.DEAD_IDX = L.SUBSTEP_IDX + 1;    // dead particles scattered to the tail this substep
-  L.COUNTER_WORDS = L.DEAD_IDX + 1;
+  // Heat per thermal body recorded on the GPU but not yet folded into the
+  // temperature the CPU uploads (i32, EV_SCALE fixed point). The CPU acknowledges
+  // what it applied (aux ack words, subtracted by cs_ack_bodies at frame start),
+  // so T_body + unacknowledged / C is the body's current temperature despite the
+  // readback latency. Without it, small-capacity walls oscillate and gain energy.
+  L.BODY_HEAT_BASE = L.DEAD_IDX + 1;
+  L.COUNTER_WORDS = L.BODY_HEAT_BASE + L.MAX_BODIES;
 
   // Cell-sorted grid: hash table of 2 words per bucket [start, count], sized
   // per frame to the next power of two >= 2 * particles (multiple of SCAN_BLOCK).
@@ -3045,13 +3074,15 @@ const GPU_LAYOUT = (() => {
   L.MAX_SCAN_BLOCKS = L.MAX_GRID_TABLE / L.SCAN_BLOCK;
 
   // Aux buffer: [thermal slice temperatures (f32 bits)][wall grid ranges][wall index list]
+  //   [per thermal body: 1 / heat capacity (f32 bits, 0 = fixed temperature), heat ack (i32)]
   L.MAX_WALL_GRID_DIM = 128;
   L.MAX_WALL_CELLS = L.MAX_WALL_GRID_DIM * L.MAX_WALL_GRID_DIM;
   L.MAX_WALL_REFS = 65536;
   L.WALL_GRID_MARGIN = 24;   // px: max particle radius + move per substep served by the grid
   L.AUX_RANGE_BASE = L.MAX_SLICES;
   L.AUX_LIST_BASE = L.AUX_RANGE_BASE + 2 * L.MAX_WALL_CELLS;
-  L.AUX_WORDS = L.AUX_LIST_BASE + L.MAX_WALL_REFS;
+  L.AUX_BODY_BASE = L.AUX_LIST_BASE + L.MAX_WALL_REFS;
+  L.AUX_WORDS = L.AUX_BODY_BASE + 2 * L.MAX_BODIES;
 
   L.ZONE_SINK_BASE = 0;
   L.ZONE_REG_BASE = L.MAX_SINKS;
@@ -3088,7 +3119,7 @@ struct Particle {
 struct WallData {
   p1: vec2f, p2: vec2f, normal: vec2f, thickness: f32,
   isOpen: u32, wallType: u32, allowedDir: f32,
-  temperature: f32, conductivity: f32, vel: vec2f, pad: vec2f,
+  temperature: f32, conductivity: f32, vel: vec2f, body: u32, pad: f32,
 };
 
 // Axis-aligned zone shared by sinks, regulators, sensor chambers and thermal
@@ -3111,6 +3142,10 @@ const NO_INDEX: u32 = 0xFFFFFFFFu;
 const DEAD_IDX: u32 = ${L.DEAD_IDX}u;
 const AUX_RANGE_BASE: u32 = ${L.AUX_RANGE_BASE}u;
 const AUX_LIST_BASE: u32 = ${L.AUX_LIST_BASE}u;
+const AUX_BODY_BASE: u32 = ${L.AUX_BODY_BASE}u;
+const BODY_HEAT_BASE: u32 = ${L.BODY_HEAT_BASE}u;
+const SLICE_BODY_BASE: u32 = ${L.SLICE_BODY_BASE}u;
+const MAX_BODIES: u32 = ${L.MAX_BODIES}u;
 const MAX_PER_CELL: u32 = 64u;
 const ZONE_THERMAL_BASE: u32 = ${L.ZONE_THERMAL_BASE}u;
 const SINK_ABS_BASE: u32 = ${L.SINK_ABS_BASE}u;
@@ -3133,7 +3168,6 @@ const V_SCALE: f32 = ${L.V_SCALE}.0;
 const MV_SCALE: f32 = ${L.MV_SCALE}.0;
 const M_SCALE: f32 = ${L.M_SCALE}.0;
 const EV_SCALE: f32 = ${L.EV_SCALE}.0;
-const G_SCALE: f32 = ${L.G_SCALE}.0;
 // Per-particle fixed-point cap: WG_SIZE * FX_MAX must stay below 2^32 so a
 // workgroup-local u32 accumulator can never overflow.
 const FX_MAX: f32 = 6.0e7;
@@ -3199,22 +3233,40 @@ fn addStat64(idx: u32, v: u32) {
   if (old > 0xFFFFFFFFu - v) { atomicAdd(&stats[idx + 1u], 1u); }
 }
 
-// \`front\`: the particle is on the side the wall normal points to.
-// Heat (signed, split into in/out channels) plus coupling conductance at \`base\`.
-fn recordHeat(base: u32, heatIntoElement: f32, conductance: f32) {
-  if (heatIntoElement > 0.0) {
-    addCounter64(base, fx(heatIntoElement, EV_SCALE));
-  } else if (heatIntoElement < 0.0) {
-    addCounter64(base + 2u, fx(-heatIntoElement, EV_SCALE));
-  }
-  if (conductance > 0.0) { addCounter64(base + 4u, fx(conductance, G_SCALE)); }
+// Current temperature of a thermal body: the CPU-uploaded temperature plus the
+// heat recorded since, which the CPU has not folded in yet (readback latency).
+fn bodyInvCapacity(body: u32) -> f32 {
+  if (body >= MAX_BODIES) { return 0.0; }
+  return bitcast<f32>(aux[AUX_BODY_BASE + 2u * body]);
 }
 
-fn recordWallEvent(wallIdx: u32, impulse: f32, heatIntoWall: f32, conductance: f32, front: bool) {
+fn bodyTemperature(uploaded: f32, body: u32) -> f32 {
+  let invC = bodyInvCapacity(body);
+  if (invC == 0.0) { return uploaded; }
+  let pending = f32(bitcast<i32>(atomicLoad(&counters[BODY_HEAT_BASE + body]))) / EV_SCALE;
+  return max(0.0, uploaded + pending * invC);
+}
+
+// Heat (signed, split into in/out channels) at \`base\`; the same fixed-point
+// amount goes into the body's unacknowledged heat so both stay consistent.
+fn recordHeat(base: u32, heatIntoElement: f32, body: u32) {
+  if (heatIntoElement > 0.0) {
+    let q = fx(heatIntoElement, EV_SCALE);
+    addCounter64(base, q);
+    if (body < MAX_BODIES) { atomicAdd(&counters[BODY_HEAT_BASE + body], q); }
+  } else if (heatIntoElement < 0.0) {
+    let q = fx(-heatIntoElement, EV_SCALE);
+    addCounter64(base + 2u, q);
+    if (body < MAX_BODIES) { atomicSub(&counters[BODY_HEAT_BASE + body], q); }
+  }
+}
+
+// \`front\`: the particle is on the side the wall normal points to.
+fn recordWallEvent(wallIdx: u32, impulse: f32, heatIntoWall: f32, body: u32, front: bool) {
   let base = wallIdx * WALL_EV_STRIDE;
   let imp = fx(impulse, EV_SCALE);
   if (imp > 0u) { addCounter64(base + select(2u, 0u, front), imp); }
-  recordHeat(base + 4u, heatIntoWall, conductance);
+  recordHeat(base + 4u, heatIntoWall, body);
 }
 
 // Reflects a particle off a (possibly moving, possibly conductive) wall and
@@ -3226,22 +3278,23 @@ fn wallBounce(vel: vec2f, mass: f32, n: vec2f, wallIdx: u32) -> vec2f {
   if (vn >= 0.0) { return vel; }
   var v = vel - 2.0 * vn * n;
   var heatIntoWall = 0.0;
-  var conductance = 0.0;
   if (w.conductivity > 0.0) {
     let curSpeedSq = dot(v, v);
     if (curSpeedSq > 0.001) {
       // Wall hits sample the flux-weighted distribution, whose mean energy in 2D is
       // 1.5 kB T (not kB T), so the target is 1.5 kB T_wall; otherwise gas in contact
       // with a wall would settle at T_wall / 1.5.
-      let targetSpeedSq = (3.0 * KB * w.temperature) / mass;
-      let alpha = min(1.0, w.conductivity * 0.8);
+      let targetSpeedSq = (3.0 * KB * bodyTemperature(w.temperature, w.body)) / mass;
+      // Implicit in the wall temperature (it already responds to this exchange),
+      // so a wall with a capacity of a few particles cannot overshoot.
+      let alpha0 = min(1.0, w.conductivity * 0.8);
+      let alpha = alpha0 / (1.0 + alpha0 * 1.5 * KB * bodyInvCapacity(w.body));
       let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
       v *= sqrt(blendSq / curSpeedSq);
       heatIntoWall = 0.5 * mass * (curSpeedSq - blendSq);
-      conductance = alpha * 1.5 * KB;
     }
   }
-  recordWallEvent(wallIdx, 2.0 * mass * (-vn), heatIntoWall, conductance, dot(n, w.normal) > 0.0);
+  recordWallEvent(wallIdx, 2.0 * mass * (-vn), heatIntoWall, w.body, dot(n, w.normal) > 0.0);
   return v;
 }
 
@@ -3649,13 +3702,15 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     if (z.direction == 1u) { frac = (p.pos.x - z.minPos.x) / max(z.maxPos.x - z.minPos.x, 1e-3); }
     let slice = min(u32(clamp(frac, 0.0, 0.9999) * f32(sliceCount)), sliceCount - 1u);
     let slot = z.maxCount + slice;
-    let targetSpeedSq = (2.0 * KB * max(5.0, bitcast<f32>(aux[slot]))) / max(0.01, p.mass);
-    let alpha = min(1.0, z.filterTemperature * 6.0 * params.dt);
+    let body = select(MAX_BODIES, SLICE_BODY_BASE + slot, z.pad0 != 0u);
+    let targetSpeedSq = (2.0 * KB * max(5.0, bodyTemperature(bitcast<f32>(aux[slot]), body))) / max(0.01, p.mass);
+    let alpha0 = min(1.0, z.filterTemperature * 6.0 * params.dt);
+    let alpha = alpha0 / (1.0 + alpha0 * KB * bodyInvCapacity(body));
     let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
     if (blendSq > 0.0) {
       p.vel *= sqrt(blendSq / curSpeedSq);
       if (z.pad0 != 0u) {
-        recordHeat(SLICE_HEAT_BASE + slot * SLICE_EV_STRIDE, 0.5 * p.mass * (curSpeedSq - blendSq), alpha * KB);
+        recordHeat(SLICE_HEAT_BASE + slot * SLICE_EV_STRIDE, 0.5 * p.mass * (curSpeedSq - blendSq), body);
       }
     }
   }
@@ -3794,6 +3849,16 @@ fn cs_telemetry(@builtin(global_invocation_id) global_id: vec3u,
   }
 }
 
+// Frame start: removes the heat the CPU has folded into the uploaded body
+// temperatures from the unacknowledged per-body heat (see BODY_HEAT_BASE).
+@compute @workgroup_size(64)
+fn cs_ack_bodies(@builtin(global_invocation_id) id: vec3u) {
+  let b = id.x;
+  if (b >= MAX_BODIES) { return; }
+  let ack = aux[AUX_BODY_BASE + 2u * b + 1u];
+  if (ack != 0u) { atomicSub(&counters[BODY_HEAT_BASE + b], ack); }
+}
+
 // Runs once after each substep so moving walls know how far they have advanced.
 @compute @workgroup_size(1)
 fn cs_advance_substep() {
@@ -3852,6 +3917,7 @@ const PIPELINE_BINDINGS = {
   integrate: [0, 1, 2, 3, 4, 5, 6, 7, 8],
   telemetry: [0, 1, 7, 9],
   advance: [8],
+  ackBodies: [6, 8],
   compact: [0, 1, 2, 8],
   compactTail: [0, 2, 8]
 };
@@ -3917,6 +3983,12 @@ class ParticleGPUCompute {
     this._zoneF32 = new Float32Array(this._zoneData);
     this._zoneU32 = new Uint32Array(this._zoneData);
     this._thermalTemps = new Float32Array(GPU_LAYOUT.MAX_SLICES);
+    // Thermal bodies: [1 / heat capacity, heat ack] per body (see GPU_LAYOUT.BODY_HEAT_BASE)
+    this._bodyData = new ArrayBuffer(GPU_LAYOUT.MAX_BODIES * 8);
+    this._bodyF32 = new Float32Array(this._bodyData);
+    this._bodyI32 = new Int32Array(this._bodyData);
+    this._bodyAck = new Int32Array(GPU_LAYOUT.MAX_BODIES); // heat applied on the CPU, not yet acknowledged
+    this._bodyAckUploaded = false;
     // Wall broadphase grid (see _updateWallGrid); W = 0 means test every wall
     this._wallGrid = { W: 0, H: 0, cell: 1, originX: 0, originY: 0, globalCount: 0 };
     this._wallGridSignature = null;
@@ -3974,6 +4046,7 @@ class ParticleGPUCompute {
       integrate: makePipe('cs_integrate'),
       telemetry: makePipe('cs_telemetry'),
       advance: makePipe('cs_advance_substep'),
+      ackBodies: makePipe('cs_ack_bodies'),
       compact: makePipe('cs_compact'),
       compactTail: makePipe('cs_compact_tail')
     };
@@ -4034,6 +4107,45 @@ class ParticleGPUCompute {
     if (this.isSupported) {
       this.device.queue.writeBuffer(this.countersBuffer, 0, new Uint8Array(this._eventBytes));
     }
+    this.resetBodies();
+  }
+
+  // New body assignment: the event counters and the unacknowledged heat refer
+  // to the old one, so both start over.
+  resetThermalBodies() {
+    if (this.isSupported) {
+      this.device.queue.writeBuffer(this.countersBuffer, 0, new Uint8Array(this._eventBytes));
+    }
+    this.resetBodies();
+  }
+
+  // Drops all unacknowledged body heat (epoch change or new body assignment).
+  resetBodies() {
+    this._bodyAck.fill(0);
+    this._bodyAckUploaded = false;
+    if (this.isSupported) {
+      this.device.queue.writeBuffer(this.countersBuffer, GPU_LAYOUT.BODY_HEAT_BASE * 4,
+        new Uint8Array(GPU_LAYOUT.MAX_BODIES * 4));
+    }
+  }
+
+  // Heat (EV_SCALE fixed-point units, as read from the event counters) that the
+  // CPU has folded into a body's temperature; subtracted on the GPU next step.
+  ackBodyHeat(body, units) {
+    if (body >= 0 && body < GPU_LAYOUT.MAX_BODIES) this._bodyAck[body] = (this._bodyAck[body] + units) | 0;
+  }
+
+  // Per-frame upload of 1 / heat capacity per thermal body (0: fixed temperature)
+  // together with the pending heat acknowledgements.
+  uploadBodies(invCapacity) {
+    if (!this.isSupported) return;
+    const n = GPU_LAYOUT.MAX_BODIES;
+    for (let b = 0; b < n; b++) {
+      this._bodyF32[2 * b] = invCapacity[b] || 0;
+      this._bodyI32[2 * b + 1] = this._bodyAck[b];
+    }
+    this.device.queue.writeBuffer(this.auxBuffer, GPU_LAYOUT.AUX_BODY_BASE * 4, this._bodyData);
+    this._bodyAckUploaded = true;
   }
 
   reset() {
@@ -4041,7 +4153,9 @@ class ParticleGPUCompute {
     this._bumpEpoch();
   }
 
-  uploadWalls(walls) {
+  // `bodies[i]`: thermal body of segment i, or -1 (fixed temperature / none);
+  // `temperatures[i]` overrides the segment temperature (true body temperature).
+  uploadWalls(walls, bodies = null, temperatures = null) {
     if (!this.isSupported || !walls) return;
     const count = Math.min(walls.length, this.maxWalls);
     if (count !== this.wallCount) this._bumpEpoch();
@@ -4073,11 +4187,11 @@ class ParticleGPUCompute {
       u32[ptr + 8] = typeCode;
 
       f32[ptr + 9] = w.allowedDirection !== undefined ? w.allowedDirection : 1.0;
-      f32[ptr + 10] = w.temperature !== undefined ? w.temperature : 300.0;
+      f32[ptr + 10] = temperatures ? temperatures[i] : (w.temperature !== undefined ? w.temperature : 300.0);
       f32[ptr + 11] = w.conductivity !== undefined ? w.conductivity : 0.0;
       f32[ptr + 12] = w.vel ? w.vel.x : (w.velX || 0);
       f32[ptr + 13] = w.vel ? w.vel.y : (w.velY || 0);
-      f32[ptr + 14] = 0;
+      u32[ptr + 14] = bodies && bodies[i] >= 0 ? bodies[i] : 0xFFFFFFFF;
       f32[ptr + 15] = 0;
       ptr += 16;
     }
@@ -4232,7 +4346,11 @@ class ParticleGPUCompute {
         continue;
       }
       this.regeneratorSlotBase[i] = slot;
-      for (let k = 0; k < slices; k++) temps[slot + k] = reg.temperatures[k];
+      // True slice temperature: heat left in the accumulator is a deficit below the 5 K floor
+      const sliceCapacity = Math.max(1, reg.heatCapacity / slices);
+      for (let k = 0; k < slices; k++) {
+        temps[slot + k] = reg.temperatures[k] + ((reg.heatAccumulators && reg.heatAccumulators[k]) || 0) / sliceCapacity;
+      }
       const axis = reg.orientation === 'horizontal' ? 0 : 1;
       this._writeThermalZone(zone++, reg, axis, slices, reg.conductivity || 0.7, slot, true);
       slot += slices;
@@ -4389,6 +4507,11 @@ class ParticleGPUCompute {
       pass.setBindGroup(0, bg[name]);
       pass.dispatchWorkgroups(workgroups);
     };
+    if (this._bodyAckUploaded) {
+      dispatch('ackBodies', Math.ceil(GPU_LAYOUT.MAX_BODIES / GPU_LAYOUT.WG));
+      this._bodyAck.fill(0);
+      this._bodyAckUploaded = false;
+    }
     for (let s = 0; s < effectiveSubSteps; s++) {
       // Cell-sorted grid: count -> prefix scan -> scatter into `other` in bucket order
       dispatch('clearCells', cellWorkgroups);
@@ -4646,17 +4769,21 @@ class Engine {
     // GPU-mode transient state. While simulating on the GPU, `this.particles`
     // holds the edit-time particle set only; live state stays in VRAM.
     this._deferToGPU = false;
-    // GPU exchange data per wall segment / thermal slice. Measured impulse and heat
-    // go into pending buffers that are credited exactly once, drained over the
-    // following frames; the conductance rate makes the heat update implicit.
+    // GPU exchange data per wall segment. Measured impulse goes into pending
+    // buffers that are credited exactly once, drained over the following frames.
+    // Heat is applied to the elements as soon as it is read back and
+    // acknowledged to the GPU per thermal body (see _uploadGPUBodies).
     this._gpuWallPendingFront = new Float64Array(GPU_LAYOUT.MAX_WALLS);  // impulse, particle on +normal side
     this._gpuWallPendingBack = new Float64Array(GPU_LAYOUT.MAX_WALLS);
-    this._gpuWallPendingHeat = new Float64Array(GPU_LAYOUT.MAX_WALLS);
-    this._gpuWallConductanceRate = new Float64Array(GPU_LAYOUT.MAX_WALLS);
-    this._gpuSlicePendingHeat = new Float64Array(GPU_LAYOUT.MAX_SLICES);
-    this._gpuSliceConductanceRate = new Float64Array(GPU_LAYOUT.MAX_SLICES);
     this._gpuDrainTime = 0.016;
     this._gpuWallOwners = [];
+    this._gpuWallBodies = [];       // thermal body per GPU wall segment, -1 = none
+    this._gpuWallTemps = [];        // uploaded temperature per segment (incl. heat deficit)
+    this._gpuBodyRefs = [];         // element per wall-owner body index
+    this._gpuBodyInvC = new Float32Array(GPU_LAYOUT.MAX_BODIES);
+    this._gpuBodyGen = 0;           // bumped when the body assignment changes
+    this._gpuBodySigRefs = [];
+    this._gpuBodySigSlots = [];
     this._gpuRegulatorQuota = new Uint32Array(GPU_LAYOUT.MAX_REGULATORS);
     this._gpuLastEventTime = 0;
     this._gpuDeadSlots = 0;
@@ -5056,17 +5183,15 @@ class Engine {
   _clearGPUEventRates() {
     this._gpuWallPendingFront.fill(0);
     this._gpuWallPendingBack.fill(0);
-    this._gpuWallPendingHeat.fill(0);
-    this._gpuWallConductanceRate.fill(0);
-    this._gpuSlicePendingHeat.fill(0);
-    this._gpuSliceConductanceRate.fill(0);
     this._gpuLastEventTime = this.totalTime;
     this._gpuDeadSlots = 0;
   }
 
   // Flattens every particle-blocking element into GPU wall segments. The
   // parallel `_gpuWallOwners` table ({ kind, ref }) routes the per-segment
-  // momentum and heat measured on the GPU back to the owning element.
+  // momentum and heat measured on the GPU back to the owning element;
+  // `_gpuWallBodies` maps segments to thermal bodies (one per finite-capacity
+  // element, reservoirs have none).
   // `atFrameStart`: piston faces are placed where they were before this
   // frame's piston update; the shader then sweeps them with their velocity.
   getGPUWalls(atFrameStart = false) {
@@ -5130,14 +5255,69 @@ class Engine {
     }
 
     this._gpuWallOwners = owners;
+    const bodyOf = new Map();
+    const bodyRefs = [];
+    this._gpuWallBodies = owners.map(({ kind, ref }) => {
+      if (kind === 'reservoir') return -1;
+      let body = bodyOf.get(ref);
+      if (body === undefined) {
+        body = bodyRefs.length;
+        bodyOf.set(ref, body);
+        bodyRefs.push(ref);
+      }
+      return body;
+    });
+    this._gpuBodyRefs = bodyRefs;
+    // The GPU gets the true body temperature: heat still in the accumulator at
+    // upload time is a deficit below the 5 K display floor (see Wall.update);
+    // hiding it would let the body hand out that energy again.
+    this._gpuWallTemps = owners.map(({ kind, ref }, i) =>
+      (kind === 'reservoir' || !(ref.heatCapacity > 0))
+        ? list[i].temperature
+        : ref.temperature + (ref.heatAccumulator || 0) / ref.heatCapacity);
     return list;
   }
 
   syncWallsToGPU(atFrameStart = false) {
     if (this.gpuCompute && this.useGPUCompute) {
       const gpuWalls = this.getGPUWalls(atFrameStart);
-      this.gpuCompute.uploadWalls(gpuWalls || []);
+      this.gpuCompute.uploadWalls(gpuWalls || [], this._gpuWallBodies, this._gpuWallTemps);
     }
+  }
+
+  // Uploads 1 / heat capacity per thermal body: wall owners (index from
+  // getGPUWalls) and regenerator slices (SLICE_BODY_BASE + temperature slot).
+  // The GPU adds the heat it recorded but the CPU has not applied yet, so it
+  // sees the current body temperature despite the readback latency; without
+  // this, small-capacity elements overshoot every frame and gain energy.
+  _uploadGPUBodies() {
+    const gpu = this.gpuCompute;
+    const refs = this._gpuBodyRefs;
+    const slots = gpu.regeneratorSlotBase;
+    const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+    if (!sameList(refs, this._gpuBodySigRefs) || !sameList(slots, this._gpuBodySigSlots)) {
+      this._gpuBodySigRefs = refs.slice();
+      this._gpuBodySigSlots = slots.slice();
+      this._gpuBodyGen++;
+      gpu.resetThermalBodies();
+    }
+
+    const invC = this._gpuBodyInvC;
+    invC.fill(0);
+    const inverse = (el, capacity) => (capacity > 0 && el.isActive !== false) ? 1 / capacity : 0;
+    for (let b = 0; b < refs.length && b < GPU_LAYOUT.SLICE_BODY_BASE; b++) {
+      invC[b] = inverse(refs[b], refs[b].heatCapacity);
+    }
+    for (let i = 0; i < this.regenerators.length; i++) {
+      const base = slots[i];
+      if (base === undefined || base < 0) continue;
+      const reg = this.regenerators[i];
+      const sliceCapacity = Math.max(1, reg.heatCapacity / reg.sliceCount);
+      for (let k = 0; k < reg.sliceCount; k++) {
+        invC[GPU_LAYOUT.SLICE_BODY_BASE + base + k] = inverse(reg, sliceCapacity);
+      }
+    }
+    gpu.uploadBodies(invC);
   }
 
   // Structural sink sync (sink added/removed/reset): seeds GPU absorption counters.
@@ -5225,6 +5405,7 @@ class Engine {
       regulatorQuota: this._gpuRegulatorQuota
     });
     this._gpuRegulatorQuota.fill(0);
+    this._uploadGPUBodies();
 
     const modelType = (this.simModel === 'lennard_jones') ? 1 : 0;
     gpu.step(dt, this.gravityEnabled, this.gravity, 1.0, this.ambientBounds, 380, this._subStepsFor(dt), modelType);
@@ -5232,8 +5413,8 @@ class Engine {
     this._submitGPUReadback();
   }
 
-  // Feeds GPU-measured momentum and heat back into the CPU-side element
-  // models, spread evenly over frames at the last measured rate.
+  // Feeds GPU-measured momentum back into the CPU-side element models, spread
+  // evenly over frames at the last measured rate.
   _applyGPUEventRates(dt) {
     const f = Math.min(1, dt / Math.max(dt, this._gpuDrainTime));
     const drain = (buf, i) => {
@@ -5243,13 +5424,11 @@ class Engine {
     };
 
     const owners = this._gpuWallOwners;
-    const conductance = this._gpuWallConductanceRate;
     const n = Math.min(owners.length, GPU_LAYOUT.MAX_WALLS);
     for (let i = 0; i < n; i++) {
       const { kind, ref } = owners[i];
       const front = drain(this._gpuWallPendingFront, i);
       const back = drain(this._gpuWallPendingBack, i);
-      const heat = drain(this._gpuWallPendingHeat, i);
       switch (kind) {
         case 'wall':
           ref.accumulatedImpulse += front + back;
@@ -5265,24 +5444,6 @@ class Engine {
           ref.accumulatedImpulseSide2 += back;
           break;
       }
-      // Reservoirs have infinite heat capacity: nothing to accumulate
-      if (kind !== 'reservoir' && (heat !== 0 || conductance[i] > 0)) {
-        ref.addHeat(heat);
-        ref.addConductance(conductance[i] * dt);
-      }
-    }
-
-    const slotBase = this.gpuCompute.regeneratorSlotBase;
-    for (let i = 0; i < this.regenerators.length; i++) {
-      const base = slotBase[i];
-      if (base === undefined || base < 0) continue;
-      const reg = this.regenerators[i];
-      for (let k = 0; k < reg.sliceCount; k++) {
-        const heat = drain(this._gpuSlicePendingHeat, base + k);
-        if (heat === 0) continue;
-        reg.addHeatToSlice(k, heat);
-        reg.addConductanceToSlice(k, this._gpuSliceConductanceRate[base + k] * dt);
-      }
     }
   }
 
@@ -5292,6 +5453,7 @@ class Engine {
     const compact = this._gpuDeadSlots >= deadThreshold;
     const info = {
       simTime: this.totalTime,
+      bodyGen: this._gpuBodyGen,
       regulatorDelta: this.regulators.slice(0, GPU_LAYOUT.MAX_REGULATORS).map(r => r.gpuDelta)
     };
     const promise = gpu.submitReadback({ compact });
@@ -5353,25 +5515,44 @@ class Engine {
       }
     }
 
-    // Wall-segment momentum / heat and regenerator slice heat over the covered sim interval
+    // Wall-segment momentum over the covered sim interval
     const covered = info.simTime - this._gpuLastEventTime;
     this._gpuLastEventTime = info.simTime;
+    const raw = (idx) => ParticleGPUCompute.readU64(counters, idx);
+    const nWalls = this.gpuCompute.wallCount;
     if (covered > 1e-6) {
       this._gpuDrainTime = covered;
-      const read = (idx) => ParticleGPUCompute.readU64(counters, idx) / L.EV_SCALE;
-      const readG = (idx) => ParticleGPUCompute.readU64(counters, idx) / L.G_SCALE;
-      const nWalls = this.gpuCompute.wallCount;
       for (let i = 0; i < nWalls; i++) {
         const b = i * L.WALL_EV_STRIDE;
-        this._gpuWallPendingFront[i] += read(b);
-        this._gpuWallPendingBack[i] += read(b + 2);
-        this._gpuWallPendingHeat[i] += read(b + 4) - read(b + 6);
-        this._gpuWallConductanceRate[i] = readG(b + 8) / covered;
+        this._gpuWallPendingFront[i] += raw(b) / L.EV_SCALE;
+        this._gpuWallPendingBack[i] += raw(b + 2) / L.EV_SCALE;
       }
-      for (let i = 0; i < L.MAX_SLICES; i++) {
-        const b = L.SLICE_HEAT_BASE + i * L.SLICE_EV_STRIDE;
-        this._gpuSlicePendingHeat[i] += read(b) - read(b + 2);
-        this._gpuSliceConductanceRate[i] = readG(b + 4) / covered;
+    }
+
+    // Heat goes straight into the elements (applied at their next update) and
+    // is acknowledged to the GPU in the same fixed-point units it was counted in.
+    const gpu = this.gpuCompute;
+    const ack = info.bodyGen === this._gpuBodyGen;
+    const owners = this._gpuWallOwners;
+    for (let i = 0; i < nWalls && i < owners.length; i++) {
+      const b = i * L.WALL_EV_STRIDE;
+      const units = raw(b + 4) - raw(b + 6);
+      if (units === 0) continue;
+      // Reservoirs have infinite heat capacity: nothing to accumulate
+      if (owners[i].kind !== 'reservoir') owners[i].ref.addHeat(units / L.EV_SCALE);
+      if (ack) gpu.ackBodyHeat(this._gpuWallBodies[i], units);
+    }
+    const slotBase = gpu.regeneratorSlotBase;
+    for (let i = 0; i < this.regenerators.length; i++) {
+      const base = slotBase[i];
+      if (base === undefined || base < 0) continue;
+      const reg = this.regenerators[i];
+      for (let k = 0; k < reg.sliceCount; k++) {
+        const b = L.SLICE_HEAT_BASE + (base + k) * L.SLICE_EV_STRIDE;
+        const units = raw(b) - raw(b + 2);
+        if (units === 0) continue;
+        reg.addHeatToSlice(k, units / L.EV_SCALE);
+        if (ack) gpu.ackBodyHeat(L.SLICE_BODY_BASE + base + k, units);
       }
     }
   }

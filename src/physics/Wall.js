@@ -104,7 +104,11 @@ export class Wall {
       this.temperature += this.heatAccumulator / (this.heatCapacity + this.conductanceAccumulator);
       this.heatAccumulator = 0;
       this.conductanceAccumulator = 0;
-      if (this.temperature < 5) this.temperature = 5;
+      // Floor at 5 K: the deficit stays as heat owed, so clamping creates no energy
+      if (this.temperature < 5) {
+        this.heatAccumulator = (this.temperature - 5) * this.heatCapacity;
+        this.temperature = 5;
+      }
     }
 
     if (dt > 0 && this.length > 0) {

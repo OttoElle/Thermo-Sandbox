@@ -88,7 +88,11 @@ export class RegeneratorMatrix {
         this.temperatures[i] += this.heatAccumulators[i] / (sliceCapacity + this.conductanceAccumulators[i]);
         this.heatAccumulators[i] = 0;
         this.conductanceAccumulators[i] = 0;
-        if (this.temperatures[i] < 5) this.temperatures[i] = 5;
+        // Floor at 5 K: the deficit stays as heat owed, so clamping creates no energy
+        if (this.temperatures[i] < 5) {
+          this.heatAccumulators[i] = (this.temperatures[i] - 5) * sliceCapacity;
+          this.temperatures[i] = 5;
+        }
       }
     }
 

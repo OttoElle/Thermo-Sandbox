@@ -13,6 +13,7 @@ const PIPELINE_BINDINGS = {
   integrate: [0, 1, 2, 3, 4, 5, 6, 7, 8],
   telemetry: [0, 1, 7, 9],
   advance: [8],
+  ackBodies: [6, 8],
   compact: [0, 1, 2, 8],
   compactTail: [0, 2, 8]
 };
@@ -78,6 +79,12 @@ export class ParticleGPUCompute {
     this._zoneF32 = new Float32Array(this._zoneData);
     this._zoneU32 = new Uint32Array(this._zoneData);
     this._thermalTemps = new Float32Array(GPU_LAYOUT.MAX_SLICES);
+    // Thermal bodies: [1 / heat capacity, heat ack] per body (see GPU_LAYOUT.BODY_HEAT_BASE)
+    this._bodyData = new ArrayBuffer(GPU_LAYOUT.MAX_BODIES * 8);
+    this._bodyF32 = new Float32Array(this._bodyData);
+    this._bodyI32 = new Int32Array(this._bodyData);
+    this._bodyAck = new Int32Array(GPU_LAYOUT.MAX_BODIES); // heat applied on the CPU, not yet acknowledged
+    this._bodyAckUploaded = false;
     // Wall broadphase grid (see _updateWallGrid); W = 0 means test every wall
     this._wallGrid = { W: 0, H: 0, cell: 1, originX: 0, originY: 0, globalCount: 0 };
     this._wallGridSignature = null;
@@ -135,6 +142,7 @@ export class ParticleGPUCompute {
       integrate: makePipe('cs_integrate'),
       telemetry: makePipe('cs_telemetry'),
       advance: makePipe('cs_advance_substep'),
+      ackBodies: makePipe('cs_ack_bodies'),
       compact: makePipe('cs_compact'),
       compactTail: makePipe('cs_compact_tail')
     };
@@ -195,6 +203,45 @@ export class ParticleGPUCompute {
     if (this.isSupported) {
       this.device.queue.writeBuffer(this.countersBuffer, 0, new Uint8Array(this._eventBytes));
     }
+    this.resetBodies();
+  }
+
+  // New body assignment: the event counters and the unacknowledged heat refer
+  // to the old one, so both start over.
+  resetThermalBodies() {
+    if (this.isSupported) {
+      this.device.queue.writeBuffer(this.countersBuffer, 0, new Uint8Array(this._eventBytes));
+    }
+    this.resetBodies();
+  }
+
+  // Drops all unacknowledged body heat (epoch change or new body assignment).
+  resetBodies() {
+    this._bodyAck.fill(0);
+    this._bodyAckUploaded = false;
+    if (this.isSupported) {
+      this.device.queue.writeBuffer(this.countersBuffer, GPU_LAYOUT.BODY_HEAT_BASE * 4,
+        new Uint8Array(GPU_LAYOUT.MAX_BODIES * 4));
+    }
+  }
+
+  // Heat (EV_SCALE fixed-point units, as read from the event counters) that the
+  // CPU has folded into a body's temperature; subtracted on the GPU next step.
+  ackBodyHeat(body, units) {
+    if (body >= 0 && body < GPU_LAYOUT.MAX_BODIES) this._bodyAck[body] = (this._bodyAck[body] + units) | 0;
+  }
+
+  // Per-frame upload of 1 / heat capacity per thermal body (0: fixed temperature)
+  // together with the pending heat acknowledgements.
+  uploadBodies(invCapacity) {
+    if (!this.isSupported) return;
+    const n = GPU_LAYOUT.MAX_BODIES;
+    for (let b = 0; b < n; b++) {
+      this._bodyF32[2 * b] = invCapacity[b] || 0;
+      this._bodyI32[2 * b + 1] = this._bodyAck[b];
+    }
+    this.device.queue.writeBuffer(this.auxBuffer, GPU_LAYOUT.AUX_BODY_BASE * 4, this._bodyData);
+    this._bodyAckUploaded = true;
   }
 
   reset() {
@@ -202,7 +249,9 @@ export class ParticleGPUCompute {
     this._bumpEpoch();
   }
 
-  uploadWalls(walls) {
+  // `bodies[i]`: thermal body of segment i, or -1 (fixed temperature / none);
+  // `temperatures[i]` overrides the segment temperature (true body temperature).
+  uploadWalls(walls, bodies = null, temperatures = null) {
     if (!this.isSupported || !walls) return;
     const count = Math.min(walls.length, this.maxWalls);
     if (count !== this.wallCount) this._bumpEpoch();
@@ -234,11 +283,11 @@ export class ParticleGPUCompute {
       u32[ptr + 8] = typeCode;
 
       f32[ptr + 9] = w.allowedDirection !== undefined ? w.allowedDirection : 1.0;
-      f32[ptr + 10] = w.temperature !== undefined ? w.temperature : 300.0;
+      f32[ptr + 10] = temperatures ? temperatures[i] : (w.temperature !== undefined ? w.temperature : 300.0);
       f32[ptr + 11] = w.conductivity !== undefined ? w.conductivity : 0.0;
       f32[ptr + 12] = w.vel ? w.vel.x : (w.velX || 0);
       f32[ptr + 13] = w.vel ? w.vel.y : (w.velY || 0);
-      f32[ptr + 14] = 0;
+      u32[ptr + 14] = bodies && bodies[i] >= 0 ? bodies[i] : 0xFFFFFFFF;
       f32[ptr + 15] = 0;
       ptr += 16;
     }
@@ -393,7 +442,11 @@ export class ParticleGPUCompute {
         continue;
       }
       this.regeneratorSlotBase[i] = slot;
-      for (let k = 0; k < slices; k++) temps[slot + k] = reg.temperatures[k];
+      // True slice temperature: heat left in the accumulator is a deficit below the 5 K floor
+      const sliceCapacity = Math.max(1, reg.heatCapacity / slices);
+      for (let k = 0; k < slices; k++) {
+        temps[slot + k] = reg.temperatures[k] + ((reg.heatAccumulators && reg.heatAccumulators[k]) || 0) / sliceCapacity;
+      }
       const axis = reg.orientation === 'horizontal' ? 0 : 1;
       this._writeThermalZone(zone++, reg, axis, slices, reg.conductivity || 0.7, slot, true);
       slot += slices;
@@ -550,6 +603,11 @@ export class ParticleGPUCompute {
       pass.setBindGroup(0, bg[name]);
       pass.dispatchWorkgroups(workgroups);
     };
+    if (this._bodyAckUploaded) {
+      dispatch('ackBodies', Math.ceil(GPU_LAYOUT.MAX_BODIES / GPU_LAYOUT.WG));
+      this._bodyAck.fill(0);
+      this._bodyAckUploaded = false;
+    }
     for (let s = 0; s < effectiveSubSteps; s++) {
       // Cell-sorted grid: count -> prefix scan -> scatter into `other` in bucket order
       dispatch('clearCells', cellWorkgroups);

@@ -611,6 +611,40 @@ def run_test():
                 const pillarsPenetrated = await countWhere(insidePillar);
                 const pillarBoxEscaped = await countWhere(p => p.pos.x < 97 || p.pos.x > 1103 || p.pos.y < 97 || p.pos.y > 1103);
 
+                // 15. Closed box of small-capacity conductive walls (C = 80 J/K ~ 2 particles):
+                // the GPU readback latency must not make the walls oscillate and heat the gas,
+                // and gas + wall energy (incl. heat owed below the 5 K floor) is conserved.
+                // Readbacks only every 4 frames: about the latency of the real app (run() hides it).
+                const runLagged = async (n) => {
+                    for (let i = 0; i < n; i++) {
+                        E.step(1 / 60);
+                        if (i % 4 === 3) await E.awaitGPUTelemetry();
+                    }
+                    await E.awaitGPUTelemetry();
+                };
+                const condBox = async (gpu, frames) => {
+                    E.clear();
+                    E.ambientBounds = null;
+                    if (gpu) E.enableGPUCompute(window.gpuCompute); else E.disableGPUCompute();
+                    const opt = { conductivity: 0.5, temperature: 300, heatCapacity: 80, thickness: 4 };
+                    const cw = [E.addWall(400, 300, 800, 300, opt), E.addWall(800, 300, 800, 600, opt),
+                                E.addWall(800, 600, 400, 600, opt), E.addWall(400, 600, 400, 300, opt)];
+                    E.spawnGasRaster(400, 300, 400, 300, 1500, 1.0, 300);
+                    E.syncParticlesToGPU();
+                    E.syncWallsToGPU();
+                    const energy = () => E.stats.totalKineticEnergy +
+                        cw.reduce((a, w) => a + w.heatCapacity * w.temperature + w.heatAccumulator, 0);
+                    await runLagged(30);
+                    if (!gpu) E._updateStats();
+                    const e0 = energy();
+                    await runLagged(frames);
+                    if (!gpu) E._updateStats();
+                    return { T: E.stats.systemTemperature, drift: energy() / e0 - 1 };
+                };
+                const condBoxGPU = await condBox(true, 600);
+                const condBoxCPU = await condBox(false, 300);
+                E.enableGPUCompute(window.gpuCompute);
+
                 return {
                     success: true,
                     count: 50000,
@@ -659,6 +693,8 @@ def run_test():
                     gridActive,
                     pillarsPenetrated,
                     pillarBoxEscaped,
+                    condBoxGPU,
+                    condBoxCPU,
                     sampleGpuPos: afterStep[0] ? afterStep[0].pos : null,
                     sampleGpuVel: afterStep[0] ? afterStep[0].vel : null,
                     cpuPos: cpuParticle.pos,
@@ -749,6 +785,11 @@ def run_test():
         assert val.get('gridActive') == True, "Wall broadphase grid was not built for the pillar field"
         assert val.get('pillarsPenetrated') == 0, f"{val.get('pillarsPenetrated')} particles tunneled into closed pillars"
         assert val.get('pillarBoxEscaped') == 0, f"{val.get('pillarBoxEscaped')} particles escaped the box"
+        # CPU: the implicit heat update is not exactly conservative (random walk, no drift)
+        for mode, tol in (('condBoxGPU', 0.01), ('condBoxCPU', 0.03)):
+            box = val.get(mode, {})
+            assert 270 < box.get('T', 0) < 340, f"{mode}: gas in a closed conductive-wall box drifted to T = {box.get('T')} (expected ~300 K)"
+            assert abs(box.get('drift', 1)) < tol, f"{mode}: gas + wall energy not conserved (drift {box.get('drift')})"
 
         print("\nAll 50,000 Particle Zero-Copy GPU Compute, Emitter, Telemetry & Sensor Zone tests PASSED!")
 

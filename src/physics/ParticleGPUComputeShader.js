@@ -14,8 +14,8 @@ export const GPU_LAYOUT = (() => {
     MAX_THERMAL_ZONES: 16, // heat exchangers + regenerator matrices
     MAX_SLICES: 512,       // thermal zone temperature slots (regenerator slices)
     ZONE_WORDS: 12,
-    WALL_EV_STRIDE: 10,    // impulseFront, impulseBack, heatIn, heatOut, conductance (each lo,hi)
-    SLICE_EV_STRIDE: 6,    // heatIn, heatOut, conductance (each lo,hi)
+    WALL_EV_STRIDE: 8,     // impulseFront, impulseBack, heatIn, heatOut (each lo,hi)
+    SLICE_EV_STRIDE: 4,    // heatIn, heatOut (each lo,hi)
     TELEM_SCALARS: 12,     // N, KE, vx+, vx-, vy+, vy-, mvx+, mvx-, mvy+, mvy-, m, |v|
     HIST_BINS: 64,
     HIST_BIN_WIDTH: 10,    // px/s per histogram bin
@@ -23,9 +23,12 @@ export const GPU_LAYOUT = (() => {
     V_SCALE: 16,
     MV_SCALE: 4,
     M_SCALE: 64,
-    EV_SCALE: 16,
-    G_SCALE: 256           // coupling conductance (alpha * 1.5 kB per wall hit, alpha * kB per volume exchange)
+    EV_SCALE: 16
   };
+  // Thermal bodies: finite-capacity elements whose temperature the GPU reads
+  // (walls/piston/throttle/block owners, then regenerator slices). See BODY_HEAT_BASE.
+  L.SLICE_BODY_BASE = L.MAX_WALLS;
+  L.MAX_BODIES = L.MAX_WALLS + L.MAX_SLICES;
   // Counters: [wall events][slice heat] are cleared on every readback; the rest persists.
   L.SLICE_HEAT_BASE = L.MAX_WALLS * L.WALL_EV_STRIDE;
   L.SINK_ABS_BASE = L.SLICE_HEAT_BASE + L.MAX_SLICES * L.SLICE_EV_STRIDE;
@@ -33,7 +36,13 @@ export const GPU_LAYOUT = (() => {
   L.COMPACT_IDX = L.REG_QUOTA_BASE + L.MAX_REGULATORS;
   L.SUBSTEP_IDX = L.COMPACT_IDX + 1; // index of the running substep within a frame
   L.DEAD_IDX = L.SUBSTEP_IDX + 1;    // dead particles scattered to the tail this substep
-  L.COUNTER_WORDS = L.DEAD_IDX + 1;
+  // Heat per thermal body recorded on the GPU but not yet folded into the
+  // temperature the CPU uploads (i32, EV_SCALE fixed point). The CPU acknowledges
+  // what it applied (aux ack words, subtracted by cs_ack_bodies at frame start),
+  // so T_body + unacknowledged / C is the body's current temperature despite the
+  // readback latency. Without it, small-capacity walls oscillate and gain energy.
+  L.BODY_HEAT_BASE = L.DEAD_IDX + 1;
+  L.COUNTER_WORDS = L.BODY_HEAT_BASE + L.MAX_BODIES;
 
   // Cell-sorted grid: hash table of 2 words per bucket [start, count], sized
   // per frame to the next power of two >= 2 * particles (multiple of SCAN_BLOCK).
@@ -43,13 +52,15 @@ export const GPU_LAYOUT = (() => {
   L.MAX_SCAN_BLOCKS = L.MAX_GRID_TABLE / L.SCAN_BLOCK;
 
   // Aux buffer: [thermal slice temperatures (f32 bits)][wall grid ranges][wall index list]
+  //   [per thermal body: 1 / heat capacity (f32 bits, 0 = fixed temperature), heat ack (i32)]
   L.MAX_WALL_GRID_DIM = 128;
   L.MAX_WALL_CELLS = L.MAX_WALL_GRID_DIM * L.MAX_WALL_GRID_DIM;
   L.MAX_WALL_REFS = 65536;
   L.WALL_GRID_MARGIN = 24;   // px: max particle radius + move per substep served by the grid
   L.AUX_RANGE_BASE = L.MAX_SLICES;
   L.AUX_LIST_BASE = L.AUX_RANGE_BASE + 2 * L.MAX_WALL_CELLS;
-  L.AUX_WORDS = L.AUX_LIST_BASE + L.MAX_WALL_REFS;
+  L.AUX_BODY_BASE = L.AUX_LIST_BASE + L.MAX_WALL_REFS;
+  L.AUX_WORDS = L.AUX_BODY_BASE + 2 * L.MAX_BODIES;
 
   L.ZONE_SINK_BASE = 0;
   L.ZONE_REG_BASE = L.MAX_SINKS;
@@ -86,7 +97,7 @@ struct Particle {
 struct WallData {
   p1: vec2f, p2: vec2f, normal: vec2f, thickness: f32,
   isOpen: u32, wallType: u32, allowedDir: f32,
-  temperature: f32, conductivity: f32, vel: vec2f, pad: vec2f,
+  temperature: f32, conductivity: f32, vel: vec2f, body: u32, pad: f32,
 };
 
 // Axis-aligned zone shared by sinks, regulators, sensor chambers and thermal
@@ -109,6 +120,10 @@ const NO_INDEX: u32 = 0xFFFFFFFFu;
 const DEAD_IDX: u32 = ${L.DEAD_IDX}u;
 const AUX_RANGE_BASE: u32 = ${L.AUX_RANGE_BASE}u;
 const AUX_LIST_BASE: u32 = ${L.AUX_LIST_BASE}u;
+const AUX_BODY_BASE: u32 = ${L.AUX_BODY_BASE}u;
+const BODY_HEAT_BASE: u32 = ${L.BODY_HEAT_BASE}u;
+const SLICE_BODY_BASE: u32 = ${L.SLICE_BODY_BASE}u;
+const MAX_BODIES: u32 = ${L.MAX_BODIES}u;
 const MAX_PER_CELL: u32 = 64u;
 const ZONE_THERMAL_BASE: u32 = ${L.ZONE_THERMAL_BASE}u;
 const SINK_ABS_BASE: u32 = ${L.SINK_ABS_BASE}u;
@@ -131,7 +146,6 @@ const V_SCALE: f32 = ${L.V_SCALE}.0;
 const MV_SCALE: f32 = ${L.MV_SCALE}.0;
 const M_SCALE: f32 = ${L.M_SCALE}.0;
 const EV_SCALE: f32 = ${L.EV_SCALE}.0;
-const G_SCALE: f32 = ${L.G_SCALE}.0;
 // Per-particle fixed-point cap: WG_SIZE * FX_MAX must stay below 2^32 so a
 // workgroup-local u32 accumulator can never overflow.
 const FX_MAX: f32 = 6.0e7;
@@ -197,22 +211,40 @@ fn addStat64(idx: u32, v: u32) {
   if (old > 0xFFFFFFFFu - v) { atomicAdd(&stats[idx + 1u], 1u); }
 }
 
-// \`front\`: the particle is on the side the wall normal points to.
-// Heat (signed, split into in/out channels) plus coupling conductance at \`base\`.
-fn recordHeat(base: u32, heatIntoElement: f32, conductance: f32) {
-  if (heatIntoElement > 0.0) {
-    addCounter64(base, fx(heatIntoElement, EV_SCALE));
-  } else if (heatIntoElement < 0.0) {
-    addCounter64(base + 2u, fx(-heatIntoElement, EV_SCALE));
-  }
-  if (conductance > 0.0) { addCounter64(base + 4u, fx(conductance, G_SCALE)); }
+// Current temperature of a thermal body: the CPU-uploaded temperature plus the
+// heat recorded since, which the CPU has not folded in yet (readback latency).
+fn bodyInvCapacity(body: u32) -> f32 {
+  if (body >= MAX_BODIES) { return 0.0; }
+  return bitcast<f32>(aux[AUX_BODY_BASE + 2u * body]);
 }
 
-fn recordWallEvent(wallIdx: u32, impulse: f32, heatIntoWall: f32, conductance: f32, front: bool) {
+fn bodyTemperature(uploaded: f32, body: u32) -> f32 {
+  let invC = bodyInvCapacity(body);
+  if (invC == 0.0) { return uploaded; }
+  let pending = f32(bitcast<i32>(atomicLoad(&counters[BODY_HEAT_BASE + body]))) / EV_SCALE;
+  return max(0.0, uploaded + pending * invC);
+}
+
+// Heat (signed, split into in/out channels) at \`base\`; the same fixed-point
+// amount goes into the body's unacknowledged heat so both stay consistent.
+fn recordHeat(base: u32, heatIntoElement: f32, body: u32) {
+  if (heatIntoElement > 0.0) {
+    let q = fx(heatIntoElement, EV_SCALE);
+    addCounter64(base, q);
+    if (body < MAX_BODIES) { atomicAdd(&counters[BODY_HEAT_BASE + body], q); }
+  } else if (heatIntoElement < 0.0) {
+    let q = fx(-heatIntoElement, EV_SCALE);
+    addCounter64(base + 2u, q);
+    if (body < MAX_BODIES) { atomicSub(&counters[BODY_HEAT_BASE + body], q); }
+  }
+}
+
+// \`front\`: the particle is on the side the wall normal points to.
+fn recordWallEvent(wallIdx: u32, impulse: f32, heatIntoWall: f32, body: u32, front: bool) {
   let base = wallIdx * WALL_EV_STRIDE;
   let imp = fx(impulse, EV_SCALE);
   if (imp > 0u) { addCounter64(base + select(2u, 0u, front), imp); }
-  recordHeat(base + 4u, heatIntoWall, conductance);
+  recordHeat(base + 4u, heatIntoWall, body);
 }
 
 // Reflects a particle off a (possibly moving, possibly conductive) wall and
@@ -224,22 +256,23 @@ fn wallBounce(vel: vec2f, mass: f32, n: vec2f, wallIdx: u32) -> vec2f {
   if (vn >= 0.0) { return vel; }
   var v = vel - 2.0 * vn * n;
   var heatIntoWall = 0.0;
-  var conductance = 0.0;
   if (w.conductivity > 0.0) {
     let curSpeedSq = dot(v, v);
     if (curSpeedSq > 0.001) {
       // Wall hits sample the flux-weighted distribution, whose mean energy in 2D is
       // 1.5 kB T (not kB T), so the target is 1.5 kB T_wall; otherwise gas in contact
       // with a wall would settle at T_wall / 1.5.
-      let targetSpeedSq = (3.0 * KB * w.temperature) / mass;
-      let alpha = min(1.0, w.conductivity * 0.8);
+      let targetSpeedSq = (3.0 * KB * bodyTemperature(w.temperature, w.body)) / mass;
+      // Implicit in the wall temperature (it already responds to this exchange),
+      // so a wall with a capacity of a few particles cannot overshoot.
+      let alpha0 = min(1.0, w.conductivity * 0.8);
+      let alpha = alpha0 / (1.0 + alpha0 * 1.5 * KB * bodyInvCapacity(w.body));
       let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
       v *= sqrt(blendSq / curSpeedSq);
       heatIntoWall = 0.5 * mass * (curSpeedSq - blendSq);
-      conductance = alpha * 1.5 * KB;
     }
   }
-  recordWallEvent(wallIdx, 2.0 * mass * (-vn), heatIntoWall, conductance, dot(n, w.normal) > 0.0);
+  recordWallEvent(wallIdx, 2.0 * mass * (-vn), heatIntoWall, w.body, dot(n, w.normal) > 0.0);
   return v;
 }
 
@@ -647,13 +680,15 @@ fn cs_integrate(@builtin(global_invocation_id) global_id: vec3u) {
     if (z.direction == 1u) { frac = (p.pos.x - z.minPos.x) / max(z.maxPos.x - z.minPos.x, 1e-3); }
     let slice = min(u32(clamp(frac, 0.0, 0.9999) * f32(sliceCount)), sliceCount - 1u);
     let slot = z.maxCount + slice;
-    let targetSpeedSq = (2.0 * KB * max(5.0, bitcast<f32>(aux[slot]))) / max(0.01, p.mass);
-    let alpha = min(1.0, z.filterTemperature * 6.0 * params.dt);
+    let body = select(MAX_BODIES, SLICE_BODY_BASE + slot, z.pad0 != 0u);
+    let targetSpeedSq = (2.0 * KB * max(5.0, bodyTemperature(bitcast<f32>(aux[slot]), body))) / max(0.01, p.mass);
+    let alpha0 = min(1.0, z.filterTemperature * 6.0 * params.dt);
+    let alpha = alpha0 / (1.0 + alpha0 * KB * bodyInvCapacity(body));
     let blendSq = (1.0 - alpha) * curSpeedSq + alpha * targetSpeedSq;
     if (blendSq > 0.0) {
       p.vel *= sqrt(blendSq / curSpeedSq);
       if (z.pad0 != 0u) {
-        recordHeat(SLICE_HEAT_BASE + slot * SLICE_EV_STRIDE, 0.5 * p.mass * (curSpeedSq - blendSq), alpha * KB);
+        recordHeat(SLICE_HEAT_BASE + slot * SLICE_EV_STRIDE, 0.5 * p.mass * (curSpeedSq - blendSq), body);
       }
     }
   }
@@ -790,6 +825,16 @@ fn cs_telemetry(@builtin(global_invocation_id) global_id: vec3u,
       atomicAdd(&stats[t * STAT_TARGET_STRIDE + 2u * TELEM_SCALARS + (c - TELEM_SCALARS)], v);
     }
   }
+}
+
+// Frame start: removes the heat the CPU has folded into the uploaded body
+// temperatures from the unacknowledged per-body heat (see BODY_HEAT_BASE).
+@compute @workgroup_size(64)
+fn cs_ack_bodies(@builtin(global_invocation_id) id: vec3u) {
+  let b = id.x;
+  if (b >= MAX_BODIES) { return; }
+  let ack = aux[AUX_BODY_BASE + 2u * b + 1u];
+  if (ack != 0u) { atomicSub(&counters[BODY_HEAT_BASE + b], ack); }
 }
 
 // Runs once after each substep so moving walls know how far they have advanced.
