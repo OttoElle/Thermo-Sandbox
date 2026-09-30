@@ -203,6 +203,7 @@ export function fitViewToScene() {
   const viewH = view.bottom - view.top - margin * 2;
   const cx = (view.left + view.right) * 0.5;
   const cy = (view.top + view.bottom) * 0.5;
+  if (viewW < 50 || viewH < 50) return; // canvas not laid out yet (hidden window)
   if (!bounds) {
     renderer.setViewport(cx, cy, 1.0);
   } else {

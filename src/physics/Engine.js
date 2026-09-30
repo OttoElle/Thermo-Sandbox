@@ -19,6 +19,14 @@ import { GPU_LAYOUT } from './ParticleGPUComputeShader.js';
 import { ParticleGPUCompute } from './ParticleGPUCompute.js';
 import { KB, WORLD_SIZE, idealGasPressure } from './Constants.js';
 
+// Element class -> Engine list holding its instances (serialization key too).
+const ELEMENT_LISTS = [
+  [Wall, 'walls'], [ThrottleValve, 'throttleValves'], [Piston, 'pistons'], [Reservoir, 'reservoirs'],
+  [SensorZone, 'sensors'], [Emitter, 'emitters'], [Sink, 'sinks'], [Regulator, 'regulators'],
+  [ThermalBlock, 'thermalBlocks'], [HeatExchanger, 'heatExchangers'], [RegeneratorMatrix, 'regenerators'],
+  [TextLabel, 'textLabels'], [ParticleGroup, 'particleGroups']
+];
+
 export class Engine {
   constructor(width = WORLD_SIZE, height = WORLD_SIZE) {
     this.width = width;
@@ -257,6 +265,27 @@ export class Engine {
     this.textLabels.push(l);
     this.elements.push(l);
     return l;
+  }
+
+  // Registers an element instance in its type list and on top of the z-order.
+  addElement(el) {
+    const entry = ELEMENT_LISTS.find(([cls]) => el instanceof cls);
+    if (!entry) return null;
+    this[entry[1]].push(el);
+    this.elements.push(el);
+    if (el instanceof Sink) this.syncSinksToGPU();
+    return el;
+  }
+
+  // Deep copy of an element with a fresh id (not registered yet).
+  cloneElement(el) {
+    const entry = ELEMENT_LISTS.find(([cls]) => el instanceof cls);
+    if (!entry) return null;
+    const data = JSON.parse(JSON.stringify(el.toJSON()));
+    delete data.id;
+    const copy = entry[0].fromJSON(data);
+    if (el.groupId) copy.groupId = el.groupId;
+    return copy;
   }
 
   _randomGaussian(mean = 0, stdDev = 1) {
@@ -1426,6 +1455,7 @@ export class Engine {
       regenerators: this.regenerators.map(r => r.toJSON()),
       textLabels: this.textLabels.map(l => l.toJSON()),
       particleGroups: this.particleGroups.map(g => g.toJSON()),
+      elementOrder: this.elements.map(el => el.id),
       cycleSequencer: this.sequencer ? this.sequencer.exportState() : null,
       particles: this.particles.map(p => ({
         x: p.initialPos.x,
@@ -1475,6 +1505,12 @@ export class Engine {
       ...this.particleGroups,
       ...this.pistons
     ];
+    // Restore the saved z-order (files without it keep the type order).
+    if (Array.isArray(state.elementOrder)) {
+      const rank = new Map(state.elementOrder.map((id, i) => [id, i]));
+      const fallback = state.elementOrder.length;
+      this.elements.sort((a, b) => (rank.get(a.id) ?? fallback) - (rank.get(b.id) ?? fallback));
+    }
 
     if (state.particles) {
       for (let i = 0; i < state.particles.length; i++) {

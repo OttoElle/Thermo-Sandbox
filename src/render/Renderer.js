@@ -44,6 +44,7 @@ export class Renderer {
     this.transformFrame = null;
     this.showItemHandles = true;
     this.hudLabel = null;
+    this.hoverItem = null;
     this.colorByVelocity = true;
     this.snapCursor = null; // { x, y } in world coordinates
 
@@ -265,6 +266,8 @@ export class Renderer {
     // 9.5 Sequencer Action Selection Glow (Subtle Cyan Outline, No Handles)
     if (this.highlightedSequencerItem) {
       this.drawSequencerHighlight(this.highlightedSequencerItem);
+    } else if (this.hoverItem && !(Array.isArray(selectedItems) && selectedItems.includes(this.hoverItem))) {
+      this.drawSequencerHighlight(this.hoverItem, 0.45);
     }
 
     // 10. Draft Previews (Valves, Walls, Rectangles, Marquee Selection)
@@ -280,10 +283,11 @@ export class Renderer {
     ctx.restore();
   }
 
-  drawSequencerHighlight(item) {
+  drawSequencerHighlight(item, alpha = 1) {
     if (!item) return;
     const ctx = this.ctx;
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.shadowColor = '#38bdf8';
     ctx.shadowBlur = 15;
     ctx.strokeStyle = '#38bdf8';

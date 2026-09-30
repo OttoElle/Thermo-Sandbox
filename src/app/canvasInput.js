@@ -20,7 +20,7 @@ import { toolConfigs } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
 import { closeAllMenus } from './menus.js';
 import { updateZoomText } from './playback.js';
-import { createArcWall, createCircleWall, deleteSelectedItems, findItemAt, findItemsInBox, findPistonSnap, getAllGroupItems, moveSelectedItems, toggleGroupSelection } from './selection.js';
+import { createArcWall, createCircleWall, deleteSelectedItems, duplicateSelection, findItemAt, findItemsInBox, findPistonSnap, getAllGroupItems, moveSelectedItems, toggleGroupSelection } from './selection.js';
 import { updatePopupPosition } from './popup.js';
 import { beginTransform, constrainEndpoint, cursorForHit, endTransform, getLinkedEndpoints, hitTestTransform, isTransforming, moveEndpoints, updateTransform } from './transform.js';
 import { openSelectionSizeInput } from './dimensions.js';
@@ -168,72 +168,7 @@ ctxDelete?.addEventListener('click', () => {
 });
 
 ctxDuplicate?.addEventListener('click', () => {
-  if (app.selectedItems.length === 0) return;
-  recordUndoState();
-  const newItems = [];
-  app.selectedItems.forEach(item => {
-    if (item instanceof Wall) {
-      const w = engine.addWall(item.p1.x + 20, item.p1.y + 20, item.p2.x + 20, item.p2.y + 20, {
-        type: item.type, conductivity: item.conductivity, thickness: item.thickness,
-        allowedDirection: item.allowedDirection, triggerPressure: item.triggerPressure,
-        pressureHysteresis: item.pressureHysteresis, reliefMode: item.reliefMode
-      });
-      newItems.push(w);
-    } else if (item instanceof Reservoir) {
-      const r = engine.addReservoir(item.x + 20, item.y + 20, item.width, item.height, {
-        label: item.label, temperature: item.temperature, conductance: item.conductance, isActive: item.isActive
-      });
-      newItems.push(r);
-    } else if (item instanceof HeatExchanger) {
-      const hx = engine.addHeatExchanger(item.x + 20, item.y + 20, item.width, item.height, {
-        temperature: item.temperature, conductivity: item.conductivity, isActive: item.isActive
-      });
-      newItems.push(hx);
-    } else if (item instanceof RegeneratorMatrix) {
-      const reg = engine.addRegeneratorMatrix(item.x + 20, item.y + 20, item.width, item.height, {
-        orientation: item.orientation, sliceCount: item.sliceCount, heatCapacity: item.heatCapacity,
-        conductivity: item.conductivity, axialConductivity: item.axialConductivity,
-        temperatures: [...item.temperatures], isActive: item.isActive
-      });
-      newItems.push(reg);
-    } else if (item instanceof ThermalBlock) {
-      const b = engine.addThermalBlock(item.x + 20, item.y + 20, item.width, item.height, {
-        temperature: item.temperature, heatCapacity: item.heatCapacity, conductivity: item.conductivity, isActive: item.isActive
-      });
-      newItems.push(b);
-    } else if (item instanceof Emitter) {
-      const em = engine.addEmitter(item.x + 20, item.y + 20, item.width, item.height, {
-        rate: item.rate, temperature: item.temperature, mass: item.mass, direction: item.direction, maxParticles: item.maxParticles, enabled: item.enabled
-      });
-      newItems.push(em);
-    } else if (item instanceof Sink) {
-      const sk = engine.addSink(item.x + 20, item.y + 20, item.width, item.height, {
-        absorptionEfficiency: item.absorptionEfficiency, direction: item.direction,
-        maxParticles: item.maxParticles, tempFilterMode: item.tempFilterMode,
-        filterTemperature: item.filterTemperature, isActive: item.isActive
-      });
-      newItems.push(sk);
-    } else if (item instanceof Regulator) {
-      const reg = engine.addRegulator(item.x + 20, item.y + 20, item.width, item.height, {
-        targetCount: item.targetCount, hysteresis: item.hysteresis,
-        temperature: item.temperature, mass: item.mass, rate: item.rate, isActive: item.isActive
-      });
-      newItems.push(reg);
-    } else if (item instanceof ThrottleValve) {
-      const tv = engine.addThrottleValve(item.p1.x + 20, item.p1.y + 20, item.p2.x + 20, item.p2.y + 20, {
-        openRatio: item.openRatio, thickness: item.thickness, conductivity: item.conductivity, temperature: item.temperature, isActive: item.isActive
-      });
-      newItems.push(tv);
-    } else if (item instanceof SensorZone) {
-      const s = engine.addSensor({
-        label: `${item.label} (Copy)`, x: item.x + 20, y: item.y + 20, width: item.width, height: item.height,
-        color: item.color
-      });
-      newItems.push(s);
-    }
-  });
-  app.selectedItems = newItems;
-  updateElementsList();
+  duplicateSelection();
   closeContextMenu();
 });
 
@@ -570,12 +505,14 @@ window.addEventListener('mousemove', (e) => {
     const hitCursor = cursorForHit(hitTestTransform(coords.worldX, coords.worldY));
     if (hitCursor) {
       canvas.style.cursor = hitCursor;
+      renderer.hoverItem = null;
       return;
     }
     const handleHitRadius = 12 / renderer.zoom;
     const overHandle = app.selectedItems.some(it => (it instanceof Wall || it instanceof ThrottleValve || it instanceof Piston) &&
       renderer.getResizeHandles(it).some(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius));
     const itemUnderCursor = findItemAt(coords.worldX, coords.worldY);
+    renderer.hoverItem = itemUnderCursor;
     if (overHandle) {
       canvas.style.cursor = 'move';
     } else if (itemUnderCursor && app.selectedItems.includes(itemUnderCursor)) {
@@ -587,6 +524,7 @@ window.addEventListener('mousemove', (e) => {
     }
   } else if (!pointer.isMouseDown && !pointer.isPanning) {
     canvas.style.cursor = 'crosshair';
+    renderer.hoverItem = null;
   }
 });
 
@@ -851,3 +789,4 @@ export function createFromDrag(s, c) {
 
 // Finish Wall Polygon / Arc
 canvas.addEventListener('dblclick', () => { resetPolygonDraft(); pointer.arcSteps = []; });
+canvas.addEventListener('mouseleave', () => { renderer.hoverItem = null; });

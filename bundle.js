@@ -4733,6 +4733,14 @@ class ParticleGPUCompute {
 
 // --- src/physics/Engine.js ---
 
+// Element class -> Engine list holding its instances (serialization key too).
+const ELEMENT_LISTS = [
+  [Wall, 'walls'], [ThrottleValve, 'throttleValves'], [Piston, 'pistons'], [Reservoir, 'reservoirs'],
+  [SensorZone, 'sensors'], [Emitter, 'emitters'], [Sink, 'sinks'], [Regulator, 'regulators'],
+  [ThermalBlock, 'thermalBlocks'], [HeatExchanger, 'heatExchangers'], [RegeneratorMatrix, 'regenerators'],
+  [TextLabel, 'textLabels'], [ParticleGroup, 'particleGroups']
+];
+
 class Engine {
   constructor(width = WORLD_SIZE, height = WORLD_SIZE) {
     this.width = width;
@@ -4971,6 +4979,27 @@ class Engine {
     this.textLabels.push(l);
     this.elements.push(l);
     return l;
+  }
+
+  // Registers an element instance in its type list and on top of the z-order.
+  addElement(el) {
+    const entry = ELEMENT_LISTS.find(([cls]) => el instanceof cls);
+    if (!entry) return null;
+    this[entry[1]].push(el);
+    this.elements.push(el);
+    if (el instanceof Sink) this.syncSinksToGPU();
+    return el;
+  }
+
+  // Deep copy of an element with a fresh id (not registered yet).
+  cloneElement(el) {
+    const entry = ELEMENT_LISTS.find(([cls]) => el instanceof cls);
+    if (!entry) return null;
+    const data = JSON.parse(JSON.stringify(el.toJSON()));
+    delete data.id;
+    const copy = entry[0].fromJSON(data);
+    if (el.groupId) copy.groupId = el.groupId;
+    return copy;
   }
 
   _randomGaussian(mean = 0, stdDev = 1) {
@@ -6140,6 +6169,7 @@ class Engine {
       regenerators: this.regenerators.map(r => r.toJSON()),
       textLabels: this.textLabels.map(l => l.toJSON()),
       particleGroups: this.particleGroups.map(g => g.toJSON()),
+      elementOrder: this.elements.map(el => el.id),
       cycleSequencer: this.sequencer ? this.sequencer.exportState() : null,
       particles: this.particles.map(p => ({
         x: p.initialPos.x,
@@ -6189,6 +6219,12 @@ class Engine {
       ...this.particleGroups,
       ...this.pistons
     ];
+    // Restore the saved z-order (files without it keep the type order).
+    if (Array.isArray(state.elementOrder)) {
+      const rank = new Map(state.elementOrder.map((id, i) => [id, i]));
+      const fallback = state.elementOrder.length;
+      this.elements.sort((a, b) => (rank.get(a.id) ?? fallback) - (rank.get(b.id) ?? fallback));
+    }
 
     if (state.particles) {
       for (let i = 0; i < state.particles.length; i++) {
@@ -7024,6 +7060,7 @@ class Renderer {
     this.transformFrame = null;
     this.showItemHandles = true;
     this.hudLabel = null;
+    this.hoverItem = null;
     this.colorByVelocity = true;
     this.snapCursor = null; // { x, y } in world coordinates
 
@@ -7245,6 +7282,8 @@ class Renderer {
     // 9.5 Sequencer Action Selection Glow (Subtle Cyan Outline, No Handles)
     if (this.highlightedSequencerItem) {
       this.drawSequencerHighlight(this.highlightedSequencerItem);
+    } else if (this.hoverItem && !(Array.isArray(selectedItems) && selectedItems.includes(this.hoverItem))) {
+      this.drawSequencerHighlight(this.hoverItem, 0.45);
     }
 
     // 10. Draft Previews (Valves, Walls, Rectangles, Marquee Selection)
@@ -7260,10 +7299,11 @@ class Renderer {
     ctx.restore();
   }
 
-  drawSequencerHighlight(item) {
+  drawSequencerHighlight(item, alpha = 1) {
     if (!item) return;
     const ctx = this.ctx;
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.shadowColor = '#38bdf8';
     ctx.shadowBlur = 15;
     ctx.strokeStyle = '#38bdf8';
@@ -12490,6 +12530,7 @@ function fitViewToScene() {
   const viewH = view.bottom - view.top - margin * 2;
   const cx = (view.left + view.right) * 0.5;
   const cy = (view.top + view.bottom) * 0.5;
+  if (viewW < 50 || viewH < 50) return; // canvas not laid out yet (hidden window)
   if (!bounds) {
     renderer.setViewport(cx, cy, 1.0);
   } else {
@@ -13938,72 +13979,7 @@ ctxDelete?.addEventListener('click', () => {
 });
 
 ctxDuplicate?.addEventListener('click', () => {
-  if (app.selectedItems.length === 0) return;
-  recordUndoState();
-  const newItems = [];
-  app.selectedItems.forEach(item => {
-    if (item instanceof Wall) {
-      const w = engine.addWall(item.p1.x + 20, item.p1.y + 20, item.p2.x + 20, item.p2.y + 20, {
-        type: item.type, conductivity: item.conductivity, thickness: item.thickness,
-        allowedDirection: item.allowedDirection, triggerPressure: item.triggerPressure,
-        pressureHysteresis: item.pressureHysteresis, reliefMode: item.reliefMode
-      });
-      newItems.push(w);
-    } else if (item instanceof Reservoir) {
-      const r = engine.addReservoir(item.x + 20, item.y + 20, item.width, item.height, {
-        label: item.label, temperature: item.temperature, conductance: item.conductance, isActive: item.isActive
-      });
-      newItems.push(r);
-    } else if (item instanceof HeatExchanger) {
-      const hx = engine.addHeatExchanger(item.x + 20, item.y + 20, item.width, item.height, {
-        temperature: item.temperature, conductivity: item.conductivity, isActive: item.isActive
-      });
-      newItems.push(hx);
-    } else if (item instanceof RegeneratorMatrix) {
-      const reg = engine.addRegeneratorMatrix(item.x + 20, item.y + 20, item.width, item.height, {
-        orientation: item.orientation, sliceCount: item.sliceCount, heatCapacity: item.heatCapacity,
-        conductivity: item.conductivity, axialConductivity: item.axialConductivity,
-        temperatures: [...item.temperatures], isActive: item.isActive
-      });
-      newItems.push(reg);
-    } else if (item instanceof ThermalBlock) {
-      const b = engine.addThermalBlock(item.x + 20, item.y + 20, item.width, item.height, {
-        temperature: item.temperature, heatCapacity: item.heatCapacity, conductivity: item.conductivity, isActive: item.isActive
-      });
-      newItems.push(b);
-    } else if (item instanceof Emitter) {
-      const em = engine.addEmitter(item.x + 20, item.y + 20, item.width, item.height, {
-        rate: item.rate, temperature: item.temperature, mass: item.mass, direction: item.direction, maxParticles: item.maxParticles, enabled: item.enabled
-      });
-      newItems.push(em);
-    } else if (item instanceof Sink) {
-      const sk = engine.addSink(item.x + 20, item.y + 20, item.width, item.height, {
-        absorptionEfficiency: item.absorptionEfficiency, direction: item.direction,
-        maxParticles: item.maxParticles, tempFilterMode: item.tempFilterMode,
-        filterTemperature: item.filterTemperature, isActive: item.isActive
-      });
-      newItems.push(sk);
-    } else if (item instanceof Regulator) {
-      const reg = engine.addRegulator(item.x + 20, item.y + 20, item.width, item.height, {
-        targetCount: item.targetCount, hysteresis: item.hysteresis,
-        temperature: item.temperature, mass: item.mass, rate: item.rate, isActive: item.isActive
-      });
-      newItems.push(reg);
-    } else if (item instanceof ThrottleValve) {
-      const tv = engine.addThrottleValve(item.p1.x + 20, item.p1.y + 20, item.p2.x + 20, item.p2.y + 20, {
-        openRatio: item.openRatio, thickness: item.thickness, conductivity: item.conductivity, temperature: item.temperature, isActive: item.isActive
-      });
-      newItems.push(tv);
-    } else if (item instanceof SensorZone) {
-      const s = engine.addSensor({
-        label: `${item.label} (Copy)`, x: item.x + 20, y: item.y + 20, width: item.width, height: item.height,
-        color: item.color
-      });
-      newItems.push(s);
-    }
-  });
-  app.selectedItems = newItems;
-  updateElementsList();
+  duplicateSelection();
   closeContextMenu();
 });
 
@@ -14340,12 +14316,14 @@ window.addEventListener('mousemove', (e) => {
     const hitCursor = cursorForHit(hitTestTransform(coords.worldX, coords.worldY));
     if (hitCursor) {
       canvas.style.cursor = hitCursor;
+      renderer.hoverItem = null;
       return;
     }
     const handleHitRadius = 12 / renderer.zoom;
     const overHandle = app.selectedItems.some(it => (it instanceof Wall || it instanceof ThrottleValve || it instanceof Piston) &&
       renderer.getResizeHandles(it).some(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius));
     const itemUnderCursor = findItemAt(coords.worldX, coords.worldY);
+    renderer.hoverItem = itemUnderCursor;
     if (overHandle) {
       canvas.style.cursor = 'move';
     } else if (itemUnderCursor && app.selectedItems.includes(itemUnderCursor)) {
@@ -14357,6 +14335,7 @@ window.addEventListener('mousemove', (e) => {
     }
   } else if (!pointer.isMouseDown && !pointer.isPanning) {
     canvas.style.cursor = 'crosshair';
+    renderer.hoverItem = null;
   }
 });
 
@@ -14621,6 +14600,7 @@ function createFromDrag(s, c) {
 
 // Finish Wall Polygon / Arc
 canvas.addEventListener('dblclick', () => { resetPolygonDraft(); pointer.arcSteps = []; });
+canvas.addEventListener('mouseleave', () => { renderer.hoverItem = null; });
 
 
 // --- src/app/selection.js ---
@@ -14990,8 +14970,56 @@ function findItemsInBox(x1, y1, x2, y2) {
   return items;
 }
 
+// Copies the selection (offset by one grid step): groups stay groups,
+// spawner groups bring their particles, sensors keep bindings to copied pistons.
+function duplicateSelection() {
+  if (app.isSimulating) return;
+  const sources = app.selectedItems.filter(i => !(i instanceof Particle));
+  if (sources.length === 0) return;
+  recordUndoState();
+  const offset = renderer.gridSize || 20;
+  const groupMap = new Map();
+  const pistonMap = new Map();
+  const copies = [];
+  for (const src of sources) {
+    const copy = engine.cloneElement(src);
+    if (!copy) continue;
+    if (src.groupId) {
+      if (!groupMap.has(src.groupId)) groupMap.set(src.groupId, src.groupId.replace(/[^_]+$/, '') + Math.random().toString(36).substring(2, 9));
+      copy.groupId = groupMap.get(src.groupId);
+    }
+    if (src instanceof Piston) pistonMap.set(src.id, copy);
+    if (src instanceof SensorZone) copy.label = `${src.label} (Copy)`;
+    if (src instanceof ParticleGroup) {
+      copy.x += offset;
+      copy.y += offset;
+      engine.particles.filter(p => p.groupId === src.id).forEach(p => {
+        engine.addParticle(p.pos.x + offset, p.pos.y + offset, p.vel.x, p.vel.y, p.mass, copy.id);
+      });
+    }
+    engine.addElement(copy);
+    copies.push(copy);
+  }
+  moveItems(copies, offset, offset);
+  copies.forEach(c => {
+    if (c instanceof SensorZone && c.pistonBinding) {
+      const piston = pistonMap.get(c.pistonBinding.pistonId);
+      if (piston) c.bindToPiston(piston, c.pistonBinding.edge, true);
+      else c.unbindPiston();
+    }
+  });
+  engine.particles.forEach(p => { p.selected = false; });
+  app.selectedItems = copies;
+  engine.syncParticlesToGPU();
+  updateElementsList();
+}
+
 function moveSelectedItems(dx, dy) {
-  app.selectedItems.forEach(item => {
+  moveItems(app.selectedItems, dx, dy);
+}
+
+function moveItems(items, dx, dy) {
+  items.forEach(item => {
     if (item instanceof Wall) {
       item.p1.x += dx; item.p1.y += dy; item.p2.x += dx; item.p2.y += dy;
       item._updateGeometry();

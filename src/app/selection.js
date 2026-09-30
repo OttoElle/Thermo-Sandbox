@@ -11,6 +11,7 @@ import { HeatExchanger } from '../physics/HeatExchanger.js';
 import { RegeneratorMatrix } from '../physics/RegeneratorMatrix.js';
 import { TextLabel } from '../physics/TextLabel.js';
 import { ParticleGroup } from '../physics/ParticleGroup.js';
+import { Particle } from '../physics/Particle.js';
 import { Regulator } from '../physics/Regulator.js';
 import { ThrottleValve } from '../physics/ThrottleValve.js';
 import { btnFlipH, btnFlipV, btnGroupSelected, btnRotate90 } from './dom.js';
@@ -386,8 +387,56 @@ export function findItemsInBox(x1, y1, x2, y2) {
   return items;
 }
 
+// Copies the selection (offset by one grid step): groups stay groups,
+// spawner groups bring their particles, sensors keep bindings to copied pistons.
+export function duplicateSelection() {
+  if (app.isSimulating) return;
+  const sources = app.selectedItems.filter(i => !(i instanceof Particle));
+  if (sources.length === 0) return;
+  recordUndoState();
+  const offset = renderer.gridSize || 20;
+  const groupMap = new Map();
+  const pistonMap = new Map();
+  const copies = [];
+  for (const src of sources) {
+    const copy = engine.cloneElement(src);
+    if (!copy) continue;
+    if (src.groupId) {
+      if (!groupMap.has(src.groupId)) groupMap.set(src.groupId, src.groupId.replace(/[^_]+$/, '') + Math.random().toString(36).substring(2, 9));
+      copy.groupId = groupMap.get(src.groupId);
+    }
+    if (src instanceof Piston) pistonMap.set(src.id, copy);
+    if (src instanceof SensorZone) copy.label = `${src.label} (Copy)`;
+    if (src instanceof ParticleGroup) {
+      copy.x += offset;
+      copy.y += offset;
+      engine.particles.filter(p => p.groupId === src.id).forEach(p => {
+        engine.addParticle(p.pos.x + offset, p.pos.y + offset, p.vel.x, p.vel.y, p.mass, copy.id);
+      });
+    }
+    engine.addElement(copy);
+    copies.push(copy);
+  }
+  moveItems(copies, offset, offset);
+  copies.forEach(c => {
+    if (c instanceof SensorZone && c.pistonBinding) {
+      const piston = pistonMap.get(c.pistonBinding.pistonId);
+      if (piston) c.bindToPiston(piston, c.pistonBinding.edge, true);
+      else c.unbindPiston();
+    }
+  });
+  engine.particles.forEach(p => { p.selected = false; });
+  app.selectedItems = copies;
+  engine.syncParticlesToGPU();
+  updateElementsList();
+}
+
 export function moveSelectedItems(dx, dy) {
-  app.selectedItems.forEach(item => {
+  moveItems(app.selectedItems, dx, dy);
+}
+
+function moveItems(items, dx, dy) {
+  items.forEach(item => {
     if (item instanceof Wall) {
       item.p1.x += dx; item.p1.y += dy; item.p2.x += dx; item.p2.y += dy;
       item._updateGeometry();

@@ -21,8 +21,9 @@ Querschnitt für alle Phasen: dieselben Design-Tokens (`css/variables.css`), ein
 - [x] **Nach dem Laden eines Presets/Profils wird die Ansicht nicht auf den Inhalt eingepasst**: Die Szene liegt oben links halb unter dem Header. Nötig ist „Zoom to Fit“ beim Laden und als Befehl.
 - [ ] **Linke Sidebar**: flache Liste „Wall 1…10“, Gruppen heißen „Group (1 items)“ (Grammatik, kein Name, kein Typ), Labels werden abgeschnitten.
 - [ ] **Charts** zeigen nur ein rollendes Fenster (`historyTemp.shift()` in `Engine.js`/`SensorZone.js`), der Verlauf geht verloren.
-- [ ] **Duplizieren** (Ctrl+D) verliert die Gruppe (dupliziertes Rechteck = lose Wände), kopiert keine Kolben, Texte und Spawner und nur einen Teil der Eigenschaften. Besser generisch über `toJSON()`/`fromJSON()` (Phase 2/3).
+- [x] **Duplizieren** (Ctrl+D) verliert die Gruppe (dupliziertes Rechteck = lose Wände), kopiert keine Kolben, Texte und Spawner und nur einen Teil der Eigenschaften. Besser generisch über `toJSON()`/`fromJSON()` (Phase 2/3).
 - [ ] Undo von „New Canvas“ stellt die Elemente wieder her, nicht aber den Projektnamen.
+- [ ] **Element-Popup** (`popup.js`) ist toter Code: `openPopup` wird nirgends aufgerufen, und seine Löschen-Buttons würden das Element nicht aus `engine.elements` entfernen. In Phase 3 entfernen oder durch das Schema ersetzen.
 - [ ] Ohne WebGPU werden gar keine Partikel gezeichnet (es gibt nur das Fehler-Overlay). Das ist so gewollt, aber im Hinterkopf behalten.
 - [ ] Tippfehler/Begriffe: „Ressavoir“ (Thermal Reservoir), „Sink“ im Thermal-Ribbon vs. „Absorber“ bei den Partikeln (zwei verschiedene Dinge heißen fast gleich).
 
@@ -52,22 +53,20 @@ Querschnitt für alle Phasen: dieselben Design-Tokens (`css/variables.css`), ein
   - *Help*: Guide · Shortcuts · About
 - [x] Menüeinträge zeigen Häkchen/Shortcut rechtsbündig. Deaktivierte Einträge werden ausgegraut (z. B. Ungroup ohne Gruppe).
 
-## Phase 2 — Canvas-Interaktion & Formen (größter QoL-Hebel)
+## Phase 2 — Canvas-Interaktion & Formen ✅ (2026-09-30, PROGRESS AG)
 
-- [ ] **Werkzeug-Modi trennen**: Solange ein Erstellungswerkzeug aktiv ist (Spawner, Emitter, …), dürfen Klicks keine Nodes/Elemente greifen. Magnet-Snap auf Nodes bleibt als reines Snapping ohne Bearbeiten erhalten. Bearbeiten nur mit Select, alternativ mit gedrückter Modifier-Taste.
-- [ ] **Geschlossene Formen als zusammenhängendes Objekt** (Rechteck, Polygon, Kreis, Bogen):
-  - **Entscheidung** Datenmodell. Empfehlung: Die Segmente bleiben einzelne `Wall`s (GPU-Pfad, Owner-Tabelle und Wärmekopplung bleiben unverändert). Die Gruppe bekommt einen *Shape-Datensatz* (`kind`, geordnete Vertexliste, `closed`), der gemeinsame Ecken verknüpft. Wird eine Ecke gezogen, bewegen sich beide anliegenden Segmente mit, sodass die Form nicht mehr aufreißen kann.
-  - „Break Shape“ (Kontextmenü/Sidebar) löst die Form in freie Segmente auf; das ist die optionale Trennung.
-  - Serialisierung + Undo; alte Dateien ohne Shape-Datensatz laden weiter als lose Segmente.
-- [ ] **Bounding-Box mit Resize-Griffen** für Formen und Rechteck-Elemente: Hover über Kante/Ecke zeigt den passenden Resize-Cursor (↔ ↕ ⤡), Shift = proportional, Alt = vom Zentrum aus. Kreise skalieren nur den Radius.
-- [ ] **Freie Rotation**: Rotations-Griff über der Box (oder Hover knapp außerhalb einer Ecke → Rotations-Cursor). Rastet in 15°-Schritten ein, Shift = frei; Winkel wird live angezeigt. Rotate-Button im Ribbon bleibt für 90°. Inspector bekommt ein Feld „Rotation“.
-- [ ] **Bemaßung statt Kästchenzählen** (ersetzt ein Measure-Tool):
-  - *Beim Zeichnen*: Live-Maße für **alle** Werkzeuge (heute nur teilweise, Wände/Polylinien gar nicht): Länge + Winkel pro Segment, B × H, Radius, jeweils in derselben Einheit wie in den Eigenschaften.
-  - *Direkteingabe beim Zeichnen* (CAD-Stil): Nach dem ersten Klick einfach Zahlen tippen, z. B. `200` ↵ für die Länge, `200,120` ↵ für B × H, `Tab` wechselt zwischen Länge und Winkel. Das Segment wird exakt gesetzt.
-  - *Nach dem Zeichnen*: Geometrie-Felder im Inspector/Popup (X, Y, B, H bzw. Radius, Segmentlänge, Rotation), editierbar, mit Undo. Kommt aus dem Schema von Phase 3; für Phase 2 reicht vorerst Position/Größe für Formen.
-  - *Bei Auswahl*: Maße an der Bounding-Box einblenden, beim Resizen live aktualisiert.
-- [ ] Hover-Feedback allgemein: Hervorhebung des Elements unter der Maus, Cursor je Aktion (move/resize/rotate/vertex).
-- [ ] Prüfen, welche Elemente (Kolben, Ventile, Sensor-Zonen, Blöcke) sinnvoll rotierbar sind. Auf der Physikseite sind Kolben/Rechteckzonen achsparallel; hier ggf. nur 90° erlauben und das im UI klar machen.
+- [x] **Werkzeug-Modi getrennt**: Griffe, Vertices und der Transformationsrahmen reagieren nur mit dem Select-Tool. Der Magnet-Snap auf Wandenden bleibt beim Zeichnen erhalten.
+- [x] **Geschlossene Formen hängen zusammen**. Datenmodell (entschieden): Die Segmente bleiben einzelne `Wall`s mit `groupId`. Eine Ecke zu ziehen bewegt alle Segment-Enden derselben Gruppe an diesem Punkt; `Ctrl` löst ein einzelnes Ende. Die Formart steckt im vorhandenen Präfix der Gruppen-ID (`g_rect_`, `g_circle_`, `g_arc_`, `g_poly_`). „Ungroup“ ist das Auftrennen. Alte Dateien funktionieren unverändert.
+- [x] **Transformationsrahmen** (`src/app/transform.js`): 8 Griffe, Rahmenkanten, passende Resize-Cursor, Shift = proportional, Alt = vom Zentrum, Kanten rasten auf das Grid.
+- [x] **Freie Rotation**: Griff über dem Rahmen oder das Band knapp außerhalb einer Ecke (Rotations-Cursor). 15°-Raster, Shift = frei, Winkel live. Auswahlen mit achsparallelen Elementen (Kolben, Zonen, Blöcke, Texte) drehen nur in 90°-Schritten, inklusive Kolbenhub, Orientierung und Richtung von Emitter/Absorber.
+- [x] **Bemaßung** (`src/app/dimensions.js`):
+  - Live-Maße für alle Werkzeuge.
+  - Klick-Klick-Zeichnen und Zahleneingabe während des Zeichnens (`W, H`, `Länge, Winkel`, `R`).
+  - Maß-Label am Rahmen bzw. an einer einzelnen Wand: Ein Klick darauf öffnet die Eingabe, vorausgefüllt und per Undo rückgängig machbar.
+  - Offen für Phase 3: X/Y- und Rotationsfelder im Inspector; hier ist das Schema die richtige Stelle.
+- [x] **Hover-Feedback**: Das Element unter der Maus wird dezent hervorgehoben, dazu Cursor je Aktion (move, resize, rotate, text).
+- [x] **Duplizieren generisch** über `Engine.cloneElement()`/`addElement()`: Gruppen bleiben Gruppen, Kolben, Texte und Spawner (mit Partikeln) werden mitkopiert, und Sensoren binden sich an den kopierten Kolben.
+- [x] Nebenbei: Die Z-Reihenfolge geht bei Undo, Speichern und Laden nicht mehr verloren (`elementOrder` im Zustand).
 
 ## Phase 3 — Einheitliche Eigenschaften & linke Sidebar
 

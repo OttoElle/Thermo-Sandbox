@@ -460,10 +460,31 @@
   - Speichern während einer Simulation speichert den Aufbau (Start-Snapshot) statt eines Mischzustands.
 - [x] **Tests**: Der UI-Smoke-Test prüft zusätzlich Ctrl+A/G/Shift+G, alle View-/Simulation-Menüeinträge, den Shortcut-Dialog, `F` sowie die Undo-Fähigkeit von New Canvas und Revert.
 
+### AG. UI-Polish Phase 2: Canvas-Interaktion, Formen, Bemaßung (Claude Code)
+- [x] **Transformationsrahmen** (`src/app/transform.js`):
+  - Skalieren über 8 Griffe oder die Rahmenkanten (Shift proportional, Alt vom Zentrum, Grid-Snap).
+  - Drehen über den Griff oder die Ecken (15°-Raster, Shift frei). Achsparallele Elemente drehen in 90°-Schritten; Kolbenhub, Orientierung und Richtungen werden mitgedreht.
+  - Die Geometrie wird immer aus dem Snapshot beim Drag-Start berechnet, damit sich keine Rundungsfehler aufaddieren.
+- [x] **Zusammenhängende Wandformen**: Ecken-Drag bewegt alle Segment-Enden derselben Gruppe am Punkt (`getLinkedEndpoints`); `Ctrl` löst ein Ende; Shift rastet den Winkel eines Endpunkts in 15°-Schritten.
+- [x] **Werkzeug-Modi**: Griffe und Vertices nur mit dem Select-Tool. Vorher griff z. B. der Spawner die Ecke eines Rechtecks und zerstörte die Form.
+- [x] **Bemaßung** (`src/app/dimensions.js`):
+  - Live-Maße für jedes Werkzeug.
+  - Klick-Klick-Zeichnen; die Erzeugung liegt jetzt in `createFromDrag()`.
+  - Zahleneingabe beim Zeichnen.
+  - Klickbare Maß-Labels an Auswahlrahmen und einzelnen Wänden zum exakten Setzen.
+- [x] **Hover-Hervorhebung** und Cursor je Aktion.
+- [x] **Duplizieren** generisch (`Engine.cloneElement`/`addElement`): Gruppen, Kolben, Texte, Spawner inkl. Partikel, Sensor-Bindungen an kopierte Kolben.
+- [x] **Bugfixes**:
+  - `ReferenceError` beim Schließen einer Polylinie per Klick auf den Startpunkt und bei Shift+Klick zum Erweitern der Auswahl.
+  - Z-Reihenfolge ging bei Undo/Laden verloren (neu: `elementOrder`).
+  - `rotateSelection90` behandelte Kolben-Mittelpunkte wie linke obere Ecken; ersetzt durch die Rahmen-Rotation.
+  - Zoom to Fit bei noch nicht ausgelegtem Canvas.
+- [x] **Tests**: Der UI-Smoke-Test prüft Ecken-Drag (Form bleibt geschlossen), Rahmen-Resize, Rotation, den Spawner auf einer Ecke und Klick-Klick mit getippter Größe.
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)
-- [ ] **UI-Polish Phase 2** (Canvas-Interaktion & Formen, Bemaßung) laut `UI_POLISH_PLAN.md`.
+- [ ] **UI-Polish Phase 3** (einheitliches Eigenschafts-Schema für Tool-Dialog, Sidebar, Sequencer; Element-Baum) laut `UI_POLISH_PLAN.md`.
 - [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren.
 - [ ] **Weitere Performance**: Pair-Suche dominiert weiterhin (Kernel-Profil siehe Abschnitt AC); Telemetrie-/Upload-Overhead pro Frame (`getGPUWalls()` allokiert jedes Frame).
 - [ ] **Große App-Module weiter zerlegen**: `canvasInput.js` (~850 Zeilen, ein großer mousedown/mouseup-Handler pro Werkzeug), `toolPanel.js` und `inspector.js` (je ~650, pro Elementtyp duplizierte Formulare) könnten pro Elementtyp datengetrieben werden.
