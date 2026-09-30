@@ -476,7 +476,8 @@ class Wall {
     // Thermal property: Wärmeleitfähigkeit kappa in [0, 1]
     this.conductivity = options.conductivity !== undefined ? options.conductivity : 0.0; // 0 = vollständig isolierend
     this.temperature = options.temperature !== undefined ? options.temperature : 300;
-    this.heatCapacity = options.heatCapacity !== undefined ? options.heatCapacity : 80;
+    // ~11 particles (kB = 35 J/K each): smaller walls flicker strongly from single hits
+    this.heatCapacity = options.heatCapacity !== undefined ? options.heatCapacity : 400;
     this.heatAccumulator = 0;
     this.conductanceAccumulator = 0;
 
