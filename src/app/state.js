@@ -29,10 +29,12 @@ export const pointer = {
   draggingHandle: null,
   isMovingSelection: false,
   moveStartWorld: null,
+  pendingStart: null, // first corner of a click-move-click drawing
 };
 
 export function resetPolygonDraft() {
   pointer.polygonPoints = [];
   pointer.polygonGroupId = null;
   pointer.polygonWalls = [];
+  pointer.pendingStart = null;
 }

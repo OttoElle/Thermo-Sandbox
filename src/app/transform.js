@@ -10,8 +10,9 @@ import { ThrottleValve } from '../physics/ThrottleValve.js';
 import { ParticleGroup } from '../physics/ParticleGroup.js';
 import { Particle } from '../physics/Particle.js';
 import { engine, renderer } from './core.js';
-import { app } from './state.js';
+import { app, pointer } from './state.js';
 import { snapToGrid } from './fields.js';
+import { formatLengthAngle } from './dimensions.js';
 
 const FRAME_PAD_PX = 8;       // frame drawn this far outside the content
 const HANDLE_HIT_PX = 7;
@@ -143,6 +144,31 @@ export function getTransformFrame() {
   };
 }
 
+export function frameLabelPos(frame) {
+  return { x: (frame.x0 + frame.x1) * 0.5, y: frame.y1 + 16 / renderer.zoom, text: frame.label };
+}
+
+// Approximate hit box of a HUD label (renderer draws 10.5 px monospace).
+function hitsLabel(label, wx, wy) {
+  const z = renderer.zoom;
+  const halfW = (label.text.length * 6.4 + 12) / z / 2;
+  return Math.abs(wx - label.x) < halfW && Math.abs(wy - label.y) < 9 / z;
+}
+
+// Length/angle label of a single selected segment, or of the endpoint being dragged.
+export function getSelectionHud() {
+  if (app.isSimulating || app.activeTool !== 'select') return null;
+  const drag = pointer.draggingHandle;
+  if (drag?.links) {
+    const p = drag.item[drag.handleId];
+    return { x: p.x, y: p.y - 22 / renderer.zoom, text: segmentLabel(drag.item) };
+  }
+  const targets = transformTargets();
+  if (targets.length !== 1 || itemKind(targets[0]) !== 'segment') return null;
+  const it = targets[0];
+  return { x: (it.p1.x + it.p2.x) * 0.5, y: (it.p1.y + it.p2.y) * 0.5 + 18 / renderer.zoom, text: segmentLabel(it) };
+}
+
 function shapeBadge(gid, n) {
   const names = { rect: 'Rectangle', circle: 'Circle', arc: 'Arc', poly: 'Polygon', group: 'Group' };
   return `${names[shapeKind(gid)]} (${n})`;
@@ -159,9 +185,12 @@ function formatAngle(rad) {
 // ---------------------------------------------------------------------------
 // Returns { kind: 'resize', handle } | { kind: 'rotate' } | { kind: 'vertex', item, handleId } | null
 export function hitTestTransform(wx, wy) {
+  const z = renderer.zoom;
+  const hud = getSelectionHud();
+  if (hud && hitsLabel(hud, wx, wy)) return { kind: 'label' };
   const frame = getTransformFrame();
   if (!frame) return null;
-  const z = renderer.zoom;
+  if (frame.label && hitsLabel(frameLabelPos(frame), wx, wy)) return { kind: 'label' };
   const hit = HANDLE_HIT_PX / z;
   const candidates = [];
   const d = (x, y) => Math.hypot(wx - x, wy - y);
@@ -197,6 +226,7 @@ const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
 
 export function cursorForHit(hit) {
   if (!hit) return null;
+  if (hit.kind === 'label') return 'text';
   if (hit.kind === 'rotate') return ROTATE_CURSOR;
   if (hit.kind === 'vertex') return 'move';
   return { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' }[hit.handle];
@@ -387,6 +417,44 @@ function rotateSnapshots(snaps, cx, cy, angle) {
 }
 
 // ---------------------------------------------------------------------------
+// Exact dimensions (typed on the size label)
+// ---------------------------------------------------------------------------
+// Current values for the size input: "W, H" of the frame or "L, angle" of a segment.
+export function getSelectionSizeText() {
+  const seg = getSingleSegment();
+  if (seg) {
+    const dx = seg.p2.x - seg.p1.x, dy = seg.p2.y - seg.p1.y;
+    return `${Math.round(Math.hypot(dx, dy))}, ${Math.round(-Math.atan2(dy, dx) * 1800 / Math.PI) / 10}`;
+  }
+  const b = getContentBounds();
+  return b ? `${Math.round(b.width)}, ${Math.round(b.height)}` : '';
+}
+
+// Resizes the selection to w x h, anchored at its top-left corner.
+export function setSelectionSize(w, h) {
+  const targets = transformTargets();
+  const b = getContentBounds(targets);
+  if (!b) return;
+  const sx = b.width > 0.5 && w > 0 ? w / b.width : 1;
+  const sy = b.height > 0.5 && h > 0 ? h / b.height : 1;
+  const map = (x, y) => ({ x: b.minX + (x - b.minX) * sx, y: b.minY + (y - b.minY) * sy });
+  active = { mode: 'resize', snaps: targets.map(snapshotItem) };
+  active.snaps.forEach(s => scaleItem(s, map, sx, sy));
+  endTransform();
+}
+
+// Sets a single segment to length / angle (degrees), keeping p1 in place.
+export function setSegmentGeometry(item, length, angleDeg) {
+  const a = angleDeg * Math.PI / 180;
+  moveEndpoints(getLinkedEndpoints(item, 'p2'), item.p1.x + Math.cos(a) * length, item.p1.y - Math.sin(a) * length);
+}
+
+export function getSingleSegment() {
+  const targets = transformTargets();
+  return (targets.length === 1 && itemKind(targets[0]) === 'segment') ? targets[0] : null;
+}
+
+// ---------------------------------------------------------------------------
 // Linked vertices of wall shapes
 // ---------------------------------------------------------------------------
 // All segment endpoints of the same group sitting on the dragged vertex.
@@ -421,9 +489,7 @@ export function constrainEndpoint(item, handleId, x, y) {
   return { x: other.x + Math.cos(a) * len, y: other.y + Math.sin(a) * len };
 }
 
-// Length / angle readout for a segment (angle 0° = pointing right, CCW positive on screen).
+// Length / angle readout for a segment.
 export function segmentLabel(item) {
-  const dx = item.p2.x - item.p1.x, dy = item.p2.y - item.p1.y;
-  const deg = Math.round(-Math.atan2(dy, dx) * 180 / Math.PI * 10) / 10;
-  return `${Math.round(Math.hypot(dx, dy))} px  ${deg}°`;
+  return formatLengthAngle(item.p2.x - item.p1.x, item.p2.y - item.p1.y);
 }

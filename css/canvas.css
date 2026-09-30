@@ -291,3 +291,24 @@ body.sequencer-expanded .floating-vel-legend {
   margin-bottom: 20px;
 }
 
+
+/* Typed dimension input while drawing (dimensions.js) */
+.dim-input {
+  position: fixed;
+  z-index: 60;
+  display: none;
+  width: 140px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--accent-green);
+  background-color: rgba(15, 23, 42, 0.95);
+  color: var(--text-main);
+  font: 600 11.5px 'JetBrains Mono', monospace;
+  outline: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  user-select: text;
+}
+
+.dim-input::placeholder {
+  color: var(--text-dim);
+}

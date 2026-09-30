@@ -11,6 +11,7 @@ import { deleteSelectedItems, groupSelection, ungroupSelection } from './selecti
 import { closePopup } from './popup.js';
 import { hideSplashScreen } from './splash.js';
 import { fitViewToScene } from './playback.js';
+import { hasActiveDraft, openDimensionInput } from './dimensions.js';
 
 // Keyboard Shortcuts
 window.addEventListener('keydown', (e) => {
@@ -36,6 +37,13 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.altKey) return;
+
+  // Typing a number while drawing enters exact dimensions
+  if (/^[0-9.]$/.test(e.key) && hasActiveDraft()) {
+    e.preventDefault();
+    openDimensionInput(e.key);
+    return;
+  }
 
   if (e.key === '?') {
     openShortcutsModal();

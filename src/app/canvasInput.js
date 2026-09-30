@@ -22,7 +22,8 @@ import { closeAllMenus } from './menus.js';
 import { updateZoomText } from './playback.js';
 import { createArcWall, createCircleWall, deleteSelectedItems, findItemAt, findItemsInBox, findPistonSnap, getAllGroupItems, moveSelectedItems, toggleGroupSelection } from './selection.js';
 import { updatePopupPosition } from './popup.js';
-import { beginTransform, constrainEndpoint, cursorForHit, endTransform, getLinkedEndpoints, hitTestTransform, isTransforming, moveEndpoints, segmentLabel, updateTransform } from './transform.js';
+import { beginTransform, constrainEndpoint, cursorForHit, endTransform, getLinkedEndpoints, hitTestTransform, isTransforming, moveEndpoints, updateTransform } from './transform.js';
+import { openSelectionSizeInput } from './dimensions.js';
 
 // Snapping to Existing Wall Endpoints (Magnetic Snap)
 function findSnapVertex(posWorld, maxDist = 14) {
@@ -42,6 +43,43 @@ function findSnapVertex(posWorld, maxDist = 14) {
     }
   }
   return closest;
+}
+
+// Tools that create their element from a drag (or click-move-click).
+const DRAG_TOOLS = new Set(['piston', 'solid_res', 'reservoir', 'heat_exchanger', 'regenerator', 'matrix', 'storage_block',
+  'solidblock', 'valve', 'throttle_valve', 'gas', 'regulator', 'emitter', 'sink', 'sensor']);
+
+export function isDragTool() {
+  if (app.activeTool === 'wall') return toolConfigs.wall.shape === 'rect' || toolConfigs.wall.shape === 'circle';
+  return DRAG_TOOLS.has(app.activeTool);
+}
+
+// Adds the next polyline vertex; landing on the start vertex closes the shape.
+export function placePolylinePoint(pt) {
+  if (pointer.polygonPoints.length === 0) {
+    pointer.polygonGroupId = 'g_poly_' + Math.random().toString(36).substring(2, 9);
+    pointer.polygonWalls = [];
+    pointer.polygonPoints.push(pt);
+    return;
+  }
+  const p0 = pointer.polygonPoints[0];
+  const prev = pointer.polygonPoints[pointer.polygonPoints.length - 1];
+  if (prev.x === pt.x && prev.y === pt.y) return;
+  recordUndoState();
+  const cfg = toolConfigs.wall;
+  const w = engine.addWall(prev.x, prev.y, pt.x, pt.y, {
+    conductivity: cfg.conductivity,
+    thickness: cfg.thickness,
+    groupId: pointer.polygonGroupId
+  });
+  pointer.polygonWalls.push(w);
+  if (pointer.polygonPoints.length >= 2 && pt.x === p0.x && pt.y === p0.y) {
+    app.selectedItems = [...pointer.polygonWalls];
+    resetPolygonDraft();
+  } else {
+    pointer.polygonPoints.push(pt);
+  }
+  updateElementsList();
 }
 
 // Starts dragging a segment endpoint; shape vertices move together unless detached (Ctrl).
@@ -283,6 +321,14 @@ canvas.addEventListener('mousedown', (e) => {
 
   if (e.button !== 0) return;
 
+  // Second click of a click-move-click drawing
+  if (pointer.pendingStart && !app.isSimulating) {
+    if (isDragTool()) createFromDrag(pointer.pendingStart, { x: coords.snapX, y: coords.snapY });
+    pointer.pendingStart = null;
+    renderer.draftInfo = null;
+    return;
+  }
+
   pointer.isMouseDown = true;
   pointer.dragStartWorld = { x: coords.snapX, y: coords.snapY };
 
@@ -316,42 +362,12 @@ canvas.addEventListener('mousedown', (e) => {
 
   // Polyline Wall Placement & Closing (must precede handle dragging & selection to allow closing loop on start vertex)
   if (!app.isSimulating && app.activeTool === 'wall' && toolConfigs.wall.shape === 'polygon') {
-    const pt = { x: coords.snapX, y: coords.snapY };
-    if (pointer.polygonPoints.length === 0) {
-      pointer.polygonGroupId = 'g_poly_' + Math.random().toString(36).substring(2, 9);
-      pointer.polygonWalls = [];
-      pointer.polygonPoints.push(pt);
-    } else {
-      const p0 = pointer.polygonPoints[0];
-      const closeDist = 18 / renderer.zoom;
-      const isCloseToStart = pointer.polygonPoints.length >= 2 && (
-        Math.hypot(coords.worldX - p0.x, coords.worldY - p0.y) < closeDist ||
-        (coords.snapX === p0.x && coords.snapY === p0.y)
-      );
-
-      const targetPt = isCloseToStart ? { x: p0.x, y: p0.y } : pt;
-      const prev = pointer.polygonPoints[pointer.polygonPoints.length - 1];
-
-      if (prev.x !== targetPt.x || prev.y !== targetPt.y) {
-        recordUndoState();
-        const cfg = toolConfigs.wall;
-        const w = engine.addWall(prev.x, prev.y, targetPt.x, targetPt.y, {
-          conductivity: cfg.conductivity,
-          thickness: cfg.thickness,
-          groupId: pointer.polygonGroupId
-        });
-        pointer.polygonWalls.push(w);
-
-        if (isCloseToStart) {
-          app.selectedItems = [...pointer.polygonWalls];
-          resetPolygonDraft();
-          updateElementsList();
-        } else {
-          pointer.polygonPoints.push(targetPt);
-          updateElementsList();
-        }
-      }
-    }
+    const p0 = pointer.polygonPoints[0];
+    const isCloseToStart = pointer.polygonPoints.length >= 2 && (
+      Math.hypot(coords.worldX - p0.x, coords.worldY - p0.y) < 18 / renderer.zoom ||
+      (coords.snapX === p0.x && coords.snapY === p0.y)
+    );
+    placePolylinePoint(isCloseToStart ? { x: p0.x, y: p0.y } : { x: coords.snapX, y: coords.snapY });
     return;
   }
 
@@ -359,6 +375,11 @@ canvas.addEventListener('mousedown', (e) => {
   // drawing tools never grab nodes of existing elements.
   if (!app.isSimulating && app.activeTool === 'select') {
     const hit = hitTestTransform(coords.worldX, coords.worldY);
+    if (hit?.kind === 'label') {
+      pointer.isMouseDown = false;
+      openSelectionSizeInput();
+      return;
+    }
     if (hit) {
       recordUndoState();
       if (hit.kind === 'vertex') startEndpointDrag(hit.item, hit.handleId, e.ctrlKey);
@@ -471,13 +492,15 @@ window.addEventListener('mousemove', (e) => {
   }
 
   // Update live draft preview info in renderer
-  if (pointer.isMouseDown && pointer.dragStartWorld && !app.isSimulating && !pointer.draggingHandle && !pointer.isMovingSelection && !isTransforming()) {
+  const isDragging = pointer.isMouseDown && !pointer.draggingHandle && !pointer.isMovingSelection && !isTransforming();
+  const draftStart = pointer.pendingStart || (isDragging ? pointer.dragStartWorld : null);
+  if (draftStart && !app.isSimulating) {
     renderer.draftInfo = {
       isDrafting: true,
       tool: app.activeTool,
       shape: (app.activeTool === 'wall' && toolConfigs.wall) ? toolConfigs.wall.shape : 'line',
       vtype: (app.activeTool === 'valve' && toolConfigs.valve) ? toolConfigs.valve.type : '',
-      start: pointer.dragStartWorld,
+      start: draftStart,
       current: pointer.currentCursorWorld
     };
   } else {
@@ -498,7 +521,6 @@ window.addEventListener('mousemove', (e) => {
       let pt = { x: coords.snapX, y: coords.snapY };
       if (e.shiftKey) pt = constrainEndpoint(item, handleId, coords.worldX, coords.worldY);
       moveEndpoints(links, pt.x, pt.y);
-      renderer.hudLabel = { x: pt.x, y: pt.y - 22 / renderer.zoom, text: segmentLabel(item) };
     } else if (item instanceof ThrottleValve && (handleId === 'gap1' || handleId === 'gap2')) {
       const mid = item.midPoint;
       const dx = coords.snapX - mid.x;
@@ -583,8 +605,6 @@ window.addEventListener('mouseup', (e) => {
     updatePopupPosition();
     return;
   }
-  renderer.hudLabel = null;
-
   const wasDraggingHandle = !!pointer.draggingHandle;
   const wasMovingSelection = pointer.isMovingSelection;
   const draggedHandleItem = pointer.draggingHandle?.item;
@@ -627,193 +647,207 @@ window.addEventListener('mouseup', (e) => {
     const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
 
     // Marquee Selection (Objects + Particles)
-    if (app.activeTool === 'select' && (w >= 10 || h >= 10)) {
-      const boxItems = findItemsInBox(minX, minY, minX + w, minY + h);
-      const boxParticles = engine.findParticlesInRect(minX, minY, minX + w, minY + h);
-      boxParticles.forEach(p => { p.selected = true; });
-      app.selectedItems = [...boxItems, ...boxParticles];
-      updateElementsList();
-
-    // Wall Rectangle
-    } else if (app.activeTool === 'wall' && toolConfigs.wall.shape === 'rect' && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.wall;
-      const gid = 'g_rect_' + Math.random().toString(36).substring(2, 9);
-      const w1 = engine.addWall(minX, minY, minX + w, minY, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
-      const w2 = engine.addWall(minX + w, minY, minX + w, minY + h, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
-      const w3 = engine.addWall(minX + w, minY + h, minX, minY + h, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
-      const w4 = engine.addWall(minX, minY + h, minX, minY, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
-      app.selectedItems = [w1, w2, w3, w4];
-      updateElementsList();
-
-    // Wall Circle
-    } else if (app.activeTool === 'wall' && toolConfigs.wall.shape === 'circle') {
-      const radius = Math.hypot(c.x - s.x, c.y - s.y);
-      if (radius >= 12) {
-        recordUndoState();
-        createCircleWall(s, radius);
+    if (app.activeTool === 'select') {
+      if (w >= 10 || h >= 10) {
+        const boxItems = findItemsInBox(minX, minY, minX + w, minY + h);
+        const boxParticles = engine.findParticlesInRect(minX, minY, minX + w, minY + h);
+        boxParticles.forEach(p => { p.selected = true; });
+        app.selectedItems = [...boxItems, ...boxParticles];
         updateElementsList();
       }
-
-    // Piston
-    } else if (app.activeTool === 'piston' && (w >= 20 || h >= 20)) {
-      recordUndoState();
-      const cfg = toolConfigs.piston;
-      const isVertical = h >= w;
-      const p = engine.addPiston({
-        label: 'P', orientation: isVertical ? 'horizontal' : 'vertical',
-        x: (s.x + c.x) * 0.5, y: (s.y + c.y) * 0.5,
-        width: Math.max(16, w), height: Math.max(16, h),
-        minPos: isVertical ? (s.x + c.x) * 0.5 - 140 : (s.y + c.y) * 0.5 - 140,
-        maxPos: isVertical ? (s.x + c.x) * 0.5 + 140 : (s.y + c.y) * 0.5 + 140,
-        mode: cfg.mode, mass: cfg.mass, springK: cfg.springK,
-        frequency: cfg.frequency, amplitude: cfg.amplitude, phase: cfg.phase,
-        dampingCoeff: cfg.dampingCoeff, conductivity: cfg.conductivity
-      });
-      app.selectedItems = [p];
-      updateElementsList();
-
-    // Isotherm-Block (Solid Constant-T Reservoir)
-    } else if ((app.activeTool === 'solid_res' || app.activeTool === 'reservoir') && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.solid_res || toolConfigs.reservoir;
-      const r = engine.addReservoir(minX, minY, w, h, {
-        label: `Isotherm (${Math.round(cfg.temperature)}K)`, temperature: cfg.temperature, conductance: cfg.conductance
-      });
-      app.selectedItems = [r];
-      updateElementsList();
-
-    // Permeable Heat Exchanger (Cross-hatch constant-T)
-    } else if (app.activeTool === 'heat_exchanger' && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.heat_exchanger;
-      const hx = engine.addHeatExchanger(minX, minY, w, h, {
-        temperature: cfg.temperature, conductivity: cfg.conductivity
-      });
-      app.selectedItems = [hx];
-      updateElementsList();
-
-    // Permeable Regenerator Matrix (Multi-slice gradient with directional parallel lines)
-    } else if ((app.activeTool === 'regenerator' || app.activeTool === 'matrix') && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.regenerator || toolConfigs.matrix;
-      const isHoriz = cfg.orientation ? cfg.orientation === 'horizontal' : (w >= h);
-      const reg = engine.addRegeneratorMatrix(minX, minY, w, h, {
-        orientation: isHoriz ? 'horizontal' : 'vertical',
-        temperature: cfg.temperature, heatCapacity: cfg.heatCapacity,
-        conductivity: cfg.conductivity, sliceCount: 10
-      });
-      app.selectedItems = [reg];
-      updateElementsList();
-
-    // Solid Thermal Storage Block (Finite heat capacity C)
-    } else if ((app.activeTool === 'storage_block' || app.activeTool === 'solidblock') && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.storage_block || toolConfigs.solidblock;
-      const sb = engine.addThermalBlock(minX, minY, w, h, {
-        temperature: cfg.temperature, heatCapacity: cfg.heatCapacity, conductivity: cfg.conductivity
-      });
-      app.selectedItems = [sb];
-      updateElementsList();
-
-    // Valve (Manual, Check, or Relief)
-    } else if (app.activeTool === 'valve' && (s.x !== c.x || s.y !== c.y)) {
-      recordUndoState();
-      const cfg = toolConfigs.valve;
-      const v = engine.addWall(s.x, s.y, c.x, c.y, {
-        type: cfg.type,
-        thickness: cfg.thickness || 4,
-        conductivity: cfg.conductivity,
-        allowedDirection: cfg.allowedDirection,
-        triggerPressure: cfg.triggerPressure,
-        pressureHysteresis: cfg.pressureHysteresis,
-        reliefMode: cfg.reliefMode
-      });
-      app.selectedItems = [v];
-      updateElementsList();
-
-    // Throttle Valve (Variable Opening Orifice)
-    } else if (app.activeTool === 'throttle_valve' && (s.x !== c.x || s.y !== c.y)) {
-      recordUndoState();
-      const cfg = toolConfigs.throttle_valve;
-      const tv = engine.addThrottleValve(s.x, s.y, c.x, c.y, {
-        openRatio: cfg.openRatio,
-        thickness: cfg.thickness || 6,
-        conductivity: cfg.conductivity || 0
-      });
-      app.selectedItems = [tv];
-      updateElementsList();
-
-    // Particle Spawner
-    } else if (app.activeTool === 'gas' && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.gas;
-      const group = engine.spawnGasRaster(minX, minY, w, h, cfg.count, cfg.mass, cfg.temperature, cfg.velocityMode);
-      app.selectedItems = [group];
-      updateElementsList();
-
-    // Particle Regulator Zone
-    } else if (app.activeTool === 'regulator' && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.regulator;
-      const reg = engine.addRegulator(minX, minY, w, h, {
-        targetCount: cfg.targetCount,
-        hysteresis: cfg.hysteresis,
-        temperature: cfg.temperature,
-        mass: cfg.mass,
-        rate: cfg.rate
-      });
-      app.selectedItems = [reg];
-      updateElementsList();
-
-    // Emitter (Source)
-    } else if (app.activeTool === 'emitter' && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.emitter;
-      const em = engine.addEmitter(minX, minY, w, h, {
-        rate: cfg.rate,
-        temperature: cfg.temperature,
-        mass: cfg.mass || 1.0,
-        direction: cfg.direction,
-        maxParticles: cfg.maxParticles
-      });
-      app.selectedItems = [em];
-      updateElementsList();
-
-    // Sink (Absorber)
-    } else if (app.activeTool === 'sink' && w >= 20 && h >= 20) {
-      recordUndoState();
-      const cfg = toolConfigs.sink;
-      const sk = engine.addSink(minX, minY, w, h, {
-        absorptionEfficiency: cfg.absorptionEfficiency,
-        direction: cfg.direction,
-        maxParticles: cfg.maxParticles,
-        tempFilterMode: cfg.tempFilterMode,
-        filterTemperature: cfg.filterTemperature
-      });
-      app.selectedItems = [sk];
-      updateElementsList();
-
-    // Sensor Zone
-    } else if (app.activeTool === 'sensor' && w >= 20 && h >= 20) {
-      recordUndoState();
-      const letter = String.fromCharCode(65 + engine.sensors.length);
-      const sZone = engine.addSensor({
-        label: `${toolConfigs.sensor.label} ${letter}`,
-        x: minX, y: minY, width: w, height: h,
-        color: toolConfigs.sensor.color || '#38bdf8'
-      });
-      const snap = findPistonSnap(minX, minY, w, h);
-      if (snap) {
-        sZone.bindToPiston(snap.piston, snap.edge, true);
-      }
-      app.selectedItems = [sZone];
-      updateElementsList();
+    } else if (isDragTool() && Math.hypot(c.x - s.x, c.y - s.y) * renderer.zoom < 4) {
+      // Click without dragging: the next click sets the opposite corner
+      pointer.pendingStart = s;
+    } else {
+      createFromDrag(s, c);
     }
   }
 
   pointer.dragStartWorld = null;
 });
+
+// Creates the element of the active drawing tool from a drag (start s, end c).
+export function createFromDrag(s, c) {
+  const minX = Math.min(s.x, c.x), minY = Math.min(s.y, c.y);
+  const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
+
+  // Wall Rectangle
+  if (app.activeTool === 'wall' && toolConfigs.wall.shape === 'rect' && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.wall;
+    const gid = 'g_rect_' + Math.random().toString(36).substring(2, 9);
+    const w1 = engine.addWall(minX, minY, minX + w, minY, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
+    const w2 = engine.addWall(minX + w, minY, minX + w, minY + h, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
+    const w3 = engine.addWall(minX + w, minY + h, minX, minY + h, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
+    const w4 = engine.addWall(minX, minY + h, minX, minY, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
+    app.selectedItems = [w1, w2, w3, w4];
+    updateElementsList();
+
+  // Wall Circle
+  } else if (app.activeTool === 'wall' && toolConfigs.wall.shape === 'circle') {
+    const radius = Math.hypot(c.x - s.x, c.y - s.y);
+    if (radius >= 12) {
+      recordUndoState();
+      createCircleWall(s, radius);
+      updateElementsList();
+    }
+
+  // Piston
+  } else if (app.activeTool === 'piston' && (w >= 20 || h >= 20)) {
+    recordUndoState();
+    const cfg = toolConfigs.piston;
+    const isVertical = h >= w;
+    const p = engine.addPiston({
+      label: 'P', orientation: isVertical ? 'horizontal' : 'vertical',
+      x: (s.x + c.x) * 0.5, y: (s.y + c.y) * 0.5,
+      width: Math.max(16, w), height: Math.max(16, h),
+      minPos: isVertical ? (s.x + c.x) * 0.5 - 140 : (s.y + c.y) * 0.5 - 140,
+      maxPos: isVertical ? (s.x + c.x) * 0.5 + 140 : (s.y + c.y) * 0.5 + 140,
+      mode: cfg.mode, mass: cfg.mass, springK: cfg.springK,
+      frequency: cfg.frequency, amplitude: cfg.amplitude, phase: cfg.phase,
+      dampingCoeff: cfg.dampingCoeff, conductivity: cfg.conductivity
+    });
+    app.selectedItems = [p];
+    updateElementsList();
+
+  // Isotherm-Block (Solid Constant-T Reservoir)
+  } else if ((app.activeTool === 'solid_res' || app.activeTool === 'reservoir') && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.solid_res || toolConfigs.reservoir;
+    const r = engine.addReservoir(minX, minY, w, h, {
+      label: `Isotherm (${Math.round(cfg.temperature)}K)`, temperature: cfg.temperature, conductance: cfg.conductance
+    });
+    app.selectedItems = [r];
+    updateElementsList();
+
+  // Permeable Heat Exchanger (Cross-hatch constant-T)
+  } else if (app.activeTool === 'heat_exchanger' && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.heat_exchanger;
+    const hx = engine.addHeatExchanger(minX, minY, w, h, {
+      temperature: cfg.temperature, conductivity: cfg.conductivity
+    });
+    app.selectedItems = [hx];
+    updateElementsList();
+
+  // Permeable Regenerator Matrix (Multi-slice gradient with directional parallel lines)
+  } else if ((app.activeTool === 'regenerator' || app.activeTool === 'matrix') && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.regenerator || toolConfigs.matrix;
+    const isHoriz = cfg.orientation ? cfg.orientation === 'horizontal' : (w >= h);
+    const reg = engine.addRegeneratorMatrix(minX, minY, w, h, {
+      orientation: isHoriz ? 'horizontal' : 'vertical',
+      temperature: cfg.temperature, heatCapacity: cfg.heatCapacity,
+      conductivity: cfg.conductivity, sliceCount: 10
+    });
+    app.selectedItems = [reg];
+    updateElementsList();
+
+  // Solid Thermal Storage Block (Finite heat capacity C)
+  } else if ((app.activeTool === 'storage_block' || app.activeTool === 'solidblock') && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.storage_block || toolConfigs.solidblock;
+    const sb = engine.addThermalBlock(minX, minY, w, h, {
+      temperature: cfg.temperature, heatCapacity: cfg.heatCapacity, conductivity: cfg.conductivity
+    });
+    app.selectedItems = [sb];
+    updateElementsList();
+
+  // Valve (Manual, Check, or Relief)
+  } else if (app.activeTool === 'valve' && (s.x !== c.x || s.y !== c.y)) {
+    recordUndoState();
+    const cfg = toolConfigs.valve;
+    const v = engine.addWall(s.x, s.y, c.x, c.y, {
+      type: cfg.type,
+      thickness: cfg.thickness || 4,
+      conductivity: cfg.conductivity,
+      allowedDirection: cfg.allowedDirection,
+      triggerPressure: cfg.triggerPressure,
+      pressureHysteresis: cfg.pressureHysteresis,
+      reliefMode: cfg.reliefMode
+    });
+    app.selectedItems = [v];
+    updateElementsList();
+
+  // Throttle Valve (Variable Opening Orifice)
+  } else if (app.activeTool === 'throttle_valve' && (s.x !== c.x || s.y !== c.y)) {
+    recordUndoState();
+    const cfg = toolConfigs.throttle_valve;
+    const tv = engine.addThrottleValve(s.x, s.y, c.x, c.y, {
+      openRatio: cfg.openRatio,
+      thickness: cfg.thickness || 6,
+      conductivity: cfg.conductivity || 0
+    });
+    app.selectedItems = [tv];
+    updateElementsList();
+
+  // Particle Spawner
+  } else if (app.activeTool === 'gas' && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.gas;
+    const group = engine.spawnGasRaster(minX, minY, w, h, cfg.count, cfg.mass, cfg.temperature, cfg.velocityMode);
+    app.selectedItems = [group];
+    updateElementsList();
+
+  // Particle Regulator Zone
+  } else if (app.activeTool === 'regulator' && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.regulator;
+    const reg = engine.addRegulator(minX, minY, w, h, {
+      targetCount: cfg.targetCount,
+      hysteresis: cfg.hysteresis,
+      temperature: cfg.temperature,
+      mass: cfg.mass,
+      rate: cfg.rate
+    });
+    app.selectedItems = [reg];
+    updateElementsList();
+
+  // Emitter (Source)
+  } else if (app.activeTool === 'emitter' && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.emitter;
+    const em = engine.addEmitter(minX, minY, w, h, {
+      rate: cfg.rate,
+      temperature: cfg.temperature,
+      mass: cfg.mass || 1.0,
+      direction: cfg.direction,
+      maxParticles: cfg.maxParticles
+    });
+    app.selectedItems = [em];
+    updateElementsList();
+
+  // Sink (Absorber)
+  } else if (app.activeTool === 'sink' && w >= 20 && h >= 20) {
+    recordUndoState();
+    const cfg = toolConfigs.sink;
+    const sk = engine.addSink(minX, minY, w, h, {
+      absorptionEfficiency: cfg.absorptionEfficiency,
+      direction: cfg.direction,
+      maxParticles: cfg.maxParticles,
+      tempFilterMode: cfg.tempFilterMode,
+      filterTemperature: cfg.filterTemperature
+    });
+    app.selectedItems = [sk];
+    updateElementsList();
+
+  // Sensor Zone
+  } else if (app.activeTool === 'sensor' && w >= 20 && h >= 20) {
+    recordUndoState();
+    const letter = String.fromCharCode(65 + engine.sensors.length);
+    const sZone = engine.addSensor({
+      label: `${toolConfigs.sensor.label} ${letter}`,
+      x: minX, y: minY, width: w, height: h,
+      color: toolConfigs.sensor.color || '#38bdf8'
+    });
+    const snap = findPistonSnap(minX, minY, w, h);
+    if (snap) {
+      sZone.bindToPiston(snap.piston, snap.edge, true);
+    }
+    app.selectedItems = [sZone];
+    updateElementsList();
+  }
+}
 
 // Finish Wall Polygon / Arc
 canvas.addEventListener('dblclick', () => { resetPolygonDraft(); pointer.arcSteps = []; });

@@ -251,6 +251,16 @@ def run_pass(page, label):
     after_gas = json.loads(page.eval(walls_js))
     page.click_id('toolSelect')
 
+    # Click-move-click drawing with a typed size: 120 x 60 heat exchanger
+    page.click_id('toolHeatEx')
+    page.click(*w2s(400, 0))
+    page.mouse('mouseMoved', *w2s(460, 40), 'none', buttons=0)
+    page.key('1', 'Digit1', 49)
+    page.send('Input.insertText', {'text': '20,60'})
+    page.key('Enter', 'Enter', 13)
+    typed_hx = page.eval('JSON.stringify(window.engine.heatExchangers.map(h => [h.x, h.y, h.width, h.height]))')
+    page.click_id('toolSelect')
+
     def closed(ws):
         return all(ws[i][2:] == ws[(i + 1) % len(ws)][:2] for i in range(len(ws)))
 
@@ -274,6 +284,7 @@ def run_pass(page, label):
     assert max(w[0] for w in resized) == 280 and closed(resized), f'frame resize failed: {resized}'
     assert rotated != resized and closed(rotated), f'rotation failed: {rotated}'
     assert after_gas == rotated, 'spawner tool moved a wall vertex'
+    assert json.loads(typed_hx) == [[400, 0, 120, 60]], f'typed dimensions failed: {typed_hx}'
     assert n_reverted == 0 and n_revert_undone == n_before_clear, f'Revert to Saved is not undoable ({n_before_clear} -> {n_reverted} -> {n_revert_undone})'
     assert not page.problems, f'{len(page.problems)} runtime error(s) in {label} mode'
     print(f'{label}: PASSED')

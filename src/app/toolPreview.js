@@ -2,6 +2,7 @@
 import { renderer } from './core.js';
 import { app, pointer } from './state.js';
 import { toolConfigs } from './toolPanel.js';
+import { getDraftMeasurement } from './dimensions.js';
 
 // Live Previews
 export function renderLiveToolPreviews() {
@@ -82,6 +83,10 @@ export function renderLiveToolPreviews() {
       ctx.beginPath(); ctx.arc(c.x, c.y, r, a1, a2); ctx.stroke();
     }
   }
+
+  // Live dimensions of the current draft
+  const m = getDraftMeasurement();
+  if (m) renderer.drawHudLabel(m.x, m.y, m.text);
 
   ctx.restore();
 }
