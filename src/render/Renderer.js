@@ -40,6 +40,10 @@ export class Renderer {
     this.gridSize = 20;
     this.snapToGrid = true;
     this.showVectors = false;
+    // Selection overlay state, set by the app every frame
+    this.transformFrame = null;
+    this.showItemHandles = true;
+    this.hudLabel = null;
     this.colorByVelocity = true;
     this.snapCursor = null; // { x, y } in world coordinates
 
@@ -229,32 +233,34 @@ export class Renderer {
       }
     }
 
-    // 9. Selected Group Bounding Frames & Resize Handles
+    // 9. Selection: transform frame (select tool) or group frames + item handles
+    const frame = this.transformFrame;
     if (Array.isArray(selectedItems) && selectedItems.length > 0) {
-      const groupsMap = new Map();
-      for (let i = 0; i < selectedItems.length; i++) {
-        const item = selectedItems[i];
-        if (item.groupId) {
-          if (!groupsMap.has(item.groupId)) groupsMap.set(item.groupId, []);
-          groupsMap.get(item.groupId).push(item);
+      if (!frame) {
+        const groupsMap = new Map();
+        for (let i = 0; i < selectedItems.length; i++) {
+          const item = selectedItems[i];
+          if (item.groupId) {
+            if (!groupsMap.has(item.groupId)) groupsMap.set(item.groupId, []);
+            groupsMap.get(item.groupId).push(item);
+          }
         }
+        groupsMap.forEach((gItems, gid) => {
+          if (gItems.length > 1) this.drawGroupBoundingBox(gItems, gid);
+        });
       }
-
-      groupsMap.forEach((gItems, gid) => {
-        if (gItems.length > 1) {
-          this.drawGroupBoundingBox(gItems, gid);
-        }
-      });
 
       for (let i = 0; i < selectedItems.length; i++) {
         const sel = selectedItems[i];
         if (sel instanceof ParticleGroup) {
           this.drawParticleGroupHighlight(engine, sel);
-        } else {
+        } else if (!frame && this.showItemHandles) {
           this.drawResizeHandles(sel);
         }
       }
     }
+    if (frame) this.drawTransformFrame(frame);
+    if (this.hudLabel) this.drawHudLabel(this.hudLabel.x, this.hudLabel.y, this.hudLabel.text);
 
     // 9.5 Sequencer Action Selection Glow (Subtle Cyan Outline, No Handles)
     if (this.highlightedSequencerItem) {
@@ -1611,6 +1617,82 @@ export class Renderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(badgeText, badgeX + 6, badgeY + badgeH * 0.5);
 
+    ctx.restore();
+  }
+
+  // Selection transform frame: outline, 8 resize handles, rotate handle,
+  // shape vertices, size badge. Sizes are constant in screen pixels.
+  drawTransformFrame(frame) {
+    const ctx = this.ctx;
+    const z = this.zoom;
+    ctx.save();
+    ctx.lineWidth = 1 / z;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.setLineDash([4 / z, 3 / z]);
+    ctx.strokeRect(frame.x0, frame.y0, frame.x1 - frame.x0, frame.y1 - frame.y0);
+    ctx.setLineDash([]);
+
+    // Rotate handle on a short stem
+    const midX = (frame.x0 + frame.x1) * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(midX, frame.y0);
+    ctx.lineTo(frame.rot.x, frame.rot.y);
+    ctx.stroke();
+    ctx.fillStyle = '#0f172a';
+    ctx.lineWidth = 1.5 / z;
+    ctx.beginPath();
+    ctx.arc(frame.rot.x, frame.rot.y, 5 / z, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    const hs = 7 / z;
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#0ea5e9';
+    for (const h of frame.handles) {
+      ctx.fillRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+      ctx.strokeRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+    }
+
+    ctx.fillStyle = '#38bdf8';
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 1.5 / z;
+    for (const v of frame.vertices) {
+      ctx.beginPath();
+      ctx.arc(v.x, v.y, 4 / z, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    if (frame.label) this.drawHudLabel(midX, frame.y1 + 16 / z, frame.label);
+    if (frame.badge) {
+      ctx.font = `600 ${10 / z}px Inter, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText(frame.badge, frame.x0, frame.y0 - 4 / z);
+    }
+    ctx.restore();
+  }
+
+  // Small dark pill with text, centered on (x, y), constant screen size.
+  drawHudLabel(x, y, text) {
+    const ctx = this.ctx;
+    const z = this.zoom;
+    ctx.save();
+    ctx.font = `600 ${10.5 / z}px 'JetBrains Mono', monospace`;
+    const w = ctx.measureText(text).width + 12 / z;
+    const h = 17 / z;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+    ctx.lineWidth = 1 / z;
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y - h / 2, w, h, 4 / z);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#e2e8f0';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y + 0.5 / z);
     ctx.restore();
   }
 }

@@ -9,7 +9,6 @@ import { Sink } from '../physics/Sink.js';
 import { ThermalBlock } from '../physics/ThermalBlock.js';
 import { HeatExchanger } from '../physics/HeatExchanger.js';
 import { RegeneratorMatrix } from '../physics/RegeneratorMatrix.js';
-import { TextLabel } from '../physics/TextLabel.js';
 import { Regulator } from '../physics/Regulator.js';
 import { ThrottleValve } from '../physics/ThrottleValve.js';
 import { canvas, contextMenu, ctxBringForward, ctxBringFront, ctxDelete, ctxDuplicate, ctxGroup, ctxSendBack, ctxSendBackward } from './dom.js';
@@ -23,6 +22,7 @@ import { closeAllMenus } from './menus.js';
 import { updateZoomText } from './playback.js';
 import { createArcWall, createCircleWall, deleteSelectedItems, findItemAt, findItemsInBox, findPistonSnap, getAllGroupItems, moveSelectedItems, toggleGroupSelection } from './selection.js';
 import { updatePopupPosition } from './popup.js';
+import { beginTransform, constrainEndpoint, cursorForHit, endTransform, getLinkedEndpoints, hitTestTransform, isTransforming, moveEndpoints, segmentLabel, updateTransform } from './transform.js';
 
 // Snapping to Existing Wall Endpoints (Magnetic Snap)
 function findSnapVertex(posWorld, maxDist = 14) {
@@ -42,6 +42,12 @@ function findSnapVertex(posWorld, maxDist = 14) {
     }
   }
   return closest;
+}
+
+// Starts dragging a segment endpoint; shape vertices move together unless detached (Ctrl).
+function startEndpointDrag(item, handleId, detach) {
+  const links = detach ? [{ item, handleId }] : getLinkedEndpoints(item, handleId);
+  pointer.draggingHandle = { item, handleId, links };
 }
 
 // Coordinate Converter
@@ -337,7 +343,7 @@ canvas.addEventListener('mousedown', (e) => {
         pointer.polygonWalls.push(w);
 
         if (isCloseToStart) {
-          app.selectedItems = [...polygonWalls];
+          app.selectedItems = [...pointer.polygonWalls];
           resetPolygonDraft();
           updateElementsList();
         } else {
@@ -349,36 +355,32 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
 
-  // Handle Resize / Stroke Limit Handle Dragging (handles take precedence over tool creation)
-  if (!app.isSimulating) {
-    const handleHitRadius = 16 / renderer.zoom;
-
-    // Check handles of currently selected items first
-    for (const item of app.selectedItems) {
-      const handles = renderer.getResizeHandles(item);
-      for (let i = 0; i < handles.length; i++) {
-        const h = handles[i];
-        if (Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius) {
-          recordUndoState();
-          pointer.draggingHandle = { item, handleId: h.id };
-          return;
-        }
-      }
+  // Transform frame, shape vertices and item handles: select tool only, so
+  // drawing tools never grab nodes of existing elements.
+  if (!app.isSimulating && app.activeTool === 'select') {
+    const hit = hitTestTransform(coords.worldX, coords.worldY);
+    if (hit) {
+      recordUndoState();
+      if (hit.kind === 'vertex') startEndpointDrag(hit.item, hit.handleId, e.ctrlKey);
+      else beginTransform(hit, coords.worldX, coords.worldY);
+      return;
     }
 
-    // Check if clicking directly on handles of unselected item
-    if (clickedItem && !app.selectedItems.includes(clickedItem)) {
-      const handles = renderer.getResizeHandles(clickedItem);
-      for (let i = 0; i < handles.length; i++) {
-        const h = handles[i];
-        if (Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius) {
-          app.selectedItems = [clickedItem];
-          updateElementsList();
-          recordUndoState();
-          pointer.draggingHandle = { item: clickedItem, handleId: h.id };
-          return;
-        }
+    const handleHitRadius = 12 / renderer.zoom;
+    const hasOwnHandles = (it) => it instanceof Wall || it instanceof ThrottleValve || it instanceof Piston;
+    const candidates = [...app.selectedItems.filter(hasOwnHandles)];
+    if (clickedItem && hasOwnHandles(clickedItem) && !app.selectedItems.includes(clickedItem)) candidates.push(clickedItem);
+    for (const item of candidates) {
+      const h = renderer.getResizeHandles(item).find(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius);
+      if (!h) continue;
+      if (!app.selectedItems.includes(item)) {
+        app.selectedItems = getAllGroupItems(item);
+        updateElementsList();
       }
+      recordUndoState();
+      if (h.id === 'p1' || h.id === 'p2') startEndpointDrag(item, h.id, e.ctrlKey);
+      else pointer.draggingHandle = { item, handleId: h.id };
+      return;
     }
   }
 
@@ -391,7 +393,7 @@ canvas.addEventListener('mousedown', (e) => {
         if (isAnySelected) {
           app.selectedItems = app.selectedItems.filter(i => !itemsToToggle.includes(i));
         } else {
-          app.selectedItems = [...selectedItems, ...itemsToToggle];
+          app.selectedItems = [...app.selectedItems, ...itemsToToggle];
         }
       } else {
         app.selectedItems = itemsToToggle;
@@ -469,7 +471,7 @@ window.addEventListener('mousemove', (e) => {
   }
 
   // Update live draft preview info in renderer
-  if (pointer.isMouseDown && pointer.dragStartWorld && !app.isSimulating && !pointer.draggingHandle && !pointer.isMovingSelection) {
+  if (pointer.isMouseDown && pointer.dragStartWorld && !app.isSimulating && !pointer.draggingHandle && !pointer.isMovingSelection && !isTransforming()) {
     renderer.draftInfo = {
       isDrafting: true,
       tool: app.activeTool,
@@ -482,26 +484,28 @@ window.addEventListener('mousemove', (e) => {
     renderer.draftInfo = null;
   }
 
+  // Transform frame drag (resize / rotate)
+  if (isTransforming()) {
+    updateTransform(coords.worldX, coords.worldY, { shift: e.shiftKey, alt: e.altKey });
+    updatePopupPosition();
+    return;
+  }
+
   // Dragging Handles
   if (!app.isSimulating && pointer.draggingHandle) {
-    const { item, handleId } = pointer.draggingHandle;
-    if (item instanceof Wall) {
-      if (handleId === 'p1') { item.p1.x = coords.snapX; item.p1.y = coords.snapY; }
-      else if (handleId === 'p2') { item.p2.x = coords.snapX; item.p2.y = coords.snapY; }
-      item._updateGeometry();
-    } else if (item instanceof ThrottleValve) {
-      if (handleId === 'p1') { item.p1.x = coords.snapX; item.p1.y = coords.snapY; item._updateGeometry(); }
-      else if (handleId === 'p2') { item.p2.x = coords.snapX; item.p2.y = coords.snapY; item._updateGeometry(); }
-      else if (handleId === 'gap1' || handleId === 'gap2') {
-        const mid = item.midPoint;
-        const dx = coords.snapX - mid.x;
-        const dy = coords.snapY - mid.y;
-        const proj = Math.abs(dx * item.unitDir.x + dy * item.unitDir.y);
-        const halfLen = item.length * 0.5;
-        if (halfLen > 0) {
-          const ratio = Math.max(0.02, Math.min(0.98, (proj * 2.0) / item.length));
-          item.setOpenRatio(ratio);
-        }
+    const { item, handleId, links } = pointer.draggingHandle;
+    if (links) {
+      let pt = { x: coords.snapX, y: coords.snapY };
+      if (e.shiftKey) pt = constrainEndpoint(item, handleId, coords.worldX, coords.worldY);
+      moveEndpoints(links, pt.x, pt.y);
+      renderer.hudLabel = { x: pt.x, y: pt.y - 22 / renderer.zoom, text: segmentLabel(item) };
+    } else if (item instanceof ThrottleValve && (handleId === 'gap1' || handleId === 'gap2')) {
+      const mid = item.midPoint;
+      const dx = coords.snapX - mid.x;
+      const dy = coords.snapY - mid.y;
+      const proj = Math.abs(dx * item.unitDir.x + dy * item.unitDir.y);
+      if (item.length > 0) {
+        item.setOpenRatio(Math.max(0.02, Math.min(0.98, (proj * 2.0) / item.length)));
       }
     } else if (item instanceof Piston) {
       const halfThick = (item.orientation === 'horizontal' ? item.width : item.height) * 0.5;
@@ -522,54 +526,6 @@ window.addEventListener('mousemove', (e) => {
       }
       item.amplitude = Math.max(0, (item.maxPos - item.minPos - halfThick * 2) * 0.5);
       item.centerPos = (item.minPos + item.maxPos) * 0.5;
-    } else if (item instanceof TextLabel) {
-      if (handleId === 'br') {
-        item.width = Math.max(40, coords.snapX - item.x);
-        item.height = Math.max(16, coords.snapY - item.y);
-        item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8)));
-      } else if (handleId === 'tr') {
-        const newH = item.y + item.height - coords.snapY;
-        if (newH >= 16) { item.y = coords.snapY; item.height = newH; item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8))); }
-        item.width = Math.max(40, coords.snapX - item.x);
-      } else if (handleId === 'tl') {
-        const newW = item.x + item.width - coords.snapX;
-        const newH = item.y + item.height - coords.snapY;
-        if (newW >= 40) { item.x = coords.snapX; item.width = newW; }
-        if (newH >= 16) { item.y = coords.snapY; item.height = newH; item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8))); }
-      } else if (handleId === 'bl') {
-        const newW = item.x + item.width - coords.snapX;
-        if (newW >= 40) { item.x = coords.snapX; item.width = newW; }
-        item.height = Math.max(16, coords.snapY - item.y);
-        item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8)));
-      }
-    } else if (item.x !== undefined && item.y !== undefined && item.width !== undefined && item.height !== undefined) {
-      if (handleId === 'br') {
-        item.width = Math.max(20, coords.snapX - item.x);
-        item.height = Math.max(20, coords.snapY - item.y);
-      } else if (handleId === 'tr') {
-        const newH = item.y + item.height - coords.snapY;
-        if (newH >= 20) { item.y = coords.snapY; item.height = newH; }
-        item.width = Math.max(20, coords.snapX - item.x);
-      } else if (handleId === 'tl') {
-        const newW = item.x + item.width - coords.snapX;
-        const newH = item.y + item.height - coords.snapY;
-        if (newW >= 20) { item.x = coords.snapX; item.width = newW; }
-        if (newH >= 20) { item.y = coords.snapY; item.height = newH; }
-      } else if (handleId === 'bl') {
-        const newW = item.x + item.width - coords.snapX;
-        if (newW >= 20) { item.x = coords.snapX; item.width = newW; }
-        item.height = Math.max(20, coords.snapY - item.y);
-      }
-      if (item instanceof SensorZone) {
-        item.volume = item.width * item.height;
-        if (item.pistonBinding && item.pistonBinding.pistonId) {
-          const pb = item.pistonBinding;
-          if (pb.edge === 'right') pb.fixedOpposite = item.x;
-          else if (pb.edge === 'left') pb.fixedOpposite = item.x + item.width;
-          else if (pb.edge === 'bottom') pb.fixedOpposite = item.y;
-          else if (pb.edge === 'top') pb.fixedOpposite = item.y + item.height;
-        }
-      }
     }
     updatePopupPosition();
     return;
@@ -589,23 +545,26 @@ window.addEventListener('mousemove', (e) => {
 
   // Cursor in Select Mode
   if (!app.isSimulating && app.activeTool === 'select' && !pointer.isMouseDown) {
-    if (app.selectedItems.length === 1) {
-      const handles = renderer.getResizeHandles(app.selectedItems[0]);
-      const hitRadius = 14 / renderer.zoom;
-      const isOverHandle = handles.some(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < hitRadius);
-      if (isOverHandle) {
-        canvas.style.cursor = 'crosshair';
-        return;
-      }
+    const hitCursor = cursorForHit(hitTestTransform(coords.worldX, coords.worldY));
+    if (hitCursor) {
+      canvas.style.cursor = hitCursor;
+      return;
     }
+    const handleHitRadius = 12 / renderer.zoom;
+    const overHandle = app.selectedItems.some(it => (it instanceof Wall || it instanceof ThrottleValve || it instanceof Piston) &&
+      renderer.getResizeHandles(it).some(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius));
     const itemUnderCursor = findItemAt(coords.worldX, coords.worldY);
-    if (itemUnderCursor && app.selectedItems.includes(itemUnderCursor)) {
+    if (overHandle) {
+      canvas.style.cursor = 'move';
+    } else if (itemUnderCursor && app.selectedItems.includes(itemUnderCursor)) {
       canvas.style.cursor = 'move';
     } else if (itemUnderCursor) {
       canvas.style.cursor = 'pointer';
     } else {
       canvas.style.cursor = 'crosshair';
     }
+  } else if (!pointer.isMouseDown && !pointer.isPanning) {
+    canvas.style.cursor = 'crosshair';
   }
 });
 
@@ -614,6 +573,17 @@ window.addEventListener('mouseup', (e) => {
     pointer.isPanning = false;
     canvas.style.cursor = 'crosshair';
   }
+
+  if (isTransforming()) {
+    endTransform();
+    pointer.isMouseDown = false;
+    pointer.dragStartWorld = null;
+    renderer.draftInfo = null;
+    updateElementsList();
+    updatePopupPosition();
+    return;
+  }
+  renderer.hudLabel = null;
 
   const wasDraggingHandle = !!pointer.draggingHandle;
   const wasMovingSelection = pointer.isMovingSelection;

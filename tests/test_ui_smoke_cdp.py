@@ -189,6 +189,7 @@ def run_pass(page, label):
     # Edit menu / shortcuts: select all, group, ungroup
     page.key('a', 'KeyA', 65, modifiers=2)
     all_selected = page.eval('window.app.selectedItems.length')
+    all_elements = page.eval('window.engine.elements.length')
     page.key('g', 'KeyG', 71, modifiers=2)
     grouped = page.eval('new Set(window.app.selectedItems.map(i => i.groupId)).size === 1 && !!window.app.selectedItems[0].groupId')
     page.key('G', 'KeyG', 71, modifiers=10)
@@ -229,6 +230,30 @@ def run_pass(page, label):
     page.key('z', 'KeyZ', 90, modifiers=2)
     n_revert_undone = page.eval('window.engine.elements.length')
 
+    # Transform frame on a fresh canvas: rectangle corner drag keeps the shape
+    # closed, frame edge resizes, rotate handle turns in 15° steps.
+    page.click_id('btnToolbarClear')
+    page.eval('window.renderer.setViewport(600, 350, 1)')
+    w2s = lambda x, y: (600 + x, 350 + y)
+    walls_js = 'JSON.stringify(window.engine.walls.map(w => [w.p1.x, w.p1.y, w.p2.x, w.p2.y].map(Math.round)))'
+    page.click_id('toolWallRect')
+    page.drag(*w2s(0, 0), *w2s(200, 140))
+    page.click_id('toolSelect')
+    page.click(*w2s(100, 0))                      # select the rectangle via its top wall
+    page.drag(*w2s(200, 140), *w2s(240, 160))     # corner vertex
+    corner = json.loads(page.eval(walls_js))
+    page.drag(*w2s(248, 80), *w2s(288, 80))       # east frame edge (pad 8 px)
+    resized = json.loads(page.eval(walls_js))
+    page.drag(*w2s(140, -34), *w2s(400, 80))      # rotate handle (26 px above the frame)
+    rotated = json.loads(page.eval(walls_js))
+    page.click_id('toolGas')                      # drawing tools must not grab vertices
+    page.drag(*w2s(0, 0), *w2s(60, 60))
+    after_gas = json.loads(page.eval(walls_js))
+    page.click_id('toolSelect')
+
+    def closed(ws):
+        return all(ws[i][2:] == ws[(i + 1) % len(ws)][:2] for i in range(len(ws)))
+
     print(f'tools: {n_tools}, elements: {before} -> {after_draw} after drawing ({walls} walls)')
     print(f'box selection: {selected} items of {after_box}, {after_delete} after Delete, {after_undo} after Ctrl+Z')
     print(f'run: {state}')
@@ -241,10 +266,14 @@ def run_pass(page, label):
     assert after_delete < after_box, 'Delete key did not delete the selection'
     assert after_undo == after_box, 'Ctrl+Z did not restore the deleted elements'
     assert state['sim'] and state['t'] > 0, 'simulation did not run'
-    assert all_selected == page.eval('window.engine.elements.length'), 'Ctrl+A did not select all elements'
+    assert all_selected == all_elements, 'Ctrl+A did not select all elements'
     assert grouped and ungrouped, 'Ctrl+G / Ctrl+Shift+G did not group / ungroup'
     assert view_ok, 'view menu state is wrong (vectors, grid size, zoom)'
     assert n_cleared == 0 and n_restored == n_before_clear, 'New Canvas is not undoable'
+    assert corner[1][2:] == [240, 160] and closed(corner), f'corner drag broke the rectangle: {corner}'
+    assert max(w[0] for w in resized) == 280 and closed(resized), f'frame resize failed: {resized}'
+    assert rotated != resized and closed(rotated), f'rotation failed: {rotated}'
+    assert after_gas == rotated, 'spawner tool moved a wall vertex'
     assert n_reverted == 0 and n_revert_undone == n_before_clear, f'Revert to Saved is not undoable ({n_before_clear} -> {n_reverted} -> {n_revert_undone})'
     assert not page.problems, f'{len(page.problems)} runtime error(s) in {label} mode'
     print(f'{label}: PASSED')

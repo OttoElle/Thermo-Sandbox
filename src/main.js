@@ -9,6 +9,7 @@ import { updateElementsList } from './app/elementTree.js';
 import { updateViewMenuLabels } from './app/menus.js';
 import { customCharts, updateChamberCards, updateSystemStats } from './app/dashboard.js';
 import { renderLiveToolPreviews } from './app/toolPreview.js';
+import { getTransformFrame } from './app/transform.js';
 import { setupAmbientScene, showSplashScreen } from './app/splash.js';
 import './app/keyboard.js';
 import './app/ribbonLayout.js';
@@ -55,6 +56,8 @@ function animate(now) {
     engine.step(dt);
   }
 
+  renderer.transformFrame = getTransformFrame();
+  renderer.showItemHandles = app.activeTool === 'select' && !app.isSimulating;
   renderer.render(engine, app.selectedItems, !app.isSimulating && !app.isAmbientSim);
   renderLiveToolPreviews();
   sequencerUI?.updateLive();

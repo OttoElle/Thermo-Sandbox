@@ -7020,6 +7020,10 @@ class Renderer {
     this.gridSize = 20;
     this.snapToGrid = true;
     this.showVectors = false;
+    // Selection overlay state, set by the app every frame
+    this.transformFrame = null;
+    this.showItemHandles = true;
+    this.hudLabel = null;
     this.colorByVelocity = true;
     this.snapCursor = null; // { x, y } in world coordinates
 
@@ -7209,32 +7213,34 @@ class Renderer {
       }
     }
 
-    // 9. Selected Group Bounding Frames & Resize Handles
+    // 9. Selection: transform frame (select tool) or group frames + item handles
+    const frame = this.transformFrame;
     if (Array.isArray(selectedItems) && selectedItems.length > 0) {
-      const groupsMap = new Map();
-      for (let i = 0; i < selectedItems.length; i++) {
-        const item = selectedItems[i];
-        if (item.groupId) {
-          if (!groupsMap.has(item.groupId)) groupsMap.set(item.groupId, []);
-          groupsMap.get(item.groupId).push(item);
+      if (!frame) {
+        const groupsMap = new Map();
+        for (let i = 0; i < selectedItems.length; i++) {
+          const item = selectedItems[i];
+          if (item.groupId) {
+            if (!groupsMap.has(item.groupId)) groupsMap.set(item.groupId, []);
+            groupsMap.get(item.groupId).push(item);
+          }
         }
+        groupsMap.forEach((gItems, gid) => {
+          if (gItems.length > 1) this.drawGroupBoundingBox(gItems, gid);
+        });
       }
-
-      groupsMap.forEach((gItems, gid) => {
-        if (gItems.length > 1) {
-          this.drawGroupBoundingBox(gItems, gid);
-        }
-      });
 
       for (let i = 0; i < selectedItems.length; i++) {
         const sel = selectedItems[i];
         if (sel instanceof ParticleGroup) {
           this.drawParticleGroupHighlight(engine, sel);
-        } else {
+        } else if (!frame && this.showItemHandles) {
           this.drawResizeHandles(sel);
         }
       }
     }
+    if (frame) this.drawTransformFrame(frame);
+    if (this.hudLabel) this.drawHudLabel(this.hudLabel.x, this.hudLabel.y, this.hudLabel.text);
 
     // 9.5 Sequencer Action Selection Glow (Subtle Cyan Outline, No Handles)
     if (this.highlightedSequencerItem) {
@@ -8591,6 +8597,82 @@ class Renderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(badgeText, badgeX + 6, badgeY + badgeH * 0.5);
 
+    ctx.restore();
+  }
+
+  // Selection transform frame: outline, 8 resize handles, rotate handle,
+  // shape vertices, size badge. Sizes are constant in screen pixels.
+  drawTransformFrame(frame) {
+    const ctx = this.ctx;
+    const z = this.zoom;
+    ctx.save();
+    ctx.lineWidth = 1 / z;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.setLineDash([4 / z, 3 / z]);
+    ctx.strokeRect(frame.x0, frame.y0, frame.x1 - frame.x0, frame.y1 - frame.y0);
+    ctx.setLineDash([]);
+
+    // Rotate handle on a short stem
+    const midX = (frame.x0 + frame.x1) * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(midX, frame.y0);
+    ctx.lineTo(frame.rot.x, frame.rot.y);
+    ctx.stroke();
+    ctx.fillStyle = '#0f172a';
+    ctx.lineWidth = 1.5 / z;
+    ctx.beginPath();
+    ctx.arc(frame.rot.x, frame.rot.y, 5 / z, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    const hs = 7 / z;
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#0ea5e9';
+    for (const h of frame.handles) {
+      ctx.fillRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+      ctx.strokeRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+    }
+
+    ctx.fillStyle = '#38bdf8';
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 1.5 / z;
+    for (const v of frame.vertices) {
+      ctx.beginPath();
+      ctx.arc(v.x, v.y, 4 / z, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    if (frame.label) this.drawHudLabel(midX, frame.y1 + 16 / z, frame.label);
+    if (frame.badge) {
+      ctx.font = `600 ${10 / z}px Inter, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText(frame.badge, frame.x0, frame.y0 - 4 / z);
+    }
+    ctx.restore();
+  }
+
+  // Small dark pill with text, centered on (x, y), constant screen size.
+  drawHudLabel(x, y, text) {
+    const ctx = this.ctx;
+    const z = this.zoom;
+    ctx.save();
+    ctx.font = `600 ${10.5 / z}px 'JetBrains Mono', monospace`;
+    const w = ctx.measureText(text).width + 12 / z;
+    const h = 17 / z;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+    ctx.lineWidth = 1 / z;
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y - h / 2, w, h, 4 / z);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#e2e8f0';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y + 0.5 / z);
     ctx.restore();
   }
 }
@@ -13033,6 +13115,428 @@ fileImportInput.addEventListener('change', (e) => {
 });
 
 
+// --- src/app/transform.js ---
+// Transform frame for the selection: resize (8 handles / frame edges),
+// rotate (handle above the frame or just outside a corner) and the
+// linked-vertex editing of wall shapes. Geometry is always recomputed from
+// the snapshot taken at drag start, so repeated moves don't accumulate error.
+
+const FRAME_PAD_PX = 8;       // frame drawn this far outside the content
+const HANDLE_HIT_PX = 7;
+const EDGE_HIT_PX = 5;
+const ROT_ZONE_PX = 22;       // band outside a corner that rotates
+const ROT_HANDLE_PX = 26;     // rotate handle distance above the frame
+const ROT_SNAP = Math.PI / 12; // 15°
+const MIN_SIZE = 10;
+const VERTEX_EPS = 0.01;
+
+const DIRS = ['right', 'down', 'left', 'up'];
+
+// ---------------------------------------------------------------------------
+// Item classification & bounds
+// ---------------------------------------------------------------------------
+function itemKind(item) {
+  if (item instanceof Wall || item instanceof ThrottleValve) return 'segment';
+  if (item instanceof Piston) return 'piston';
+  if (item instanceof TextLabel) return 'label';
+  if (item instanceof ParticleGroup || item instanceof Particle) return null;
+  if (item.x !== undefined && item.width !== undefined) return 'box';
+  return null;
+}
+
+// Wall shape kind from the group id prefix set by the drawing tools.
+function shapeKind(groupId) {
+  if (!groupId) return null;
+  const m = /^g_(rect|circle|arc|poly)_/.exec(groupId);
+  return m ? m[1] : 'group';
+}
+
+function transformTargets() {
+  return app.selectedItems.filter(i => itemKind(i) !== null);
+}
+
+function addItemBounds(item, b) {
+  const kind = itemKind(item);
+  if (kind === 'segment') {
+    b.minX = Math.min(b.minX, item.p1.x, item.p2.x);
+    b.maxX = Math.max(b.maxX, item.p1.x, item.p2.x);
+    b.minY = Math.min(b.minY, item.p1.y, item.p2.y);
+    b.maxY = Math.max(b.maxY, item.p1.y, item.p2.y);
+  } else if (kind === 'piston' || kind === 'label') {
+    const r = item.getBounds();
+    b.minX = Math.min(b.minX, r.left);
+    b.maxX = Math.max(b.maxX, r.right);
+    b.minY = Math.min(b.minY, r.top);
+    b.maxY = Math.max(b.maxY, r.bottom);
+  } else if (kind === 'box') {
+    b.minX = Math.min(b.minX, item.x);
+    b.maxX = Math.max(b.maxX, item.x + item.width);
+    b.minY = Math.min(b.minY, item.y);
+    b.maxY = Math.max(b.maxY, item.y + item.height);
+  }
+}
+
+function getContentBounds(items = transformTargets()) {
+  const b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  items.forEach(i => addItemBounds(i, b));
+  if (b.minX > b.maxX) return null;
+  return { ...b, width: b.maxX - b.minX, height: b.maxY - b.minY, cx: (b.minX + b.maxX) * 0.5, cy: (b.minY + b.maxY) * 0.5 };
+}
+
+// A single wall, throttle valve or piston keeps its own handles instead.
+function usesFrame(targets) {
+  if (targets.length === 0) return false;
+  if (targets.length === 1 && (itemKind(targets[0]) === 'segment' || itemKind(targets[0]) === 'piston')) return false;
+  return true;
+}
+
+// Only segments rotate freely; axis-aligned elements turn in 90° steps.
+function canRotateFreely(targets) {
+  return targets.every(i => itemKind(i) === 'segment');
+}
+
+// ---------------------------------------------------------------------------
+// Frame geometry (world coordinates, pad/handle sizes constant on screen)
+// ---------------------------------------------------------------------------
+function frameGeometry(bounds) {
+  const pad = FRAME_PAD_PX / renderer.zoom;
+  const x0 = bounds.minX - pad, x1 = bounds.maxX + pad;
+  const y0 = bounds.minY - pad, y1 = bounds.maxY + pad;
+  const mx = (x0 + x1) * 0.5, my = (y0 + y1) * 0.5;
+  return {
+    x0, y0, x1, y1,
+    handles: [
+      { id: 'nw', x: x0, y: y0 }, { id: 'n', x: mx, y: y0 }, { id: 'ne', x: x1, y: y0 },
+      { id: 'e', x: x1, y: my }, { id: 'se', x: x1, y: y1 }, { id: 's', x: mx, y: y1 },
+      { id: 'sw', x: x0, y: y1 }, { id: 'w', x: x0, y: my }
+    ],
+    rot: { x: mx, y: y0 - ROT_HANDLE_PX / renderer.zoom }
+  };
+}
+
+// Vertex handles of wall shapes that may be edited point by point.
+function vertexHandles(targets) {
+  const walls = targets.filter(i => i instanceof Wall);
+  if (walls.length === 0 || walls.length > 32) return [];
+  const kinds = new Set(walls.map(w => shapeKind(w.groupId)));
+  if (kinds.has('circle') || kinds.has('arc')) return [];
+  const pts = [];
+  walls.forEach(w => {
+    for (const id of ['p1', 'p2']) {
+      if (!pts.some(p => Math.abs(p.x - w[id].x) < VERTEX_EPS && Math.abs(p.y - w[id].y) < VERTEX_EPS)) {
+        pts.push({ item: w, handleId: id, x: w[id].x, y: w[id].y });
+      }
+    }
+  });
+  return pts;
+}
+
+// What the renderer draws for the current selection (null: no frame).
+function getTransformFrame() {
+  if (app.isSimulating || app.activeTool !== 'select') return null;
+  const targets = transformTargets();
+  if (!usesFrame(targets)) return null;
+  const bounds = getContentBounds(targets);
+  if (!bounds) return null;
+  const geo = frameGeometry(bounds);
+  const groupIds = new Set(targets.map(i => i.groupId || null));
+  const gid = groupIds.size === 1 ? [...groupIds][0] : null;
+  let label = `${Math.round(bounds.width)} × ${Math.round(bounds.height)}`;
+  if (active?.mode === 'rotate') label = `${formatAngle(active.appliedAngle)}`;
+  return {
+    ...geo,
+    vertices: vertexHandles(targets),
+    label,
+    badge: gid ? shapeBadge(gid, targets.length) : (targets.length > 1 ? `${targets.length} items` : null)
+  };
+}
+
+function shapeBadge(gid, n) {
+  const names = { rect: 'Rectangle', circle: 'Circle', arc: 'Arc', poly: 'Polygon', group: 'Group' };
+  return `${names[shapeKind(gid)]} (${n})`;
+}
+
+function formatAngle(rad) {
+  let deg = rad * 180 / Math.PI;
+  deg = Math.round(deg * 10) / 10;
+  return `${deg > 0 ? '+' : ''}${deg}°`;
+}
+
+// ---------------------------------------------------------------------------
+// Hit testing & cursors
+// ---------------------------------------------------------------------------
+// Returns { kind: 'resize', handle } | { kind: 'rotate' } | { kind: 'vertex', item, handleId } | null
+function hitTestTransform(wx, wy) {
+  const frame = getTransformFrame();
+  if (!frame) return null;
+  const z = renderer.zoom;
+  const hit = HANDLE_HIT_PX / z;
+  const candidates = [];
+  const d = (x, y) => Math.hypot(wx - x, wy - y);
+
+  frame.vertices.forEach(v => candidates.push({ dist: d(v.x, v.y) * 0.9, res: { kind: 'vertex', item: v.item, handleId: v.handleId } }));
+  frame.handles.forEach(h => candidates.push({ dist: d(h.x, h.y), res: { kind: 'resize', handle: h.id } }));
+  candidates.push({ dist: d(frame.rot.x, frame.rot.y), res: { kind: 'rotate' } });
+  const best = candidates.filter(c => c.dist < hit).sort((a, b) => a.dist - b.dist)[0];
+  if (best) return best.res;
+
+  // Frame edges resize
+  const edge = EDGE_HIT_PX / z;
+  const inX = wx > frame.x0 && wx < frame.x1, inY = wy > frame.y0 && wy < frame.y1;
+  if (inX && Math.abs(wy - frame.y0) < edge) return { kind: 'resize', handle: 'n' };
+  if (inX && Math.abs(wy - frame.y1) < edge) return { kind: 'resize', handle: 's' };
+  if (inY && Math.abs(wx - frame.x0) < edge) return { kind: 'resize', handle: 'w' };
+  if (inY && Math.abs(wx - frame.x1) < edge) return { kind: 'resize', handle: 'e' };
+
+  // Band just outside a corner rotates
+  const band = ROT_ZONE_PX / z;
+  for (const c of [[frame.x0, frame.y0, -1, -1], [frame.x1, frame.y0, 1, -1], [frame.x1, frame.y1, 1, 1], [frame.x0, frame.y1, -1, 1]]) {
+    const ox = (wx - c[0]) * c[2], oy = (wy - c[1]) * c[3];
+    if (ox >= -hit && oy >= -hit && (ox > 0 || oy > 0) && ox < band && oy < band) return { kind: 'rotate' };
+  }
+  return null;
+}
+
+const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M20 12a8 8 0 1 1-2.3-5.6" stroke="#000" stroke-width="4"/><path d="M20 4v5h-5" stroke="#000" stroke-width="4"/>' +
+  '<path d="M20 12a8 8 0 1 1-2.3-5.6" stroke="#fff" stroke-width="2"/><path d="M20 4v5h-5" stroke="#fff" stroke-width="2"/></g></svg>'
+)}") 12 12, grab`;
+
+function cursorForHit(hit) {
+  if (!hit) return null;
+  if (hit.kind === 'rotate') return ROTATE_CURSOR;
+  if (hit.kind === 'vertex') return 'move';
+  return { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' }[hit.handle];
+}
+
+// ---------------------------------------------------------------------------
+// Snapshots
+// ---------------------------------------------------------------------------
+function snapshotItem(item) {
+  const kind = itemKind(item);
+  if (kind === 'segment') return { item, kind, p1: { x: item.p1.x, y: item.p1.y }, p2: { x: item.p2.x, y: item.p2.y } };
+  if (kind === 'piston') {
+    return { item, kind, x: item.x, y: item.y, width: item.width, height: item.height, orientation: item.orientation, minPos: item.minPos, maxPos: item.maxPos };
+  }
+  return {
+    item, kind, x: item.x, y: item.y, width: item.width, height: item.height,
+    direction: item.direction, orientation: item.orientation
+  };
+}
+
+let active = null;
+
+function isTransforming() {
+  return !!active;
+}
+
+function beginTransform(hit, wx, wy) {
+  const targets = transformTargets();
+  const bounds = getContentBounds(targets);
+  if (!bounds) return false;
+  active = {
+    mode: hit.kind,
+    handle: hit.handle,
+    bounds,
+    snaps: targets.map(snapshotItem),
+    startAngle: Math.atan2(wy - bounds.cy, wx - bounds.cx),
+    appliedAngle: 0,
+    freeRotation: canRotateFreely(targets)
+  };
+  return true;
+}
+
+function endTransform() {
+  if (!active) return;
+  // Sensor zones follow their piston binding; re-anchor it to the new box.
+  active.snaps.forEach(s => {
+    if (s.item instanceof SensorZone) {
+      s.item.volume = s.item.width * s.item.height;
+      if (active.mode === 'rotate' && s.item.pistonBinding) s.item.unbindPiston();
+      else if (s.item.pistonBinding) updateSensorBinding(s.item);
+    }
+  });
+  active = null;
+}
+
+function updateSensorBinding(zone) {
+  const pb = zone.pistonBinding;
+  if (pb.edge === 'right') pb.fixedOpposite = zone.x;
+  else if (pb.edge === 'left') pb.fixedOpposite = zone.x + zone.width;
+  else if (pb.edge === 'bottom') pb.fixedOpposite = zone.y;
+  else if (pb.edge === 'top') pb.fixedOpposite = zone.y + zone.height;
+}
+
+// ---------------------------------------------------------------------------
+// Resize
+// ---------------------------------------------------------------------------
+function updateTransform(wx, wy, mods) {
+  if (!active) return;
+  if (active.mode === 'resize') applyResize(wx, wy, mods);
+  else if (active.mode === 'rotate') applyRotate(wx, wy, mods);
+}
+
+function applyResize(wx, wy, mods) {
+  const { bounds: b, handle } = active;
+  const pad = FRAME_PAD_PX / renderer.zoom;
+  const hx = handle.includes('e') ? 1 : (handle.includes('w') ? -1 : 0);
+  const hy = handle.includes('s') ? 1 : (handle.includes('n') ? -1 : 0);
+  const fromCenter = mods.alt;
+  const ax = fromCenter ? b.cx : (hx > 0 ? b.minX : b.maxX);
+  const ay = fromCenter ? b.cy : (hy > 0 ? b.minY : b.maxY);
+
+  let sx = 1, sy = 1;
+  if (hx !== 0 && b.width > 0.5) {
+    const edgeX = snapToGrid(wx - hx * pad);
+    const orig = hx > 0 ? b.maxX : b.minX;
+    sx = (edgeX - ax) / (orig - ax);
+  }
+  if (hy !== 0 && b.height > 0.5) {
+    const edgeY = snapToGrid(wy - hy * pad);
+    const orig = hy > 0 ? b.maxY : b.minY;
+    sy = (edgeY - ay) / (orig - ay);
+  }
+  // No flipping through the anchor; keep a minimum size.
+  if (b.width > 0.5) sx = Math.max(sx, MIN_SIZE / b.width);
+  if (b.height > 0.5) sy = Math.max(sy, MIN_SIZE / b.height);
+  if (mods.shift && hx !== 0 && hy !== 0) sx = sy = Math.max(sx, sy);
+  else if (mods.shift && hx !== 0) sy = sx;
+  else if (mods.shift && hy !== 0) sx = sy;
+
+  const map = (x, y) => ({ x: ax + (x - ax) * sx, y: ay + (y - ay) * sy });
+  active.snaps.forEach(s => scaleItem(s, map, sx, sy));
+}
+
+function scaleItem(s, map, sx, sy) {
+  const it = s.item;
+  if (s.kind === 'segment') {
+    const a = map(s.p1.x, s.p1.y), c = map(s.p2.x, s.p2.y);
+    it.setPoints(a.x, a.y, c.x, c.y);
+  } else if (s.kind === 'piston') {
+    const c = map(s.x, s.y);
+    it.x = c.x;
+    it.y = c.y;
+    it.width = Math.max(4, s.width * sx);
+    it.height = Math.max(4, s.height * sy);
+    if (s.orientation === 'horizontal') {
+      it.minPos = map(s.minPos, s.y).x;
+      it.maxPos = map(s.maxPos, s.y).x;
+    } else {
+      it.minPos = map(s.x, s.minPos).y;
+      it.maxPos = map(s.x, s.maxPos).y;
+    }
+    it.centerPos = (it.minPos + it.maxPos) * 0.5;
+  } else if (s.kind === 'label') {
+    const c = map(s.x, s.y);
+    it.x = c.x;
+    it.y = c.y;
+  } else {
+    const a = map(s.x, s.y), c = map(s.x + s.width, s.y + s.height);
+    it.x = Math.min(a.x, c.x);
+    it.y = Math.min(a.y, c.y);
+    it.width = Math.max(MIN_SIZE, Math.abs(c.x - a.x));
+    it.height = Math.max(MIN_SIZE, Math.abs(c.y - a.y));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rotate
+// ---------------------------------------------------------------------------
+function applyRotate(wx, wy, mods) {
+  const { bounds: b } = active;
+  let angle = Math.atan2(wy - b.cy, wx - b.cx) - active.startAngle;
+  angle = Math.atan2(Math.sin(angle), Math.cos(angle));
+  if (!active.freeRotation) angle = Math.round(angle / (Math.PI / 2)) * (Math.PI / 2);
+  else if (!mods.shift) angle = Math.round(angle / ROT_SNAP) * ROT_SNAP;
+  active.appliedAngle = angle;
+  rotateSnapshots(active.snaps, b.cx, b.cy, angle);
+}
+
+function rotateSnapshots(snaps, cx, cy, angle) {
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  const rot = (x, y) => ({ x: cx + (x - cx) * cos - (y - cy) * sin, y: cy + (x - cx) * sin + (y - cy) * cos });
+  const quarter = ((Math.round(angle / (Math.PI / 2)) % 4) + 4) % 4;
+  snaps.forEach(s => {
+    const it = s.item;
+    if (s.kind === 'segment') {
+      const a = rot(s.p1.x, s.p1.y), c = rot(s.p2.x, s.p2.y);
+      it.setPoints(a.x, a.y, c.x, c.y);
+    } else if (s.kind === 'piston') {
+      const c = rot(s.x, s.y);
+      const odd = quarter % 2 === 1;
+      it.x = c.x;
+      it.y = c.y;
+      it.width = odd ? s.height : s.width;
+      it.height = odd ? s.width : s.height;
+      it.orientation = odd ? (s.orientation === 'horizontal' ? 'vertical' : 'horizontal') : s.orientation;
+      const ends = s.orientation === 'horizontal'
+        ? [rot(s.minPos, s.y), rot(s.maxPos, s.y)]
+        : [rot(s.x, s.minPos), rot(s.x, s.maxPos)];
+      const along = ends.map(p => (it.orientation === 'horizontal' ? p.x : p.y));
+      it.minPos = Math.min(...along);
+      it.maxPos = Math.max(...along);
+      it.centerPos = (it.minPos + it.maxPos) * 0.5;
+    } else {
+      const odd = quarter % 2 === 1;
+      const w = (s.kind === 'box' && odd) ? s.height : s.width;
+      const h = (s.kind === 'box' && odd) ? s.width : s.height;
+      const c = rot(s.x + s.width * 0.5, s.y + s.height * 0.5);
+      it.x = c.x - w * 0.5;
+      it.y = c.y - h * 0.5;
+      if (s.kind === 'box') {
+        it.width = w;
+        it.height = h;
+        if (s.direction && DIRS.includes(s.direction)) it.direction = DIRS[(DIRS.indexOf(s.direction) + quarter) % 4];
+        if (s.orientation) it.orientation = odd ? (s.orientation === 'horizontal' ? 'vertical' : 'horizontal') : s.orientation;
+      }
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Linked vertices of wall shapes
+// ---------------------------------------------------------------------------
+// All segment endpoints of the same group sitting on the dragged vertex.
+function getLinkedEndpoints(item, handleId) {
+  const p = item[handleId];
+  const links = [{ item, handleId }];
+  if (!item.groupId) return links;
+  const segments = [...engine.walls, ...(engine.throttleValves || [])];
+  for (const s of segments) {
+    if (s.groupId !== item.groupId) continue;
+    for (const id of ['p1', 'p2']) {
+      if (s === item && id === handleId) continue;
+      if (Math.abs(s[id].x - p.x) < VERTEX_EPS && Math.abs(s[id].y - p.y) < VERTEX_EPS) links.push({ item: s, handleId: id });
+    }
+  }
+  return links;
+}
+
+function moveEndpoints(links, x, y) {
+  links.forEach(({ item, handleId }) => {
+    item[handleId].x = x;
+    item[handleId].y = y;
+    item._updateGeometry();
+  });
+}
+
+// Shift while dragging a segment endpoint: angle in 15° steps around the other end.
+function constrainEndpoint(item, handleId, x, y) {
+  const other = handleId === 'p1' ? item.p2 : item.p1;
+  const len = Math.hypot(x - other.x, y - other.y);
+  const a = Math.round(Math.atan2(y - other.y, x - other.x) / ROT_SNAP) * ROT_SNAP;
+  return { x: other.x + Math.cos(a) * len, y: other.y + Math.sin(a) * len };
+}
+
+// Length / angle readout for a segment (angle 0° = pointing right, CCW positive on screen).
+function segmentLabel(item) {
+  const dx = item.p2.x - item.p1.x, dy = item.p2.y - item.p1.y;
+  const deg = Math.round(-Math.atan2(dy, dx) * 180 / Math.PI * 10) / 10;
+  return `${Math.round(Math.hypot(dx, dy))} px  ${deg}°`;
+}
+
+
 // --- src/app/canvasInput.js ---
 // Canvas mouse interaction: coordinates, snapping, context menu, drawing and dragging.
 
@@ -13054,6 +13558,12 @@ function findSnapVertex(posWorld, maxDist = 14) {
     }
   }
   return closest;
+}
+
+// Starts dragging a segment endpoint; shape vertices move together unless detached (Ctrl).
+function startEndpointDrag(item, handleId, detach) {
+  const links = detach ? [{ item, handleId }] : getLinkedEndpoints(item, handleId);
+  pointer.draggingHandle = { item, handleId, links };
 }
 
 // Coordinate Converter
@@ -13349,7 +13859,7 @@ canvas.addEventListener('mousedown', (e) => {
         pointer.polygonWalls.push(w);
 
         if (isCloseToStart) {
-          app.selectedItems = [...polygonWalls];
+          app.selectedItems = [...pointer.polygonWalls];
           resetPolygonDraft();
           updateElementsList();
         } else {
@@ -13361,36 +13871,32 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
 
-  // Handle Resize / Stroke Limit Handle Dragging (handles take precedence over tool creation)
-  if (!app.isSimulating) {
-    const handleHitRadius = 16 / renderer.zoom;
-
-    // Check handles of currently selected items first
-    for (const item of app.selectedItems) {
-      const handles = renderer.getResizeHandles(item);
-      for (let i = 0; i < handles.length; i++) {
-        const h = handles[i];
-        if (Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius) {
-          recordUndoState();
-          pointer.draggingHandle = { item, handleId: h.id };
-          return;
-        }
-      }
+  // Transform frame, shape vertices and item handles: select tool only, so
+  // drawing tools never grab nodes of existing elements.
+  if (!app.isSimulating && app.activeTool === 'select') {
+    const hit = hitTestTransform(coords.worldX, coords.worldY);
+    if (hit) {
+      recordUndoState();
+      if (hit.kind === 'vertex') startEndpointDrag(hit.item, hit.handleId, e.ctrlKey);
+      else beginTransform(hit, coords.worldX, coords.worldY);
+      return;
     }
 
-    // Check if clicking directly on handles of unselected item
-    if (clickedItem && !app.selectedItems.includes(clickedItem)) {
-      const handles = renderer.getResizeHandles(clickedItem);
-      for (let i = 0; i < handles.length; i++) {
-        const h = handles[i];
-        if (Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius) {
-          app.selectedItems = [clickedItem];
-          updateElementsList();
-          recordUndoState();
-          pointer.draggingHandle = { item: clickedItem, handleId: h.id };
-          return;
-        }
+    const handleHitRadius = 12 / renderer.zoom;
+    const hasOwnHandles = (it) => it instanceof Wall || it instanceof ThrottleValve || it instanceof Piston;
+    const candidates = [...app.selectedItems.filter(hasOwnHandles)];
+    if (clickedItem && hasOwnHandles(clickedItem) && !app.selectedItems.includes(clickedItem)) candidates.push(clickedItem);
+    for (const item of candidates) {
+      const h = renderer.getResizeHandles(item).find(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius);
+      if (!h) continue;
+      if (!app.selectedItems.includes(item)) {
+        app.selectedItems = getAllGroupItems(item);
+        updateElementsList();
       }
+      recordUndoState();
+      if (h.id === 'p1' || h.id === 'p2') startEndpointDrag(item, h.id, e.ctrlKey);
+      else pointer.draggingHandle = { item, handleId: h.id };
+      return;
     }
   }
 
@@ -13403,7 +13909,7 @@ canvas.addEventListener('mousedown', (e) => {
         if (isAnySelected) {
           app.selectedItems = app.selectedItems.filter(i => !itemsToToggle.includes(i));
         } else {
-          app.selectedItems = [...selectedItems, ...itemsToToggle];
+          app.selectedItems = [...app.selectedItems, ...itemsToToggle];
         }
       } else {
         app.selectedItems = itemsToToggle;
@@ -13481,7 +13987,7 @@ window.addEventListener('mousemove', (e) => {
   }
 
   // Update live draft preview info in renderer
-  if (pointer.isMouseDown && pointer.dragStartWorld && !app.isSimulating && !pointer.draggingHandle && !pointer.isMovingSelection) {
+  if (pointer.isMouseDown && pointer.dragStartWorld && !app.isSimulating && !pointer.draggingHandle && !pointer.isMovingSelection && !isTransforming()) {
     renderer.draftInfo = {
       isDrafting: true,
       tool: app.activeTool,
@@ -13494,26 +14000,28 @@ window.addEventListener('mousemove', (e) => {
     renderer.draftInfo = null;
   }
 
+  // Transform frame drag (resize / rotate)
+  if (isTransforming()) {
+    updateTransform(coords.worldX, coords.worldY, { shift: e.shiftKey, alt: e.altKey });
+    updatePopupPosition();
+    return;
+  }
+
   // Dragging Handles
   if (!app.isSimulating && pointer.draggingHandle) {
-    const { item, handleId } = pointer.draggingHandle;
-    if (item instanceof Wall) {
-      if (handleId === 'p1') { item.p1.x = coords.snapX; item.p1.y = coords.snapY; }
-      else if (handleId === 'p2') { item.p2.x = coords.snapX; item.p2.y = coords.snapY; }
-      item._updateGeometry();
-    } else if (item instanceof ThrottleValve) {
-      if (handleId === 'p1') { item.p1.x = coords.snapX; item.p1.y = coords.snapY; item._updateGeometry(); }
-      else if (handleId === 'p2') { item.p2.x = coords.snapX; item.p2.y = coords.snapY; item._updateGeometry(); }
-      else if (handleId === 'gap1' || handleId === 'gap2') {
-        const mid = item.midPoint;
-        const dx = coords.snapX - mid.x;
-        const dy = coords.snapY - mid.y;
-        const proj = Math.abs(dx * item.unitDir.x + dy * item.unitDir.y);
-        const halfLen = item.length * 0.5;
-        if (halfLen > 0) {
-          const ratio = Math.max(0.02, Math.min(0.98, (proj * 2.0) / item.length));
-          item.setOpenRatio(ratio);
-        }
+    const { item, handleId, links } = pointer.draggingHandle;
+    if (links) {
+      let pt = { x: coords.snapX, y: coords.snapY };
+      if (e.shiftKey) pt = constrainEndpoint(item, handleId, coords.worldX, coords.worldY);
+      moveEndpoints(links, pt.x, pt.y);
+      renderer.hudLabel = { x: pt.x, y: pt.y - 22 / renderer.zoom, text: segmentLabel(item) };
+    } else if (item instanceof ThrottleValve && (handleId === 'gap1' || handleId === 'gap2')) {
+      const mid = item.midPoint;
+      const dx = coords.snapX - mid.x;
+      const dy = coords.snapY - mid.y;
+      const proj = Math.abs(dx * item.unitDir.x + dy * item.unitDir.y);
+      if (item.length > 0) {
+        item.setOpenRatio(Math.max(0.02, Math.min(0.98, (proj * 2.0) / item.length)));
       }
     } else if (item instanceof Piston) {
       const halfThick = (item.orientation === 'horizontal' ? item.width : item.height) * 0.5;
@@ -13534,54 +14042,6 @@ window.addEventListener('mousemove', (e) => {
       }
       item.amplitude = Math.max(0, (item.maxPos - item.minPos - halfThick * 2) * 0.5);
       item.centerPos = (item.minPos + item.maxPos) * 0.5;
-    } else if (item instanceof TextLabel) {
-      if (handleId === 'br') {
-        item.width = Math.max(40, coords.snapX - item.x);
-        item.height = Math.max(16, coords.snapY - item.y);
-        item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8)));
-      } else if (handleId === 'tr') {
-        const newH = item.y + item.height - coords.snapY;
-        if (newH >= 16) { item.y = coords.snapY; item.height = newH; item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8))); }
-        item.width = Math.max(40, coords.snapX - item.x);
-      } else if (handleId === 'tl') {
-        const newW = item.x + item.width - coords.snapX;
-        const newH = item.y + item.height - coords.snapY;
-        if (newW >= 40) { item.x = coords.snapX; item.width = newW; }
-        if (newH >= 16) { item.y = coords.snapY; item.height = newH; item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8))); }
-      } else if (handleId === 'bl') {
-        const newW = item.x + item.width - coords.snapX;
-        if (newW >= 40) { item.x = coords.snapX; item.width = newW; }
-        item.height = Math.max(16, coords.snapY - item.y);
-        item.fontSize = Math.max(10, Math.min(48, Math.round(item.height - 8)));
-      }
-    } else if (item.x !== undefined && item.y !== undefined && item.width !== undefined && item.height !== undefined) {
-      if (handleId === 'br') {
-        item.width = Math.max(20, coords.snapX - item.x);
-        item.height = Math.max(20, coords.snapY - item.y);
-      } else if (handleId === 'tr') {
-        const newH = item.y + item.height - coords.snapY;
-        if (newH >= 20) { item.y = coords.snapY; item.height = newH; }
-        item.width = Math.max(20, coords.snapX - item.x);
-      } else if (handleId === 'tl') {
-        const newW = item.x + item.width - coords.snapX;
-        const newH = item.y + item.height - coords.snapY;
-        if (newW >= 20) { item.x = coords.snapX; item.width = newW; }
-        if (newH >= 20) { item.y = coords.snapY; item.height = newH; }
-      } else if (handleId === 'bl') {
-        const newW = item.x + item.width - coords.snapX;
-        if (newW >= 20) { item.x = coords.snapX; item.width = newW; }
-        item.height = Math.max(20, coords.snapY - item.y);
-      }
-      if (item instanceof SensorZone) {
-        item.volume = item.width * item.height;
-        if (item.pistonBinding && item.pistonBinding.pistonId) {
-          const pb = item.pistonBinding;
-          if (pb.edge === 'right') pb.fixedOpposite = item.x;
-          else if (pb.edge === 'left') pb.fixedOpposite = item.x + item.width;
-          else if (pb.edge === 'bottom') pb.fixedOpposite = item.y;
-          else if (pb.edge === 'top') pb.fixedOpposite = item.y + item.height;
-        }
-      }
     }
     updatePopupPosition();
     return;
@@ -13601,23 +14061,26 @@ window.addEventListener('mousemove', (e) => {
 
   // Cursor in Select Mode
   if (!app.isSimulating && app.activeTool === 'select' && !pointer.isMouseDown) {
-    if (app.selectedItems.length === 1) {
-      const handles = renderer.getResizeHandles(app.selectedItems[0]);
-      const hitRadius = 14 / renderer.zoom;
-      const isOverHandle = handles.some(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < hitRadius);
-      if (isOverHandle) {
-        canvas.style.cursor = 'crosshair';
-        return;
-      }
+    const hitCursor = cursorForHit(hitTestTransform(coords.worldX, coords.worldY));
+    if (hitCursor) {
+      canvas.style.cursor = hitCursor;
+      return;
     }
+    const handleHitRadius = 12 / renderer.zoom;
+    const overHandle = app.selectedItems.some(it => (it instanceof Wall || it instanceof ThrottleValve || it instanceof Piston) &&
+      renderer.getResizeHandles(it).some(h => Math.hypot(coords.worldX - h.x, coords.worldY - h.y) < handleHitRadius));
     const itemUnderCursor = findItemAt(coords.worldX, coords.worldY);
-    if (itemUnderCursor && app.selectedItems.includes(itemUnderCursor)) {
+    if (overHandle) {
+      canvas.style.cursor = 'move';
+    } else if (itemUnderCursor && app.selectedItems.includes(itemUnderCursor)) {
       canvas.style.cursor = 'move';
     } else if (itemUnderCursor) {
       canvas.style.cursor = 'pointer';
     } else {
       canvas.style.cursor = 'crosshair';
     }
+  } else if (!pointer.isMouseDown && !pointer.isPanning) {
+    canvas.style.cursor = 'crosshair';
   }
 });
 
@@ -13626,6 +14089,17 @@ window.addEventListener('mouseup', (e) => {
     pointer.isPanning = false;
     canvas.style.cursor = 'crosshair';
   }
+
+  if (isTransforming()) {
+    endTransform();
+    pointer.isMouseDown = false;
+    pointer.dragStartWorld = null;
+    renderer.draftInfo = null;
+    updateElementsList();
+    updatePopupPosition();
+    return;
+  }
+  renderer.hudLabel = null;
 
   const wasDraggingHandle = !!pointer.draggingHandle;
   const wasMovingSelection = pointer.isMovingSelection;
@@ -16560,6 +17034,8 @@ function animate(now) {
     engine.step(dt);
   }
 
+  renderer.transformFrame = getTransformFrame();
+  renderer.showItemHandles = app.activeTool === 'select' && !app.isSimulating;
   renderer.render(engine, app.selectedItems, !app.isSimulating && !app.isAmbientSim);
   renderLiveToolPreviews();
   sequencerUI?.updateLive();
