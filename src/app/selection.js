@@ -171,6 +171,30 @@ export function toggleGroupSelection() {
   updateElementsList();
 }
 
+export function canGroupSelection() {
+  const sel = app.selectedItems;
+  return sel.length > 1 && !sel.every(i => i.groupId && i.groupId === sel[0].groupId);
+}
+
+export function canUngroupSelection() {
+  return app.selectedItems.some(i => i.groupId);
+}
+
+export function groupSelection() {
+  if (app.isSimulating || !canGroupSelection()) return;
+  recordUndoState();
+  const gid = 'g_' + Math.random().toString(36).substring(2, 8);
+  app.selectedItems.forEach(i => { i.groupId = gid; });
+  updateElementsList();
+}
+
+export function ungroupSelection() {
+  if (app.isSimulating || !canUngroupSelection()) return;
+  recordUndoState();
+  app.selectedItems.forEach(i => { delete i.groupId; });
+  updateElementsList();
+}
+
 btnRotate90?.addEventListener('click', rotateSelection90);
 btnFlipH?.addEventListener('click', flipSelectionH);
 btnFlipV?.addEventListener('click', flipSelectionV);

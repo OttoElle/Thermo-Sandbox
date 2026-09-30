@@ -1,18 +1,18 @@
-// Menu bar (File/Edit/View/Help) and the Save As dialog.
-import { btnSaveCancel, btnSaveClose, btnSaveDownload, btnToggleColor, btnToggleGrid, btnToggleSnap, btnToggleVectors, btnToolbarClear, btnToolbarReset, canvas, ctxDuplicate, ctxGroup, fileImportInput, headerProjectTitle, infoModal, playIcon, saveFilenamePreview, saveModal, saveProjectNameInput, selectGridSize, timeVal } from './dom.js';
-import { engine, renderer } from './core.js';
+// Menu bar (File/Edit/View/Simulation/Help), scene loading/saving and the Save As dialog.
+import { bgCanvas, btnPlayPause, btnSaveCancel, btnSaveClose, btnSaveDownload, btnStep, btnStepBack, btnStopReset, btnToggleColor, btnToggleGravity, btnToggleGrid, btnToggleSnap, btnToggleVectors, btnToolbarClear, btnToolbarReset, btnZoomIn, btnZoomOut, canvas, ctxDuplicate, fileImportInput, gpuCanvas, headerProjectTitle, infoModal, modelToggleBtns, playIcon, saveFilenamePreview, saveModal, saveProjectNameInput, selectGridSize, timeVal } from './dom.js';
+import { engine, renderer, sequencerUI } from './core.js';
 import { app, pointer, resetPolygonDraft } from './state.js';
 import { clearHistoryBuffer, performRedo, performUndo, recordUndoState, redoStack, undoStack } from './history.js';
 import { renderToolProperties } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
-import { updateGravityUI, updateModelToggleUI, updateZoomText } from './playback.js';
+import { fitViewToScene, getVisibleCanvasRect, updateGravityUI, updateModelToggleUI } from './playback.js';
 import { closeContextMenu } from './canvasInput.js';
-import { deleteSelectedItems } from './selection.js';
+import { canGroupSelection, canUngroupSelection, deleteSelectedItems, groupSelection, ungroupSelection } from './selection.js';
 import { closePopup } from './popup.js';
-import { addRecentProfile, hideSplashScreen } from './splash.js';
+import { addRecentProfile, hideSplashScreen, showSplashScreen } from './splash.js';
 
 // ============================================================================
-// Desktop Menu Bar Logic (File, Edit, View, Help)
+// Desktop Menu Bar Logic
 // ============================================================================
 const menuItems = document.querySelectorAll('.menu-item');
 let isAnyMenuOpen = false;
@@ -22,24 +22,23 @@ export function closeAllMenus() {
   isAnyMenuOpen = false;
 }
 
+function openMenu(item) {
+  closeAllMenus();
+  refreshMenuState();
+  item.classList.add('open');
+  isAnyMenuOpen = true;
+}
+
 menuItems.forEach(item => {
   const btn = item.querySelector('.menu-btn');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    const isOpen = item.classList.contains('open');
-    closeAllMenus();
-    if (!isOpen) {
-      item.classList.add('open');
-      isAnyMenuOpen = true;
-    }
+    if (item.classList.contains('open')) closeAllMenus();
+    else openMenu(item);
   });
 
   item.addEventListener('mouseenter', () => {
-    if (isAnyMenuOpen) {
-      closeAllMenus();
-      item.classList.add('open');
-      isAnyMenuOpen = true;
-    }
+    if (isAnyMenuOpen && !item.classList.contains('open')) openMenu(item);
   });
 });
 
@@ -49,28 +48,91 @@ window.addEventListener('click', (e) => {
   }
 });
 
-// File Menu Actions
-document.getElementById('menuEntryImport').addEventListener('click', () => {
-  closeAllMenus();
-  fileImportInput.click();
-});
+// Registers a menu entry: closes the menu and runs the action unless disabled.
+function onMenu(id, action) {
+  const el = document.getElementById(id);
+  el?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (el.classList.contains('disabled')) return;
+    closeAllMenus();
+    action();
+  });
+}
 
-document.getElementById('menuEntrySaveAs').addEventListener('click', () => {
-  closeAllMenus();
-  openSaveModal();
-});
+function setEntry(id, { enabled = true, checked } = {}) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('disabled', !enabled);
+  if (checked !== undefined) el.classList.toggle('checked', !!checked);
+}
+
+// Enabled/checked state of all entries, evaluated whenever a menu opens.
+function refreshMenuState() {
+  const editing = !app.isSimulating;
+  const hasSel = editing && app.selectedItems.length > 0;
+
+  setEntry('menuEntryClear', { enabled: editing });
+  setEntry('menuEntryUndo', { enabled: editing && undoStack.length > 0 });
+  setEntry('menuEntryRedo', { enabled: editing && redoStack.length > 0 });
+  setEntry('menuEntrySelectAll', { enabled: editing && engine.elements.length > 0 });
+  setEntry('menuEntryDuplicate', { enabled: hasSel });
+  setEntry('menuEntryGroup', { enabled: editing && canGroupSelection() });
+  setEntry('menuEntryUngroup', { enabled: editing && canUngroupSelection() });
+  setEntry('menuEntryRotate', { enabled: hasSel });
+  setEntry('menuEntryFlipH', { enabled: hasSel });
+  setEntry('menuEntryFlipV', { enabled: hasSel });
+  setEntry('menuEntryDelete', { enabled: hasSel });
+
+  setEntry('menuEntryToggleGrid', { checked: renderer.showGrid });
+  setEntry('menuEntryGrid10', { checked: renderer.gridSize === 10 });
+  setEntry('menuEntryGrid20', { checked: renderer.gridSize === 20 });
+  setEntry('menuEntryGrid40', { checked: renderer.gridSize === 40 });
+  setEntry('menuEntryToggleSnap', { checked: renderer.snapToGrid });
+  setEntry('menuEntryToggleVectors', { checked: renderer.showVectors });
+  setEntry('menuEntryToggleColor', { checked: renderer.colorByVelocity });
+
+  const labelPlay = document.getElementById('labelMenuPlay');
+  if (labelPlay) labelPlay.textContent = (app.isSimulating && !engine.isPaused) ? 'Pause' : 'Play';
+  setEntry('menuEntryStepBack', { enabled: app.isSimulating });
+  setEntry('menuEntryStop', { enabled: app.isSimulating });
+  const model = engine.simModel || 'hard_sphere';
+  setEntry('menuEntryModelIdeal', { checked: model === 'hard_sphere' });
+  setEntry('menuEntryModelReal', { checked: model === 'lennard_jones' });
+  setEntry('menuEntryGravity', { checked: engine.gravityEnabled });
+  setEntry('menuEntrySequencer', { checked: document.body.classList.contains('sequencer-expanded') });
+}
+
+// ============================================================================
+// Scene Lifecycle: open, new, revert, save
+// ============================================================================
+const PLAY_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
+
+function setProjectName(name) {
+  app.currentProjectName = name;
+  headerProjectTitle.textContent = `${name}.json`;
+}
+
+function refreshSceneUI() {
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+  renderToolProperties(app.activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
+  sequencerUI?.render();
+}
 
 export function stopAndResetSimulationForNewScene() {
   app.isSimulating = false;
   engine.isPaused = true;
   app.isAmbientSim = false;
-  
+
   document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
-  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
-  
+  btnToolbarClear?.removeAttribute('disabled');
+
   playIcon.classList.add('is-play');
-  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
-  
+  playIcon.innerHTML = PLAY_ICON;
+
   engine.totalTime = 0;
   timeVal.textContent = '0.00 s';
   clearHistoryBuffer();
@@ -83,104 +145,138 @@ export function stopAndResetSimulationForNewScene() {
   closeContextMenu();
 }
 
-function resetToLoadedProfile() {
-  app.isSimulating = false;
-  engine.isPaused = true;
-  document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
-  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
-  
+// Loads a scene state as the new document (presets, recent profiles, files).
+export function openScene(name, data, { addToRecent = true } = {}) {
+  stopAndResetSimulationForNewScene();
+  data.profileName = name;
+  setProjectName(name);
+  engine.setLoadedProfile(data);
+  refreshSceneUI();
+  if (addToRecent) addRecentProfile(name, data);
+  app.hasActiveSession = true;
+  hideSplashScreen();
+  fitViewToScene();
+}
+
+function stopSimulationIfRunning() {
+  if (app.isSimulating) btnStopReset.click();
+}
+
+// Back to the last opened/saved state. Undoable.
+function revertToSaved() {
+  stopSimulationIfRunning();
+  recordUndoState();
   engine.resetToLoadedProfile();
-  
-  if (engine.currentProfileName) {
-    app.currentProjectName = engine.currentProfileName;
-    headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-  }
-  
+  if (engine.currentProfileName) setProjectName(engine.currentProfileName);
   app.selectedItems = [];
   resetPolygonDraft();
   pointer.arcSteps = [];
   clearHistoryBuffer();
-  undoStack.length = 0;
-  redoStack.length = 0;
-  
-  playIcon.classList.add('is-play');
-  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
-  
-  closePopup();
-  closeContextMenu();
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
   timeVal.textContent = '0.00 s';
+  refreshSceneUI();
 }
 
-document.getElementById('menuEntryReset').addEventListener('click', () => {
-  closeAllMenus();
-  resetToLoadedProfile();
-});
-
-document.getElementById('menuEntryClear').addEventListener('click', () => {
-  closeAllMenus();
+// Empty canvas as a new untitled document. Undoable (restores the elements).
+function newCanvas() {
+  if (app.isSimulating) return;
   recordUndoState();
   engine.clear();
   resetPolygonDraft();
   pointer.arcSteps = [];
   app.selectedItems = [];
   clearHistoryBuffer();
+  setProjectName('Untitled Simulation');
+  engine.currentProfileName = app.currentProjectName;
+  engine.loadedProfileJSON = JSON.stringify(engine.exportState(app.currentProjectName));
+  refreshSceneUI();
+}
+
+// The design as built: while simulating that is the state at play time.
+function getSaveState(name) {
+  const state = (app.isSimulating && engine.simStartSnapshot)
+    ? JSON.parse(engine.simStartSnapshot)
+    : engine.exportState(name);
+  state.profileName = name;
+  return state;
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const safeFileName = (name) => name.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+export function saveProject(name = app.currentProjectName) {
+  setProjectName(name);
+  const state = getSaveState(name);
+  engine.currentProfileName = name;
+  engine.loadedProfileJSON = JSON.stringify(state);
+  addRecentProfile(name, state);
+  downloadBlob(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), `${safeFileName(name)}.json`);
+}
+
+// PNG of the visible canvas area (background, particles and geometry layers).
+export function exportCanvasPNG() {
+  const rect = getVisibleCanvasRect();
+  const w = Math.round(rect.right - rect.left);
+  const h = Math.round(rect.bottom - rect.top);
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg-app').trim() || '#101216';
+  ctx.fillRect(0, 0, w, h);
+  // Re-render first so the WebGPU canvas still holds this frame's image.
+  renderer.render(engine, app.selectedItems, !app.isSimulating);
+  for (const layer of [bgCanvas, gpuCanvas, canvas]) {
+    if (layer) ctx.drawImage(layer, rect.left, rect.top, w, h, 0, 0, w, h);
+  }
+  out.toBlob(blob => { if (blob) downloadBlob(blob, `${safeFileName(app.currentProjectName)}.png`); }, 'image/png');
+}
+
+// File Menu
+onMenu('menuEntryClear', newCanvas);
+onMenu('menuEntryImport', () => fileImportInput.click());
+onMenu('menuEntryWelcome', () => showSplashScreen({ isReturning: true }));
+onMenu('menuEntrySave', () => saveProject());
+onMenu('menuEntrySaveAs', openSaveModal);
+onMenu('menuEntryExportPNG', exportCanvasPNG);
+onMenu('menuEntryReset', revertToSaved);
+
+btnToolbarReset.addEventListener('click', revertToSaved);
+btnToolbarClear.addEventListener('click', newCanvas);
+
+// Edit Menu
+export function selectAllElements() {
+  if (app.isSimulating) return;
+  app.selectedItems = [...engine.elements];
   closePopup();
-  closeContextMenu();
   updateElementsList();
-  renderToolProperties(app.activeTool);
-});
+}
 
-btnToolbarReset.addEventListener('click', resetToLoadedProfile);
+onMenu('menuEntryUndo', performUndo);
+onMenu('menuEntryRedo', performRedo);
+onMenu('menuEntrySelectAll', selectAllElements);
+onMenu('menuEntryDuplicate', () => ctxDuplicate.click());
+onMenu('menuEntryGroup', groupSelection);
+onMenu('menuEntryUngroup', ungroupSelection);
+onMenu('menuEntryRotate', () => document.getElementById('btnRotate90')?.click());
+onMenu('menuEntryFlipH', () => document.getElementById('btnFlipH')?.click());
+onMenu('menuEntryFlipV', () => document.getElementById('btnFlipV')?.click());
+onMenu('menuEntryDelete', deleteSelectedItems);
 
-btnToolbarClear.addEventListener('click', () => {
-  document.getElementById('menuEntryClear').click();
-});
-
-// Edit Menu Actions
-document.getElementById('menuEntryUndo').addEventListener('click', () => {
-  closeAllMenus();
-  performUndo();
-});
-
-document.getElementById('menuEntryRedo').addEventListener('click', () => {
-  closeAllMenus();
-  performRedo();
-});
-
-document.getElementById('menuEntryDuplicate').addEventListener('click', () => {
-  closeAllMenus();
-  ctxDuplicate.click();
-});
-
-document.getElementById('menuEntryGroup').addEventListener('click', () => {
-  closeAllMenus();
-  ctxGroup.click();
-});
-
-document.getElementById('menuEntryDelete').addEventListener('click', () => {
-  closeAllMenus();
-  deleteSelectedItems();
-});
-
-// View Menu Actions
+// View Menu + ribbon toggles (both sync through updateViewMenuLabels)
 export function updateViewMenuLabels() {
-  document.getElementById('labelMenuGrid').textContent = renderer.showGrid ? '✓ Show Grid' : 'Show Grid';
-  document.getElementById('labelGrid10').textContent = renderer.gridSize === 10 ? '✓ Grid Size: 10 px' : 'Grid Size: 10 px';
-  document.getElementById('labelGrid20').textContent = renderer.gridSize === 20 ? '✓ Grid Size: 20 px' : 'Grid Size: 20 px';
-  document.getElementById('labelGrid40').textContent = renderer.gridSize === 40 ? '✓ Grid Size: 40 px' : 'Grid Size: 40 px';
-  document.getElementById('labelMenuSnap').textContent = renderer.snapToGrid ? '✓ Snap to Grid' : 'Snap to Grid';
-  document.getElementById('labelMenuVectors').textContent = renderer.showVectors ? '✓ Velocity Vectors (v⃗)' : 'Velocity Vectors (v⃗)';
-  const labelColor = document.getElementById('labelMenuColor');
-  if (labelColor) labelColor.textContent = renderer.colorByVelocity ? '✓ Color by Speed (|v|)' : 'Color by Speed (|v|)';
-
   btnToggleGrid.classList.toggle('active', renderer.showGrid);
   btnToggleSnap.classList.toggle('active', renderer.snapToGrid);
   btnToggleVectors.classList.toggle('active', renderer.showVectors);
-  if (btnToggleColor) btnToggleColor.classList.toggle('active', renderer.colorByVelocity);
+  btnToggleColor?.classList.toggle('active', renderer.colorByVelocity);
+  selectGridSize.value = String(renderer.gridSize);
 
   const floatingVelLegend = document.getElementById('floatingVelLegend');
   if (floatingVelLegend) {
@@ -188,95 +284,62 @@ export function updateViewMenuLabels() {
   }
 }
 
-document.getElementById('menuEntryToggleGrid').addEventListener('click', () => {
-  renderer.showGrid = !renderer.showGrid;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-btnToggleGrid.addEventListener('click', () => {
-  renderer.showGrid = !renderer.showGrid;
-  updateViewMenuLabels();
-});
-
-selectGridSize.addEventListener('change', (e) => {
-  renderer.gridSize = parseInt(e.target.value, 10);
-  updateViewMenuLabels();
-});
-
-document.getElementById('menuEntryGrid10').addEventListener('click', () => {
-  renderer.gridSize = 10;
-  selectGridSize.value = "10";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryGrid20').addEventListener('click', () => {
-  renderer.gridSize = 20;
-  selectGridSize.value = "20";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryGrid40').addEventListener('click', () => {
-  renderer.gridSize = 40;
-  selectGridSize.value = "40";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryToggleSnap').addEventListener('click', () => {
-  renderer.snapToGrid = !renderer.snapToGrid;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-btnToggleSnap.addEventListener('click', () => {
-  renderer.snapToGrid = !renderer.snapToGrid;
-  updateViewMenuLabels();
-});
-
-document.getElementById('menuEntryToggleVectors').addEventListener('click', () => {
+export function toggleVectors() {
   renderer.showVectors = !renderer.showVectors;
   updateViewMenuLabels();
-  closeAllMenus();
-});
+}
 
-btnToggleVectors.addEventListener('click', () => {
-  renderer.showVectors = !renderer.showVectors;
-  updateViewMenuLabels();
-});
+function toggleGrid() { renderer.showGrid = !renderer.showGrid; updateViewMenuLabels(); }
+function toggleSnap() { renderer.snapToGrid = !renderer.snapToGrid; updateViewMenuLabels(); }
+function toggleColor() { renderer.colorByVelocity = !renderer.colorByVelocity; updateViewMenuLabels(); }
+function setGridSize(size) { renderer.gridSize = size; updateViewMenuLabels(); }
 
-document.getElementById('menuEntryToggleColor')?.addEventListener('click', () => {
-  renderer.colorByVelocity = !renderer.colorByVelocity;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
+onMenu('menuEntryToggleGrid', toggleGrid);
+onMenu('menuEntryGrid10', () => setGridSize(10));
+onMenu('menuEntryGrid20', () => setGridSize(20));
+onMenu('menuEntryGrid40', () => setGridSize(40));
+onMenu('menuEntryToggleSnap', toggleSnap);
+onMenu('menuEntryToggleVectors', toggleVectors);
+onMenu('menuEntryToggleColor', toggleColor);
+onMenu('menuEntryZoomIn', () => btnZoomIn.click());
+onMenu('menuEntryZoomOut', () => btnZoomOut.click());
+onMenu('menuEntryResetView', fitViewToScene);
 
-btnToggleColor?.addEventListener('click', () => {
-  renderer.colorByVelocity = !renderer.colorByVelocity;
-  updateViewMenuLabels();
-});
+btnToggleGrid.addEventListener('click', toggleGrid);
+btnToggleSnap.addEventListener('click', toggleSnap);
+btnToggleVectors.addEventListener('click', toggleVectors);
+btnToggleColor?.addEventListener('click', toggleColor);
+selectGridSize.addEventListener('change', (e) => setGridSize(parseInt(e.target.value, 10)));
 
-document.getElementById('menuEntryResetView').addEventListener('click', () => {
-  renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
-  updateZoomText();
-  closeAllMenus();
-});
+// Simulation Menu (delegates to the playback dock controls)
+function selectModel(model) {
+  [...modelToggleBtns].find(b => b.dataset.model === model)?.click();
+}
+
+onMenu('menuEntryPlay', () => btnPlayPause.click());
+onMenu('menuEntryStep', () => btnStep.click());
+onMenu('menuEntryStepBack', () => btnStepBack.click());
+onMenu('menuEntryStop', () => btnStopReset.click());
+onMenu('menuEntryModelIdeal', () => selectModel('hard_sphere'));
+onMenu('menuEntryModelReal', () => selectModel('lennard_jones'));
+onMenu('menuEntryGravity', () => btnToggleGravity?.click());
+onMenu('menuEntrySequencer', () => document.getElementById('btnToggleSequencer')?.click());
 
 // Help Menu
-document.getElementById('menuEntryGuide').addEventListener('click', () => {
-  infoModal.style.display = 'flex';
-  closeAllMenus();
-});
+export function openShortcutsModal() {
+  const modal = document.getElementById('shortcutsModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+onMenu('menuEntryGuide', () => { infoModal.style.display = 'flex'; });
+onMenu('menuEntryShortcuts', openShortcutsModal);
 
 // ============================================================================
 // Save Project As Dialog Workflow
 // ============================================================================
 function updateSaveFilePreview() {
   const name = saveProjectNameInput.value.trim() || 'Project';
-  const cleanName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  saveFilenamePreview.textContent = `${cleanName}.json`;
+  saveFilenamePreview.textContent = `${safeFileName(name)}.json`;
 }
 
 export function openSaveModal() {
@@ -291,24 +354,15 @@ export function closeSaveModal() {
 }
 
 saveProjectNameInput.addEventListener('input', updateSaveFilePreview);
+saveProjectNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') btnSaveDownload.click();
+});
 btnSaveClose.addEventListener('click', closeSaveModal);
 btnSaveCancel.addEventListener('click', closeSaveModal);
 window.addEventListener('click', (e) => { if (e.target === saveModal) closeSaveModal(); });
 
 btnSaveDownload.addEventListener('click', () => {
-  const chosenName = saveProjectNameInput.value.trim() || 'Project';
-  app.currentProjectName = chosenName;
-  headerProjectTitle.textContent = `${chosenName}.json`;
-
-  const state = engine.exportState(chosenName);
-  addRecentProfile(chosenName, state);
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${chosenName.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  saveProject(saveProjectNameInput.value.trim() || 'Project');
   closeSaveModal();
 });
 
@@ -318,24 +372,10 @@ fileImportInput.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (evt) => {
     try {
-      stopAndResetSimulationForNewScene();
       const data = JSON.parse(evt.target.result);
-      if (data.profileName) {
-        app.currentProjectName = data.profileName;
-      } else {
-        app.currentProjectName = file.name.replace(/\.json$/i, '');
-        data.profileName = app.currentProjectName;
-      }
-      headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-      engine.setLoadedProfile(data);
-      updateElementsList();
-      renderToolProperties(app.activeTool);
-      updateModelToggleUI();
-      updateGravityUI();
-      addRecentProfile(app.currentProjectName, data);
-      app.hasActiveSession = true;
-      hideSplashScreen();
+      openScene(data.profileName || file.name.replace(/\.json$/i, ''), data);
     } catch (err) {
+      console.warn('Import failed:', err);
       alert('Invalid JSON configuration file.');
     }
   };

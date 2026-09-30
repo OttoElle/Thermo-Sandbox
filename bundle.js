@@ -6722,6 +6722,100 @@ class ParticleGPURenderer {
         { binding: 2, resource: this.sampler }
       ]
     });
+
+    this._initVectorPipeline(pipelineLayout);
+  }
+
+  // Velocity arrows drawn straight from the compute particle buffer
+  // (pos, vel, radius), 9 vertices per particle: shaft quad + arrow head.
+  _initVectorPipeline(pipelineLayout) {
+    const device = this.device;
+    const shaderModule = device.createShaderModule({
+      label: 'ParticleVectorShader',
+      code: `
+        struct Uniforms {
+          uViewportSize: vec2f,
+          uPan: vec2f,
+          uZoom: f32,
+          uColorByVelocity: u32,
+          _pad: vec2f,
+          uDefaultColor: vec3f,
+          _pad2: f32,
+        };
+        @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+        const VECTOR_SCALE = 0.09;   // world length per (px/s), same as the 2D overlay
+        const MIN_SPEED = 2.0;
+        const HALF_WIDTH = 0.7;      // screen px
+
+        @vertex
+        fn vs_vector(
+          @builtin(vertex_index) vi: u32,
+          @location(1) aPos: vec2f,
+          @location(4) aVel: vec2f,
+          @location(2) aRadius: f32
+        ) -> @builtin(position) vec4f {
+          let speed = length(aVel);
+          if (aRadius <= 0.0 || aPos.x < -50000.0 || speed <= MIN_SPEED) {
+            return vec4f(2.0, 2.0, 2.0, 1.0);
+          }
+          let s0 = aPos * uniforms.uZoom + uniforms.uPan;
+          let d = aVel * (VECTOR_SCALE * uniforms.uZoom);
+          let len = max(length(d), 0.001);
+          let dir = d / len;
+          let n = vec2f(-dir.y, dir.x);
+          let headLen = min(len * 0.45, 6.0);
+          let headW = headLen * 0.55;
+          let e = s0 + dir * (len - headLen);
+          var pts = array<vec2f, 9>(
+            s0 + n * HALF_WIDTH, s0 - n * HALF_WIDTH, e + n * HALF_WIDTH,
+            e + n * HALF_WIDTH, s0 - n * HALF_WIDTH, e - n * HALF_WIDTH,
+            s0 + d, e + n * headW, e - n * headW
+          );
+          let p = pts[vi];
+          return vec4f(
+            (p.x / uniforms.uViewportSize.x) * 2.0 - 1.0,
+            1.0 - (p.y / uniforms.uViewportSize.y) * 2.0,
+            0.0, 1.0
+          );
+        }
+
+        @fragment
+        fn fs_vector() -> @location(0) vec4f {
+          return vec4f(1.0, 1.0, 1.0, 0.7);
+        }
+      `
+    });
+
+    this.vectorPipeline = device.createRenderPipeline({
+      label: 'ParticleVectorPipeline',
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_vector',
+        buffers: [{
+          arrayStride: 8 * 4,
+          stepMode: 'instance',
+          attributes: [
+            { shaderLocation: 1, offset: 0, format: 'float32x2' },     // pos
+            { shaderLocation: 4, offset: 2 * 4, format: 'float32x2' }, // vel
+            { shaderLocation: 2, offset: 4 * 4, format: 'float32' }    // radius
+          ]
+        }]
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_vector',
+        targets: [{
+          format: this.format,
+          blend: {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+          }
+        }]
+      },
+      primitive: { topology: 'triangle-list' }
+    });
   }
 
   resize(width, height) {
@@ -6750,7 +6844,7 @@ class ParticleGPURenderer {
     this.device.queue.submit([commandEncoder.finish()]);
   }
 
-  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true, showVectors = false) {
     if (!this.isSupported || !this.device || !this.context || !buffer || count === 0) {
       this.clear();
       return;
@@ -6793,6 +6887,11 @@ class ParticleGPURenderer {
     renderPass.setVertexBuffer(0, this.quadBuffer);
     renderPass.setVertexBuffer(1, buffer);
     renderPass.draw(4, count, 0, 0);
+    if (showVectors && this.vectorPipeline) {
+      renderPass.setPipeline(this.vectorPipeline);
+      renderPass.setVertexBuffer(0, buffer);
+      renderPass.draw(9, count, 0, 0);
+    }
     renderPass.end();
 
     this.device.queue.submit([commandEncoder.finish()]);
@@ -7043,7 +7142,7 @@ class Renderer {
     ctx.restore();
   }
 
-  render(engine, selectedItems = []) {
+  render(engine, selectedItems = [], isEditing = true) {
     const isItemSelected = (item) => Array.isArray(selectedItems) ? selectedItems.includes(item) : selectedItems === item;
 
     this.clear();
@@ -7089,7 +7188,15 @@ class Renderer {
     if (this.useWebGPU && this.gpuRenderer) {
       if (engine.isGPUSimulating()) {
         const outputBuffer = engine.gpuCompute.getOutputBuffer();
-        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity, this.showVectors);
+        // Particle selection only exists in edit mode, where engine.particles
+        // still matches the GPU buffer.
+        if (isEditing) {
+          const pCount = engine.particles ? engine.particles.length : 0;
+          for (let i = 0; i < pCount; i++) {
+            if (engine.particles[i].selected) this.drawParticleOverlay(engine.particles[i], false);
+          }
+        }
       } else {
         this.gpuRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
         const pCount = engine.particles ? engine.particles.length : 0;
@@ -8274,7 +8381,7 @@ class Renderer {
     ctx.restore();
   }
 
-  drawParticleOverlay(p) {
+  drawParticleOverlay(p, withVector = true) {
     const ctx = this.ctx;
     const speed = p.getSpeed();
 
@@ -8293,7 +8400,7 @@ class Renderer {
     }
 
     // Optional Velocity Vector Arrow
-    if (this.showVectors && speed > 2) {
+    if (withVector && this.showVectors && speed > 2) {
       const scale = 0.09;
       const vx = p.vel.x * scale;
       const vy = p.vel.y * scale;
@@ -12241,11 +12348,76 @@ btnZoomOut.addEventListener('click', () => {
   updateZoomText();
   updatePopupPosition();
 });
-btnResetView.addEventListener('click', () => {
-  renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
+btnResetView.addEventListener('click', fitViewToScene);
+
+// World-space bounding box of all scene elements and edit-time particles.
+function getSceneBounds() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const add = (x, y) => {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  };
+  for (const item of engine.elements) {
+    if (item.p1 && item.p2) {
+      add(item.p1.x, item.p1.y);
+      add(item.p2.x, item.p2.y);
+    } else if (typeof item.getBounds === 'function') {
+      const b = item.getBounds();
+      add(b.left, b.top);
+      add(b.right, b.bottom);
+    } else if (item.x !== undefined && item.width !== undefined) {
+      add(item.x, item.y);
+      add(item.x + item.width, item.y + item.height);
+    }
+    if (typeof item.getHandlePositions === 'function') {
+      const h = item.getHandlePositions();
+      add(h.minHandle.x, h.minHandle.y);
+      add(h.maxHandle.x, h.maxHandle.y);
+    }
+  }
+  for (const p of engine.particles) add(p.pos.x, p.pos.y);
+  return minX <= maxX ? { minX, minY, maxX, maxY } : null;
+}
+
+// Screen rectangle not covered by the floating header, sidebars and dock.
+// Uses offset* (layout) values so running CSS transitions don't skew it.
+function getVisibleCanvasRect() {
+  let left = 0, top = 0, right = canvas.width, bottom = canvas.height;
+  const header = document.querySelector('.floating-header');
+  const sideL = document.getElementById('sidebarLeft');
+  const sideR = document.querySelector('.floating-sidebar.floating-right');
+  const dock = document.getElementById('unifiedBottomDock');
+  if (header?.offsetWidth) top = header.offsetTop + header.offsetHeight;
+  if (sideL?.offsetWidth) left = sideL.offsetLeft + sideL.offsetWidth;
+  if (sideR?.offsetWidth) right = sideR.offsetLeft;
+  if (dock?.offsetWidth) bottom = dock.offsetTop;
+  if (right - left < 200 || bottom - top < 150) return { left: 0, top: 0, right: canvas.width, bottom: canvas.height };
+  return { left, top, right, bottom };
+}
+
+// Zoom and pan so the whole scene fits into the visible canvas area.
+function fitViewToScene() {
+  const view = getVisibleCanvasRect();
+  const bounds = getSceneBounds();
+  const margin = 40;
+  const viewW = view.right - view.left - margin * 2;
+  const viewH = view.bottom - view.top - margin * 2;
+  const cx = (view.left + view.right) * 0.5;
+  const cy = (view.top + view.bottom) * 0.5;
+  if (!bounds) {
+    renderer.setViewport(cx, cy, 1.0);
+  } else {
+    const w = Math.max(bounds.maxX - bounds.minX, 50);
+    const h = Math.max(bounds.maxY - bounds.minY, 50);
+    renderer.setViewport(0, 0, Math.min(viewW / w, viewH / h, 1.5));
+    const z = renderer.zoom;
+    renderer.setViewport(cx - (bounds.minX + bounds.maxX) * 0.5 * z, cy - (bounds.minY + bounds.maxY) * 0.5 * z, z);
+  }
   updateZoomText();
   updatePopupPosition();
-});
+}
 
 
 // --- src/app/splash.js ---
@@ -12342,7 +12514,7 @@ function renderRecentProfiles() {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
     `;
     el.addEventListener('click', () => {
-      loadProfileData(item.name, item.data);
+      openScene(item.name, item.data);
     });
     splashRecentContainer.appendChild(el);
   });
@@ -12377,35 +12549,10 @@ function renderSplashPresets() {
     card.addEventListener('click', () => {
       stopAndResetSimulationForNewScene();
       p.load(engine);
-      app.currentProjectName = p.name;
-      headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-      const state = engine.exportState(p.name);
-      engine.setLoadedProfile(state);
-      addRecentProfile(p.name, state);
-      updateElementsList();
-      renderToolProperties(app.activeTool);
-      updateModelToggleUI();
-      updateGravityUI();
-      sequencerUI?.render();
-      app.hasActiveSession = true;
-      hideSplashScreen();
+      openScene(p.name, engine.exportState(p.name));
     });
     splashPresetsContainer.appendChild(card);
   });
-}
-
-function loadProfileData(name, data) {
-  stopAndResetSimulationForNewScene();
-  app.currentProjectName = name;
-  headerProjectTitle.textContent = `${name}.json`;
-  engine.setLoadedProfile(data);
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
-  sequencerUI?.render();
-  app.hasActiveSession = true;
-  hideSplashScreen();
 }
 
 function setupAmbientScene() {
@@ -12475,17 +12622,7 @@ btnSplashNew?.addEventListener('click', () => {
   stopAndResetSimulationForNewScene();
   engine.clear();
   engine.gravityEnabled = false;
-  
-  app.currentProjectName = 'Untitled Simulation';
-  headerProjectTitle.textContent = 'Untitled Simulation.json';
-  const state = engine.exportState('Untitled Simulation');
-  engine.setLoadedProfile(state);
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
-  sequencerUI?.render();
-  hideSplashScreen();
+  openScene('Untitled Simulation', engine.exportState('Untitled Simulation'), { addToRecent: false });
 });
 
 btnSplashOpen?.addEventListener('click', () => {
@@ -12521,10 +12658,10 @@ splashOverlay?.addEventListener('click', (e) => {
 
 
 // --- src/app/menus.js ---
-// Menu bar (File/Edit/View/Help) and the Save As dialog.
+// Menu bar (File/Edit/View/Simulation/Help), scene loading/saving and the Save As dialog.
 
 // ============================================================================
-// Desktop Menu Bar Logic (File, Edit, View, Help)
+// Desktop Menu Bar Logic
 // ============================================================================
 const menuItems = document.querySelectorAll('.menu-item');
 let isAnyMenuOpen = false;
@@ -12534,24 +12671,23 @@ function closeAllMenus() {
   isAnyMenuOpen = false;
 }
 
+function openMenu(item) {
+  closeAllMenus();
+  refreshMenuState();
+  item.classList.add('open');
+  isAnyMenuOpen = true;
+}
+
 menuItems.forEach(item => {
   const btn = item.querySelector('.menu-btn');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    const isOpen = item.classList.contains('open');
-    closeAllMenus();
-    if (!isOpen) {
-      item.classList.add('open');
-      isAnyMenuOpen = true;
-    }
+    if (item.classList.contains('open')) closeAllMenus();
+    else openMenu(item);
   });
 
   item.addEventListener('mouseenter', () => {
-    if (isAnyMenuOpen) {
-      closeAllMenus();
-      item.classList.add('open');
-      isAnyMenuOpen = true;
-    }
+    if (isAnyMenuOpen && !item.classList.contains('open')) openMenu(item);
   });
 });
 
@@ -12561,28 +12697,91 @@ window.addEventListener('click', (e) => {
   }
 });
 
-// File Menu Actions
-document.getElementById('menuEntryImport').addEventListener('click', () => {
-  closeAllMenus();
-  fileImportInput.click();
-});
+// Registers a menu entry: closes the menu and runs the action unless disabled.
+function onMenu(id, action) {
+  const el = document.getElementById(id);
+  el?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (el.classList.contains('disabled')) return;
+    closeAllMenus();
+    action();
+  });
+}
 
-document.getElementById('menuEntrySaveAs').addEventListener('click', () => {
-  closeAllMenus();
-  openSaveModal();
-});
+function setEntry(id, { enabled = true, checked } = {}) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('disabled', !enabled);
+  if (checked !== undefined) el.classList.toggle('checked', !!checked);
+}
+
+// Enabled/checked state of all entries, evaluated whenever a menu opens.
+function refreshMenuState() {
+  const editing = !app.isSimulating;
+  const hasSel = editing && app.selectedItems.length > 0;
+
+  setEntry('menuEntryClear', { enabled: editing });
+  setEntry('menuEntryUndo', { enabled: editing && undoStack.length > 0 });
+  setEntry('menuEntryRedo', { enabled: editing && redoStack.length > 0 });
+  setEntry('menuEntrySelectAll', { enabled: editing && engine.elements.length > 0 });
+  setEntry('menuEntryDuplicate', { enabled: hasSel });
+  setEntry('menuEntryGroup', { enabled: editing && canGroupSelection() });
+  setEntry('menuEntryUngroup', { enabled: editing && canUngroupSelection() });
+  setEntry('menuEntryRotate', { enabled: hasSel });
+  setEntry('menuEntryFlipH', { enabled: hasSel });
+  setEntry('menuEntryFlipV', { enabled: hasSel });
+  setEntry('menuEntryDelete', { enabled: hasSel });
+
+  setEntry('menuEntryToggleGrid', { checked: renderer.showGrid });
+  setEntry('menuEntryGrid10', { checked: renderer.gridSize === 10 });
+  setEntry('menuEntryGrid20', { checked: renderer.gridSize === 20 });
+  setEntry('menuEntryGrid40', { checked: renderer.gridSize === 40 });
+  setEntry('menuEntryToggleSnap', { checked: renderer.snapToGrid });
+  setEntry('menuEntryToggleVectors', { checked: renderer.showVectors });
+  setEntry('menuEntryToggleColor', { checked: renderer.colorByVelocity });
+
+  const labelPlay = document.getElementById('labelMenuPlay');
+  if (labelPlay) labelPlay.textContent = (app.isSimulating && !engine.isPaused) ? 'Pause' : 'Play';
+  setEntry('menuEntryStepBack', { enabled: app.isSimulating });
+  setEntry('menuEntryStop', { enabled: app.isSimulating });
+  const model = engine.simModel || 'hard_sphere';
+  setEntry('menuEntryModelIdeal', { checked: model === 'hard_sphere' });
+  setEntry('menuEntryModelReal', { checked: model === 'lennard_jones' });
+  setEntry('menuEntryGravity', { checked: engine.gravityEnabled });
+  setEntry('menuEntrySequencer', { checked: document.body.classList.contains('sequencer-expanded') });
+}
+
+// ============================================================================
+// Scene Lifecycle: open, new, revert, save
+// ============================================================================
+const PLAY_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
+
+function setProjectName(name) {
+  app.currentProjectName = name;
+  headerProjectTitle.textContent = `${name}.json`;
+}
+
+function refreshSceneUI() {
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+  renderToolProperties(app.activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
+  sequencerUI?.render();
+}
 
 function stopAndResetSimulationForNewScene() {
   app.isSimulating = false;
   engine.isPaused = true;
   app.isAmbientSim = false;
-  
+
   document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
-  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
-  
+  btnToolbarClear?.removeAttribute('disabled');
+
   playIcon.classList.add('is-play');
-  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
-  
+  playIcon.innerHTML = PLAY_ICON;
+
   engine.totalTime = 0;
   timeVal.textContent = '0.00 s';
   clearHistoryBuffer();
@@ -12595,104 +12794,138 @@ function stopAndResetSimulationForNewScene() {
   closeContextMenu();
 }
 
-function resetToLoadedProfile() {
-  app.isSimulating = false;
-  engine.isPaused = true;
-  document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
-  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
-  
+// Loads a scene state as the new document (presets, recent profiles, files).
+function openScene(name, data, { addToRecent = true } = {}) {
+  stopAndResetSimulationForNewScene();
+  data.profileName = name;
+  setProjectName(name);
+  engine.setLoadedProfile(data);
+  refreshSceneUI();
+  if (addToRecent) addRecentProfile(name, data);
+  app.hasActiveSession = true;
+  hideSplashScreen();
+  fitViewToScene();
+}
+
+function stopSimulationIfRunning() {
+  if (app.isSimulating) btnStopReset.click();
+}
+
+// Back to the last opened/saved state. Undoable.
+function revertToSaved() {
+  stopSimulationIfRunning();
+  recordUndoState();
   engine.resetToLoadedProfile();
-  
-  if (engine.currentProfileName) {
-    app.currentProjectName = engine.currentProfileName;
-    headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-  }
-  
+  if (engine.currentProfileName) setProjectName(engine.currentProfileName);
   app.selectedItems = [];
   resetPolygonDraft();
   pointer.arcSteps = [];
   clearHistoryBuffer();
-  undoStack.length = 0;
-  redoStack.length = 0;
-  
-  playIcon.classList.add('is-play');
-  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
-  
-  closePopup();
-  closeContextMenu();
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
   timeVal.textContent = '0.00 s';
+  refreshSceneUI();
 }
 
-document.getElementById('menuEntryReset').addEventListener('click', () => {
-  closeAllMenus();
-  resetToLoadedProfile();
-});
-
-document.getElementById('menuEntryClear').addEventListener('click', () => {
-  closeAllMenus();
+// Empty canvas as a new untitled document. Undoable (restores the elements).
+function newCanvas() {
+  if (app.isSimulating) return;
   recordUndoState();
   engine.clear();
   resetPolygonDraft();
   pointer.arcSteps = [];
   app.selectedItems = [];
   clearHistoryBuffer();
+  setProjectName('Untitled Simulation');
+  engine.currentProfileName = app.currentProjectName;
+  engine.loadedProfileJSON = JSON.stringify(engine.exportState(app.currentProjectName));
+  refreshSceneUI();
+}
+
+// The design as built: while simulating that is the state at play time.
+function getSaveState(name) {
+  const state = (app.isSimulating && engine.simStartSnapshot)
+    ? JSON.parse(engine.simStartSnapshot)
+    : engine.exportState(name);
+  state.profileName = name;
+  return state;
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const safeFileName = (name) => name.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+function saveProject(name = app.currentProjectName) {
+  setProjectName(name);
+  const state = getSaveState(name);
+  engine.currentProfileName = name;
+  engine.loadedProfileJSON = JSON.stringify(state);
+  addRecentProfile(name, state);
+  downloadBlob(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), `${safeFileName(name)}.json`);
+}
+
+// PNG of the visible canvas area (background, particles and geometry layers).
+function exportCanvasPNG() {
+  const rect = getVisibleCanvasRect();
+  const w = Math.round(rect.right - rect.left);
+  const h = Math.round(rect.bottom - rect.top);
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg-app').trim() || '#101216';
+  ctx.fillRect(0, 0, w, h);
+  // Re-render first so the WebGPU canvas still holds this frame's image.
+  renderer.render(engine, app.selectedItems, !app.isSimulating);
+  for (const layer of [bgCanvas, gpuCanvas, canvas]) {
+    if (layer) ctx.drawImage(layer, rect.left, rect.top, w, h, 0, 0, w, h);
+  }
+  out.toBlob(blob => { if (blob) downloadBlob(blob, `${safeFileName(app.currentProjectName)}.png`); }, 'image/png');
+}
+
+// File Menu
+onMenu('menuEntryClear', newCanvas);
+onMenu('menuEntryImport', () => fileImportInput.click());
+onMenu('menuEntryWelcome', () => showSplashScreen({ isReturning: true }));
+onMenu('menuEntrySave', () => saveProject());
+onMenu('menuEntrySaveAs', openSaveModal);
+onMenu('menuEntryExportPNG', exportCanvasPNG);
+onMenu('menuEntryReset', revertToSaved);
+
+btnToolbarReset.addEventListener('click', revertToSaved);
+btnToolbarClear.addEventListener('click', newCanvas);
+
+// Edit Menu
+function selectAllElements() {
+  if (app.isSimulating) return;
+  app.selectedItems = [...engine.elements];
   closePopup();
-  closeContextMenu();
   updateElementsList();
-  renderToolProperties(app.activeTool);
-});
+}
 
-btnToolbarReset.addEventListener('click', resetToLoadedProfile);
+onMenu('menuEntryUndo', performUndo);
+onMenu('menuEntryRedo', performRedo);
+onMenu('menuEntrySelectAll', selectAllElements);
+onMenu('menuEntryDuplicate', () => ctxDuplicate.click());
+onMenu('menuEntryGroup', groupSelection);
+onMenu('menuEntryUngroup', ungroupSelection);
+onMenu('menuEntryRotate', () => document.getElementById('btnRotate90')?.click());
+onMenu('menuEntryFlipH', () => document.getElementById('btnFlipH')?.click());
+onMenu('menuEntryFlipV', () => document.getElementById('btnFlipV')?.click());
+onMenu('menuEntryDelete', deleteSelectedItems);
 
-btnToolbarClear.addEventListener('click', () => {
-  document.getElementById('menuEntryClear').click();
-});
-
-// Edit Menu Actions
-document.getElementById('menuEntryUndo').addEventListener('click', () => {
-  closeAllMenus();
-  performUndo();
-});
-
-document.getElementById('menuEntryRedo').addEventListener('click', () => {
-  closeAllMenus();
-  performRedo();
-});
-
-document.getElementById('menuEntryDuplicate').addEventListener('click', () => {
-  closeAllMenus();
-  ctxDuplicate.click();
-});
-
-document.getElementById('menuEntryGroup').addEventListener('click', () => {
-  closeAllMenus();
-  ctxGroup.click();
-});
-
-document.getElementById('menuEntryDelete').addEventListener('click', () => {
-  closeAllMenus();
-  deleteSelectedItems();
-});
-
-// View Menu Actions
+// View Menu + ribbon toggles (both sync through updateViewMenuLabels)
 function updateViewMenuLabels() {
-  document.getElementById('labelMenuGrid').textContent = renderer.showGrid ? '✓ Show Grid' : 'Show Grid';
-  document.getElementById('labelGrid10').textContent = renderer.gridSize === 10 ? '✓ Grid Size: 10 px' : 'Grid Size: 10 px';
-  document.getElementById('labelGrid20').textContent = renderer.gridSize === 20 ? '✓ Grid Size: 20 px' : 'Grid Size: 20 px';
-  document.getElementById('labelGrid40').textContent = renderer.gridSize === 40 ? '✓ Grid Size: 40 px' : 'Grid Size: 40 px';
-  document.getElementById('labelMenuSnap').textContent = renderer.snapToGrid ? '✓ Snap to Grid' : 'Snap to Grid';
-  document.getElementById('labelMenuVectors').textContent = renderer.showVectors ? '✓ Velocity Vectors (v⃗)' : 'Velocity Vectors (v⃗)';
-  const labelColor = document.getElementById('labelMenuColor');
-  if (labelColor) labelColor.textContent = renderer.colorByVelocity ? '✓ Color by Speed (|v|)' : 'Color by Speed (|v|)';
-
   btnToggleGrid.classList.toggle('active', renderer.showGrid);
   btnToggleSnap.classList.toggle('active', renderer.snapToGrid);
   btnToggleVectors.classList.toggle('active', renderer.showVectors);
-  if (btnToggleColor) btnToggleColor.classList.toggle('active', renderer.colorByVelocity);
+  btnToggleColor?.classList.toggle('active', renderer.colorByVelocity);
+  selectGridSize.value = String(renderer.gridSize);
 
   const floatingVelLegend = document.getElementById('floatingVelLegend');
   if (floatingVelLegend) {
@@ -12700,95 +12933,62 @@ function updateViewMenuLabels() {
   }
 }
 
-document.getElementById('menuEntryToggleGrid').addEventListener('click', () => {
-  renderer.showGrid = !renderer.showGrid;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-btnToggleGrid.addEventListener('click', () => {
-  renderer.showGrid = !renderer.showGrid;
-  updateViewMenuLabels();
-});
-
-selectGridSize.addEventListener('change', (e) => {
-  renderer.gridSize = parseInt(e.target.value, 10);
-  updateViewMenuLabels();
-});
-
-document.getElementById('menuEntryGrid10').addEventListener('click', () => {
-  renderer.gridSize = 10;
-  selectGridSize.value = "10";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryGrid20').addEventListener('click', () => {
-  renderer.gridSize = 20;
-  selectGridSize.value = "20";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryGrid40').addEventListener('click', () => {
-  renderer.gridSize = 40;
-  selectGridSize.value = "40";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryToggleSnap').addEventListener('click', () => {
-  renderer.snapToGrid = !renderer.snapToGrid;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-btnToggleSnap.addEventListener('click', () => {
-  renderer.snapToGrid = !renderer.snapToGrid;
-  updateViewMenuLabels();
-});
-
-document.getElementById('menuEntryToggleVectors').addEventListener('click', () => {
+function toggleVectors() {
   renderer.showVectors = !renderer.showVectors;
   updateViewMenuLabels();
-  closeAllMenus();
-});
+}
 
-btnToggleVectors.addEventListener('click', () => {
-  renderer.showVectors = !renderer.showVectors;
-  updateViewMenuLabels();
-});
+function toggleGrid() { renderer.showGrid = !renderer.showGrid; updateViewMenuLabels(); }
+function toggleSnap() { renderer.snapToGrid = !renderer.snapToGrid; updateViewMenuLabels(); }
+function toggleColor() { renderer.colorByVelocity = !renderer.colorByVelocity; updateViewMenuLabels(); }
+function setGridSize(size) { renderer.gridSize = size; updateViewMenuLabels(); }
 
-document.getElementById('menuEntryToggleColor')?.addEventListener('click', () => {
-  renderer.colorByVelocity = !renderer.colorByVelocity;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
+onMenu('menuEntryToggleGrid', toggleGrid);
+onMenu('menuEntryGrid10', () => setGridSize(10));
+onMenu('menuEntryGrid20', () => setGridSize(20));
+onMenu('menuEntryGrid40', () => setGridSize(40));
+onMenu('menuEntryToggleSnap', toggleSnap);
+onMenu('menuEntryToggleVectors', toggleVectors);
+onMenu('menuEntryToggleColor', toggleColor);
+onMenu('menuEntryZoomIn', () => btnZoomIn.click());
+onMenu('menuEntryZoomOut', () => btnZoomOut.click());
+onMenu('menuEntryResetView', fitViewToScene);
 
-btnToggleColor?.addEventListener('click', () => {
-  renderer.colorByVelocity = !renderer.colorByVelocity;
-  updateViewMenuLabels();
-});
+btnToggleGrid.addEventListener('click', toggleGrid);
+btnToggleSnap.addEventListener('click', toggleSnap);
+btnToggleVectors.addEventListener('click', toggleVectors);
+btnToggleColor?.addEventListener('click', toggleColor);
+selectGridSize.addEventListener('change', (e) => setGridSize(parseInt(e.target.value, 10)));
 
-document.getElementById('menuEntryResetView').addEventListener('click', () => {
-  renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
-  updateZoomText();
-  closeAllMenus();
-});
+// Simulation Menu (delegates to the playback dock controls)
+function selectModel(model) {
+  [...modelToggleBtns].find(b => b.dataset.model === model)?.click();
+}
+
+onMenu('menuEntryPlay', () => btnPlayPause.click());
+onMenu('menuEntryStep', () => btnStep.click());
+onMenu('menuEntryStepBack', () => btnStepBack.click());
+onMenu('menuEntryStop', () => btnStopReset.click());
+onMenu('menuEntryModelIdeal', () => selectModel('hard_sphere'));
+onMenu('menuEntryModelReal', () => selectModel('lennard_jones'));
+onMenu('menuEntryGravity', () => btnToggleGravity?.click());
+onMenu('menuEntrySequencer', () => document.getElementById('btnToggleSequencer')?.click());
 
 // Help Menu
-document.getElementById('menuEntryGuide').addEventListener('click', () => {
-  infoModal.style.display = 'flex';
-  closeAllMenus();
-});
+function openShortcutsModal() {
+  const modal = document.getElementById('shortcutsModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+onMenu('menuEntryGuide', () => { infoModal.style.display = 'flex'; });
+onMenu('menuEntryShortcuts', openShortcutsModal);
 
 // ============================================================================
 // Save Project As Dialog Workflow
 // ============================================================================
 function updateSaveFilePreview() {
   const name = saveProjectNameInput.value.trim() || 'Project';
-  const cleanName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  saveFilenamePreview.textContent = `${cleanName}.json`;
+  saveFilenamePreview.textContent = `${safeFileName(name)}.json`;
 }
 
 function openSaveModal() {
@@ -12803,24 +13003,15 @@ function closeSaveModal() {
 }
 
 saveProjectNameInput.addEventListener('input', updateSaveFilePreview);
+saveProjectNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') btnSaveDownload.click();
+});
 btnSaveClose.addEventListener('click', closeSaveModal);
 btnSaveCancel.addEventListener('click', closeSaveModal);
 window.addEventListener('click', (e) => { if (e.target === saveModal) closeSaveModal(); });
 
 btnSaveDownload.addEventListener('click', () => {
-  const chosenName = saveProjectNameInput.value.trim() || 'Project';
-  app.currentProjectName = chosenName;
-  headerProjectTitle.textContent = `${chosenName}.json`;
-
-  const state = engine.exportState(chosenName);
-  addRecentProfile(chosenName, state);
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${chosenName.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  saveProject(saveProjectNameInput.value.trim() || 'Project');
   closeSaveModal();
 });
 
@@ -12830,24 +13021,10 @@ fileImportInput.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (evt) => {
     try {
-      stopAndResetSimulationForNewScene();
       const data = JSON.parse(evt.target.result);
-      if (data.profileName) {
-        app.currentProjectName = data.profileName;
-      } else {
-        app.currentProjectName = file.name.replace(/\.json$/i, '');
-        data.profileName = app.currentProjectName;
-      }
-      headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-      engine.setLoadedProfile(data);
-      updateElementsList();
-      renderToolProperties(app.activeTool);
-      updateModelToggleUI();
-      updateGravityUI();
-      addRecentProfile(app.currentProjectName, data);
-      app.hasActiveSession = true;
-      hideSplashScreen();
+      openScene(data.profileName || file.name.replace(/\.json$/i, ''), data);
     } catch (err) {
+      console.warn('Import failed:', err);
       alert('Invalid JSON configuration file.');
     }
   };
@@ -12954,7 +13131,6 @@ window.addEventListener('click', (e) => {
 });
 
 ctxDelete?.addEventListener('click', () => {
-  recordUndoState();
   deleteSelectedItems();
   closeContextMenu();
 });
@@ -13834,6 +14010,30 @@ function toggleGroupSelection() {
     const gid = 'g_' + Math.random().toString(36).substring(2, 8);
     app.selectedItems.forEach(i => { i.groupId = gid; });
   }
+  updateElementsList();
+}
+
+function canGroupSelection() {
+  const sel = app.selectedItems;
+  return sel.length > 1 && !sel.every(i => i.groupId && i.groupId === sel[0].groupId);
+}
+
+function canUngroupSelection() {
+  return app.selectedItems.some(i => i.groupId);
+}
+
+function groupSelection() {
+  if (app.isSimulating || !canGroupSelection()) return;
+  recordUndoState();
+  const gid = 'g_' + Math.random().toString(36).substring(2, 8);
+  app.selectedItems.forEach(i => { i.groupId = gid; });
+  updateElementsList();
+}
+
+function ungroupSelection() {
+  if (app.isSimulating || !canUngroupSelection()) return;
+  recordUndoState();
+  app.selectedItems.forEach(i => { delete i.groupId; });
   updateElementsList();
 }
 
@@ -15757,7 +15957,7 @@ function performUndo() {
   const current = engine.exportState(app.currentProjectName);
   redoStack.push(JSON.stringify(current));
   const prevJSON = undoStack.pop();
-  engine.importState(JSON.parse(prevJSON));
+  engine.importState(JSON.parse(prevJSON), false);
   app.selectedItems = [];
   closePopup();
   closeContextMenu();
@@ -15770,7 +15970,7 @@ function performRedo() {
   const current = engine.exportState(app.currentProjectName);
   undoStack.push(JSON.stringify(current));
   const nextJSON = redoStack.pop();
-  engine.importState(JSON.parse(nextJSON));
+  engine.importState(JSON.parse(nextJSON), false);
   app.selectedItems = [];
   closePopup();
   closeContextMenu();
@@ -16183,36 +16383,42 @@ function renderLiveToolPreviews() {
 
 // Keyboard Shortcuts
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const t = e.target;
+  if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return;
+  if (app.isSplashActive && e.code !== 'Escape') return;
 
-  if (e.ctrlKey && e.code === 'KeyZ') {
-    e.preventDefault();
-    if (e.shiftKey) performRedo();
-    else performUndo();
+  if (e.ctrlKey || e.metaKey) {
+    const handled = {
+      KeyZ: () => (e.shiftKey ? performRedo() : performUndo()),
+      KeyY: performRedo,
+      KeyD: () => ctxDuplicate.click(),
+      KeyO: () => fileImportInput.click(),
+      KeyS: () => (e.shiftKey ? openSaveModal() : saveProject()),
+      KeyA: selectAllElements,
+      KeyG: () => (e.shiftKey ? ungroupSelection() : groupSelection()),
+      KeyN: () => { if (e.altKey) btnToolbarClear.click(); }
+    }[e.code];
+    if (handled) {
+      e.preventDefault();
+      handled();
+    }
     return;
   }
-  if (e.ctrlKey && e.code === 'KeyY') {
-    e.preventDefault();
-    performRedo();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyD') {
-    e.preventDefault();
-    ctxDuplicate.click();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyO') {
-    e.preventDefault();
-    fileImportInput.click();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyS') {
-    e.preventDefault();
-    openSaveModal();
-    return;
-  }
+  if (e.altKey) return;
 
-  if (e.code === 'Delete' || e.code === 'Backspace') {
+  if (e.key === '?') {
+    openShortcutsModal();
+  } else if (e.key === '+' || e.key === '=') {
+    btnZoomIn.click();
+  } else if (e.key === '-') {
+    btnZoomOut.click();
+  } else if (e.code === 'KeyF') {
+    fitViewToScene();
+  } else if (e.code === 'KeyV') {
+    toggleVectors();
+  } else if (e.code === 'KeyR' && app.selectedItems.length > 0) {
+    btnRotate90.click();
+  } else if (e.code === 'Delete' || e.code === 'Backspace') {
     deleteSelectedItems();
   } else if (e.code === 'Space') {
     e.preventDefault();
@@ -16232,7 +16438,7 @@ window.addEventListener('keydown', (e) => {
           groupId: pointer.polygonGroupId
         });
         pointer.polygonWalls.push(w);
-        app.selectedItems = [...polygonWalls];
+        app.selectedItems = [...pointer.polygonWalls];
         resetPolygonDraft();
         updateElementsList();
       }
@@ -16256,12 +16462,19 @@ window.addEventListener('keydown', (e) => {
     closeContextMenu();
     closeAllMenus();
     closeSaveModal();
+    infoModal.style.display = 'none';
+    shortcutsModal.style.display = 'none';
   }
 });
 
-// Info Modal
+// Info & Shortcuts Modals
+const shortcutsModal = document.getElementById('shortcutsModal');
 btnInfoClose.addEventListener('click', () => { infoModal.style.display = 'none'; });
-window.addEventListener('click', (e) => { if (e.target === infoModal) infoModal.style.display = 'none'; });
+document.getElementById('btnShortcutsClose')?.addEventListener('click', () => { shortcutsModal.style.display = 'none'; });
+window.addEventListener('click', (e) => {
+  if (e.target === infoModal) infoModal.style.display = 'none';
+  if (e.target === shortcutsModal) shortcutsModal.style.display = 'none';
+});
 
 // Chart Tabs
 tabTemp.addEventListener('click', () => {
@@ -16273,6 +16486,31 @@ tabPV.addEventListener('click', () => {
   tabPV.classList.add('active');
   tabTemp.classList.remove('active');
   tempChart.setMode('pv');
+});
+
+
+// --- src/app/ribbonLayout.js ---
+// Responsive ribbon: a row that would overflow switches to icon-only tool
+// buttons; if it still overflows, the mouse wheel scrolls it horizontally.
+const ribbonRows = document.querySelectorAll('.header-row-ribbon');
+
+function fitRibbonRow(row) {
+  row.classList.remove('ribbon-compact');
+  if (row.scrollWidth > row.clientWidth + 1) row.classList.add('ribbon-compact');
+}
+
+function fitRibbon() {
+  ribbonRows.forEach(fitRibbonRow);
+}
+
+const ribbonObserver = new ResizeObserver(fitRibbon);
+ribbonRows.forEach(row => {
+  ribbonObserver.observe(row);
+  row.addEventListener('wheel', (e) => {
+    if (row.scrollWidth <= row.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    row.scrollLeft += e.deltaY;
+  }, { passive: false });
 });
 
 
@@ -16322,7 +16560,7 @@ function animate(now) {
     engine.step(dt);
   }
 
-  renderer.render(engine, app.selectedItems);
+  renderer.render(engine, app.selectedItems, !app.isSimulating && !app.isAmbientSim);
   renderLiveToolPreviews();
   sequencerUI?.updateLive();
 

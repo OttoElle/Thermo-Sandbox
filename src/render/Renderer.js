@@ -162,7 +162,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  render(engine, selectedItems = []) {
+  render(engine, selectedItems = [], isEditing = true) {
     const isItemSelected = (item) => Array.isArray(selectedItems) ? selectedItems.includes(item) : selectedItems === item;
 
     this.clear();
@@ -208,7 +208,15 @@ export class Renderer {
     if (this.useWebGPU && this.gpuRenderer) {
       if (engine.isGPUSimulating()) {
         const outputBuffer = engine.gpuCompute.getOutputBuffer();
-        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity, this.showVectors);
+        // Particle selection only exists in edit mode, where engine.particles
+        // still matches the GPU buffer.
+        if (isEditing) {
+          const pCount = engine.particles ? engine.particles.length : 0;
+          for (let i = 0; i < pCount; i++) {
+            if (engine.particles[i].selected) this.drawParticleOverlay(engine.particles[i], false);
+          }
+        }
       } else {
         this.gpuRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
         const pCount = engine.particles ? engine.particles.length : 0;
@@ -1393,7 +1401,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  drawParticleOverlay(p) {
+  drawParticleOverlay(p, withVector = true) {
     const ctx = this.ctx;
     const speed = p.getSpeed();
 
@@ -1412,7 +1420,7 @@ export class Renderer {
     }
 
     // Optional Velocity Vector Arrow
-    if (this.showVectors && speed > 2) {
+    if (withVector && this.showVectors && speed > 2) {
       const scale = 0.09;
       const vx = p.vel.x * scale;
       const vy = p.vel.y * scale;

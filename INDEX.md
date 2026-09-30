@@ -86,12 +86,13 @@
 - **toolPanel.js**: `toolConfigs` (tool defaults), ribbon tool buttons, tool help and the floating tool properties dialog.
 - **inspector.js**: Accordion property editors for selected elements.
 - **elementTree.js**: Elements outline list and group management in the left sidebar.
-- **menus.js**: Menu bar (File/Edit/View/Help), reset/clear/import, Save As dialog.
-- **playback.js**: Play/pause/step/step-back/stop, physics model and gravity toggles, zoom controls.
+- **menus.js**: Menu bar (File/Edit/View/Simulation/Help) with enabled/checked state, scene lifecycle (`openScene` for presets/recent/files, New Canvas, Revert to Saved, Save/Save As, PNG export), view toggles.
+- **ribbonLayout.js**: Responsive ribbon (icon-only tool buttons when a row would overflow, wheel scrolls horizontally).
+- **playback.js**: Play/pause/step/step-back/stop, physics model and gravity toggles, zoom controls, `fitViewToScene()` (zoom to fit into the area not covered by panels).
 - **canvasInput.js**: Canvas mouse interaction: coordinates and magnetic snapping, context menu, drawing, dragging, panning.
 - **selection.js**: Selection transforms (rotate/flip/group), hit-testing and box selection, circle/arc wall generators, move and delete.
 - **popup.js**: Element popup next to the selected canvas item.
-- **keyboard.js**: Keyboard shortcuts, info modal and chart tabs (side-effect module, imported bare by main.js).
+- **keyboard.js**: Keyboard shortcuts, info + shortcuts modals and chart tabs (side-effect module, imported bare by main.js).
 - **dashboard.js**: Right sidebar: system stats, chamber cards and custom charts.
 - **toolPreview.js**: Live previews of the active drawing tool.
 - **splash.js**: Splash screen, presets, recent profiles and the ambient background scene.

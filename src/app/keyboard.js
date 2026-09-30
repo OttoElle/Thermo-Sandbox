@@ -1,48 +1,55 @@
 // Keyboard shortcuts, info modal and chart tabs.
-import { btnInfoClose, btnPlayPause, btnStep, ctxDuplicate, fileImportInput, infoModal, tabPV, tabTemp } from './dom.js';
+import { btnInfoClose, btnPlayPause, btnRotate90, btnStep, btnToolbarClear, btnZoomIn, btnZoomOut, ctxDuplicate, fileImportInput, infoModal, tabPV, tabTemp } from './dom.js';
 import { engine, tempChart } from './core.js';
 import { app, pointer, resetPolygonDraft } from './state.js';
 import { performRedo, performUndo, recordUndoState } from './history.js';
 import { toolConfigs } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
-import { closeAllMenus, closeSaveModal, openSaveModal } from './menus.js';
+import { closeAllMenus, closeSaveModal, openSaveModal, openShortcutsModal, saveProject, selectAllElements, toggleVectors } from './menus.js';
 import { closeContextMenu } from './canvasInput.js';
-import { deleteSelectedItems } from './selection.js';
+import { deleteSelectedItems, groupSelection, ungroupSelection } from './selection.js';
 import { closePopup } from './popup.js';
 import { hideSplashScreen } from './splash.js';
+import { fitViewToScene } from './playback.js';
 
 // Keyboard Shortcuts
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const t = e.target;
+  if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return;
+  if (app.isSplashActive && e.code !== 'Escape') return;
 
-  if (e.ctrlKey && e.code === 'KeyZ') {
-    e.preventDefault();
-    if (e.shiftKey) performRedo();
-    else performUndo();
+  if (e.ctrlKey || e.metaKey) {
+    const handled = {
+      KeyZ: () => (e.shiftKey ? performRedo() : performUndo()),
+      KeyY: performRedo,
+      KeyD: () => ctxDuplicate.click(),
+      KeyO: () => fileImportInput.click(),
+      KeyS: () => (e.shiftKey ? openSaveModal() : saveProject()),
+      KeyA: selectAllElements,
+      KeyG: () => (e.shiftKey ? ungroupSelection() : groupSelection()),
+      KeyN: () => { if (e.altKey) btnToolbarClear.click(); }
+    }[e.code];
+    if (handled) {
+      e.preventDefault();
+      handled();
+    }
     return;
   }
-  if (e.ctrlKey && e.code === 'KeyY') {
-    e.preventDefault();
-    performRedo();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyD') {
-    e.preventDefault();
-    ctxDuplicate.click();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyO') {
-    e.preventDefault();
-    fileImportInput.click();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyS') {
-    e.preventDefault();
-    openSaveModal();
-    return;
-  }
+  if (e.altKey) return;
 
-  if (e.code === 'Delete' || e.code === 'Backspace') {
+  if (e.key === '?') {
+    openShortcutsModal();
+  } else if (e.key === '+' || e.key === '=') {
+    btnZoomIn.click();
+  } else if (e.key === '-') {
+    btnZoomOut.click();
+  } else if (e.code === 'KeyF') {
+    fitViewToScene();
+  } else if (e.code === 'KeyV') {
+    toggleVectors();
+  } else if (e.code === 'KeyR' && app.selectedItems.length > 0) {
+    btnRotate90.click();
+  } else if (e.code === 'Delete' || e.code === 'Backspace') {
     deleteSelectedItems();
   } else if (e.code === 'Space') {
     e.preventDefault();
@@ -62,7 +69,7 @@ window.addEventListener('keydown', (e) => {
           groupId: pointer.polygonGroupId
         });
         pointer.polygonWalls.push(w);
-        app.selectedItems = [...polygonWalls];
+        app.selectedItems = [...pointer.polygonWalls];
         resetPolygonDraft();
         updateElementsList();
       }
@@ -86,12 +93,19 @@ window.addEventListener('keydown', (e) => {
     closeContextMenu();
     closeAllMenus();
     closeSaveModal();
+    infoModal.style.display = 'none';
+    shortcutsModal.style.display = 'none';
   }
 });
 
-// Info Modal
+// Info & Shortcuts Modals
+const shortcutsModal = document.getElementById('shortcutsModal');
 btnInfoClose.addEventListener('click', () => { infoModal.style.display = 'none'; });
-window.addEventListener('click', (e) => { if (e.target === infoModal) infoModal.style.display = 'none'; });
+document.getElementById('btnShortcutsClose')?.addEventListener('click', () => { shortcutsModal.style.display = 'none'; });
+window.addEventListener('click', (e) => {
+  if (e.target === infoModal) infoModal.style.display = 'none';
+  if (e.target === shortcutsModal) shortcutsModal.style.display = 'none';
+});
 
 // Chart Tabs
 tabTemp.addEventListener('click', () => {

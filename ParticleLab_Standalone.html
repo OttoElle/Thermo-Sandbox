@@ -556,6 +556,7 @@ body.sequencer-expanded .floating-vel-legend {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  white-space: nowrap;
   padding: 6px 10px;
   border-radius: 4px;
   font-size: 11.5px;
@@ -891,6 +892,64 @@ body.sequencer-expanded .floating-vel-legend {
   border-color: var(--accent-green);
 }
 
+
+.ribbon-btn:disabled,
+.ribbon-btn[disabled] {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Thin separator between sub-clusters inside one ribbon group */
+.ribbon-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background-color: var(--border-subtle);
+  flex-shrink: 0;
+}
+
+/* Compact ribbon (set by ribbonLayout.js when a row would overflow):
+   tool buttons become icon-only, their title attribute stays as tooltip. */
+.header-row-ribbon.ribbon-compact .ribbon-tool-btn {
+  padding: 3px 6px;
+}
+
+.header-row-ribbon.ribbon-compact .ribbon-tool-btn > span {
+  display: none;
+}
+
+/* Menu entries: check column, disabled state */
+.menu-entry-check {
+  justify-content: flex-start;
+}
+
+.menu-entry-check::before {
+  content: '✓';
+  width: 16px;
+  flex-shrink: 0;
+  color: var(--accent-green);
+  font-weight: 700;
+  visibility: hidden;
+}
+
+.menu-entry-check.checked::before {
+  visibility: visible;
+}
+
+.menu-entry-check .menu-shortcut {
+  margin-left: auto;
+  padding-left: 10px;
+}
+
+.menu-entry.disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.menu-entry.disabled:hover {
+  background-color: transparent;
+  color: var(--text-muted);
+}
 
 
 /* --- css/sidebar-left.css --- */
@@ -2521,6 +2580,55 @@ body.sequencer-expanded .floating-zoom-panel {
   font-family: 'JetBrains Mono', monospace;
 }
 
+
+/* Keyboard shortcuts dialog */
+.shortcuts-card {
+  width: 560px;
+}
+
+.shortcuts-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.shortcuts-body h4 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.shortcuts-body dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.shortcuts-body dt {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--accent-green);
+  white-space: nowrap;
+}
+
+.shortcuts-body dd {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+@media (max-width: 600px) {
+  .shortcuts-body {
+    grid-template-columns: 1fr;
+  }
+}
 
 
 /* --- css/splash.css --- */
@@ -4277,22 +4385,15 @@ body.seq-picking-active #simCanvas {
             <div class="menu-item" id="menuFile">
               <button class="menu-btn">File</button>
               <div class="menu-dropdown">
-                <div class="menu-entry" id="menuEntryImport">
-                  <span>Open / Import JSON...</span>
-                  <span class="menu-shortcut">Ctrl+O</span>
-                </div>
-                <div class="menu-entry" id="menuEntrySaveAs">
-                  <span>Save As / Export...</span>
-                  <span class="menu-shortcut">Ctrl+S</span>
-                </div>
+                <div class="menu-entry" id="menuEntryClear"><span>New Canvas</span><span class="menu-shortcut">Ctrl+Alt+N</span></div>
+                <div class="menu-entry" id="menuEntryImport"><span>Open…</span><span class="menu-shortcut">Ctrl+O</span></div>
+                <div class="menu-entry" id="menuEntryWelcome"><span>Examples &amp; Recent…</span></div>
                 <div class="menu-divider"></div>
-                <div class="menu-entry" id="menuEntryReset">
-                  <span>Reset to Initial State</span>
-                </div>
-                <div class="menu-entry menu-entry-danger" id="menuEntryClear">
-                  <span>Clear All (New Canvas)</span>
-                  <span class="menu-shortcut">Ctrl+N</span>
-                </div>
+                <div class="menu-entry" id="menuEntrySave"><span>Save</span><span class="menu-shortcut">Ctrl+S</span></div>
+                <div class="menu-entry" id="menuEntrySaveAs"><span>Save As…</span><span class="menu-shortcut">Ctrl+Shift+S</span></div>
+                <div class="menu-entry" id="menuEntryExportPNG"><span>Export Image (PNG)</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry" id="menuEntryReset"><span>Revert to Saved</span></div>
               </div>
             </div>
 
@@ -4300,26 +4401,19 @@ body.seq-picking-active #simCanvas {
             <div class="menu-item" id="menuEdit">
               <button class="menu-btn">Edit</button>
               <div class="menu-dropdown">
-                <div class="menu-entry" id="menuEntryUndo">
-                  <span>Undo</span>
-                  <span class="menu-shortcut">Ctrl+Z</span>
-                </div>
-                <div class="menu-entry" id="menuEntryRedo">
-                  <span>Redo</span>
-                  <span class="menu-shortcut">Ctrl+Y</span>
-                </div>
+                <div class="menu-entry" id="menuEntryUndo"><span>Undo</span><span class="menu-shortcut">Ctrl+Z</span></div>
+                <div class="menu-entry" id="menuEntryRedo"><span>Redo</span><span class="menu-shortcut">Ctrl+Y</span></div>
                 <div class="menu-divider"></div>
-                <div class="menu-entry" id="menuEntryDuplicate">
-                  <span>Duplicate Selection</span>
-                  <span class="menu-shortcut">Ctrl+D</span>
-                </div>
-                <div class="menu-entry" id="menuEntryGroup">
-                  <span>Group Selected</span>
-                </div>
-                <div class="menu-entry menu-entry-danger" id="menuEntryDelete">
-                  <span>Delete Selection</span>
-                  <span class="menu-shortcut">Del</span>
-                </div>
+                <div class="menu-entry" id="menuEntrySelectAll"><span>Select All</span><span class="menu-shortcut">Ctrl+A</span></div>
+                <div class="menu-entry" id="menuEntryDuplicate"><span>Duplicate</span><span class="menu-shortcut">Ctrl+D</span></div>
+                <div class="menu-entry" id="menuEntryGroup"><span>Group</span><span class="menu-shortcut">Ctrl+G</span></div>
+                <div class="menu-entry" id="menuEntryUngroup"><span>Ungroup</span><span class="menu-shortcut">Ctrl+Shift+G</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry" id="menuEntryRotate"><span>Rotate 90°</span><span class="menu-shortcut">R</span></div>
+                <div class="menu-entry" id="menuEntryFlipH"><span>Flip Horizontal</span></div>
+                <div class="menu-entry" id="menuEntryFlipV"><span>Flip Vertical</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry menu-entry-danger" id="menuEntryDelete"><span>Delete</span><span class="menu-shortcut">Del</span></div>
               </div>
             </div>
 
@@ -4327,45 +4421,44 @@ body.seq-picking-active #simCanvas {
             <div class="menu-item" id="menuView">
               <button class="menu-btn">View</button>
               <div class="menu-dropdown">
-                <div class="menu-entry" id="menuEntryToggleGrid">
-                  <span id="labelMenuGrid">✓ Show Grid</span>
-                </div>
-                <div class="menu-entry" id="menuEntryGrid10">
-                  <span id="labelGrid10">Grid Size: 10 px</span>
-                </div>
-                <div class="menu-entry" id="menuEntryGrid20">
-                  <span id="labelGrid20">✓ Grid Size: 20 px</span>
-                </div>
-                <div class="menu-entry" id="menuEntryGrid40">
-                  <span id="labelGrid40">Grid Size: 40 px</span>
-                </div>
+                <div class="menu-entry menu-entry-check" id="menuEntryToggleGrid"><span>Show Grid</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryGrid10"><span>Grid Size 10 px</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryGrid20"><span>Grid Size 20 px</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryGrid40"><span>Grid Size 40 px</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryToggleSnap"><span>Snap to Grid</span></div>
                 <div class="menu-divider"></div>
-                <div class="menu-entry" id="menuEntryToggleSnap">
-                  <span id="labelMenuSnap">✓ Snap to Grid</span>
-                </div>
-                <div class="menu-entry" id="menuEntryToggleVectors">
-                  <span id="labelMenuVectors">Velocity Vectors (v⃗)</span>
-                </div>
-                <div class="menu-entry" id="menuEntryToggleColor">
-                  <span id="labelMenuColor">✓ Color by Speed (|v|)</span>
-                </div>
+                <div class="menu-entry menu-entry-check" id="menuEntryToggleVectors"><span>Velocity Vectors</span><span class="menu-shortcut">V</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryToggleColor"><span>Color by Speed</span></div>
                 <div class="menu-divider"></div>
-                <div class="menu-entry" id="menuEntryResetView">
-                  <span>Center View</span>
-                </div>
+                <div class="menu-entry menu-entry-check" id="menuEntryZoomIn"><span>Zoom In</span><span class="menu-shortcut">+</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryZoomOut"><span>Zoom Out</span><span class="menu-shortcut">−</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryResetView"><span>Zoom to Fit</span><span class="menu-shortcut">F</span></div>
               </div>
             </div>
 
-            <!-- 4. HELP MENU -->
+            <!-- 4. SIMULATION MENU -->
+            <div class="menu-item" id="menuSim">
+              <button class="menu-btn">Simulation</button>
+              <div class="menu-dropdown">
+                <div class="menu-entry menu-entry-check" id="menuEntryPlay"><span id="labelMenuPlay">Play</span><span class="menu-shortcut">Space</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryStep"><span>Step Forward</span><span class="menu-shortcut">S</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryStepBack"><span>Step Back</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryStop"><span>Stop &amp; Rewind to t = 0</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryModelIdeal"><span>Ideal Fluid (Hard Spheres)</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryModelReal"><span>Real Fluid (Lennard-Jones)</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryGravity"><span>Gravity</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry menu-entry-check" id="menuEntrySequencer"><span>Cycle Sequencer Panel</span></div>
+              </div>
+            </div>
+
+            <!-- 5. HELP MENU -->
             <div class="menu-item" id="menuHelp">
               <button class="menu-btn">Help</button>
               <div class="menu-dropdown">
-                <div class="menu-entry" id="menuEntryGuide">
-                  <span>Interactive Guide & Docs</span>
-                </div>
-                <div class="menu-entry" id="menuEntryShortcuts">
-                  <span>Keyboard Shortcuts</span>
-                </div>
+                <div class="menu-entry" id="menuEntryGuide"><span>Quick Guide</span></div>
+                <div class="menu-entry" id="menuEntryShortcuts"><span>Keyboard Shortcuts</span><span class="menu-shortcut">?</span></div>
               </div>
             </div>
           </nav>
@@ -4386,33 +4479,7 @@ body.seq-picking-active #simCanvas {
         <!-- SUB-ROW 1: General Tools, Grid, Transforms & Actions -->
         <div class="header-row-ribbon ribbon-row-general">
           
-          <!-- Group 1: Grid & View Controls -->
-          <div class="ribbon-group" title="Grid & View Settings">
-            <span class="ribbon-group-title">VIEW & GRID</span>
-            <div class="ribbon-group-controls">
-              <button id="btnToggleGrid" class="ribbon-btn active" title="Toggle Grid Visibility">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-              </button>
-              <select id="selectGridSize" class="ribbon-select" title="Grid Size">
-                <option value="10">10px</option>
-                <option value="20" selected>20px</option>
-                <option value="40">40px</option>
-              </select>
-              <button id="btnToggleSnap" class="ribbon-btn active" title="Toggle Snap-to-Grid & Vertex Magnet">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="3" x2="8" y2="3"/><line x1="16" y1="3" x2="20" y2="3"/></svg>
-              </button>
-              <button id="btnToggleVectors" class="ribbon-btn" title="Toggle Velocity Vectors (v⃗)">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="5" cy="19" r="2.5" fill="currentColor"/><path d="M7.5 16.5L19 5m0 0h-6.5m6.5 0v6.5"/></svg>
-              </button>
-              <button id="btnToggleColor" class="ribbon-btn active" title="Toggle Particle Color by Speed / Colormap">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.7-1.7h2c3 0 5.5-2.5 5.5-5.5C22 6.2 17.5 2 12 2z"/><circle cx="7.5" cy="10.5" r="1.2" fill="currentColor"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/><circle cx="16.5" cy="10.5" r="1.2" fill="currentColor"/></svg>
-              </button>
-            </div>
-          </div>
-
-          <div class="ribbon-divider"></div>
-
-          <!-- Group 2: History (Undo/Redo) -->
+          <!-- History: undo/redo and document-level reset/clear -->
           <div class="ribbon-group" title="History">
             <span class="ribbon-group-title">HISTORY</span>
             <div class="ribbon-group-controls">
@@ -4422,12 +4489,19 @@ body.seq-picking-active #simCanvas {
               <button id="btnRedo" class="ribbon-btn" title="Redo (Ctrl+Y)">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
               </button>
+              <span class="ribbon-sep"></span>
+              <button id="btnToolbarReset" class="ribbon-btn" title="Revert to the last opened / saved state (undoable)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
+              </button>
+              <button id="btnToolbarClear" class="ribbon-btn btn-danger" title="Clear Canvas / New Document (Ctrl+Alt+N, undoable)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
             </div>
           </div>
 
           <div class="ribbon-divider"></div>
 
-          <!-- Group 3: General Selection Tools -->
+          <!-- General tools -->
           <div class="ribbon-group" title="General Tools">
             <span class="ribbon-group-title">TOOLS</span>
             <div class="ribbon-group-controls">
@@ -4444,7 +4518,7 @@ body.seq-picking-active #simCanvas {
 
           <div class="ribbon-divider"></div>
 
-          <!-- Group 4: Transform Controls (Rotate & Flip) -->
+          <!-- Transform selected objects -->
           <div class="ribbon-group" title="Transform Selected Objects">
             <span class="ribbon-group-title">TRANSFORM</span>
             <div class="ribbon-group-controls">
@@ -4465,15 +4539,35 @@ body.seq-picking-active #simCanvas {
 
           <div class="ribbon-divider"></div>
 
-          <!-- Group 5: Actions (Reset, Clear) -->
-          <div class="ribbon-group" title="Canvas Actions">
-            <span class="ribbon-group-title">ACTIONS</span>
+          <!-- Grid -->
+          <div class="ribbon-group" title="Grid & Snapping">
+            <span class="ribbon-group-title">GRID</span>
             <div class="ribbon-group-controls">
-              <button id="btnToolbarReset" class="ribbon-btn" title="Reset Simulation to Initial State (Rewind to t=0)">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
+              <button id="btnToggleGrid" class="ribbon-btn active" title="Toggle Grid Visibility">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
               </button>
-              <button id="btnToolbarClear" class="ribbon-btn btn-danger" title="Clear Canvas (New Document)">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <select id="selectGridSize" class="ribbon-select" title="Grid Size">
+                <option value="10">10px</option>
+                <option value="20" selected>20px</option>
+                <option value="40">40px</option>
+              </select>
+              <button id="btnToggleSnap" class="ribbon-btn active" title="Toggle Snap-to-Grid & Vertex Magnet">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="3" x2="8" y2="3"/><line x1="16" y1="3" x2="20" y2="3"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- View -->
+          <div class="ribbon-group" title="Particle Display">
+            <span class="ribbon-group-title">VIEW</span>
+            <div class="ribbon-group-controls">
+              <button id="btnToggleVectors" class="ribbon-btn" title="Toggle Velocity Vectors (v⃗)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="5" cy="19" r="2.5" fill="currentColor"/><path d="M7.5 16.5L19 5m0 0h-6.5m6.5 0v6.5"/></svg>
+              </button>
+              <button id="btnToggleColor" class="ribbon-btn active" title="Toggle Particle Color by Speed / Colormap">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.7-1.7h2c3 0 5.5-2.5 5.5-5.5C22 6.2 17.5 2 12 2z"/><circle cx="7.5" cy="10.5" r="1.2" fill="currentColor"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/><circle cx="16.5" cy="10.5" r="1.2" fill="currentColor"/></svg>
               </button>
             </div>
           </div>
@@ -4863,7 +4957,7 @@ body.seq-picking-active #simCanvas {
       <button id="btnZoomIn" class="zoom-btn" title="Zoom In">+</button>
       <span id="zoomDisplay" class="zoom-text">100%</span>
       <button id="btnZoomOut" class="zoom-btn" title="Zoom Out">−</button>
-      <button id="btnResetView" class="zoom-btn" title="Reset View to Center">
+      <button id="btnResetView" class="zoom-btn" title="Zoom to Fit (F)">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
     </div>
@@ -4925,6 +5019,62 @@ body.seq-picking-active #simCanvas {
             <button id="btnChartCancel" class="btn-pill btn-secondary-action">Cancel</button>
             <button id="btnChartConfirm" class="btn-pill btn-primary-action">Add to Dashboard</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Keyboard Shortcuts -->
+    <div id="shortcutsModal" class="modal-overlay" style="display: none;">
+      <div class="modal-card shortcuts-card">
+        <div class="modal-header">
+          <h3>Keyboard Shortcuts</h3>
+          <button id="btnShortcutsClose" class="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body shortcuts-body">
+          <section>
+            <h4>File</h4>
+            <dl>
+              <dt>Ctrl+O</dt><dd>Open</dd>
+              <dt>Ctrl+S</dt><dd>Save</dd>
+              <dt>Ctrl+Shift+S</dt><dd>Save As</dd>
+              <dt>Ctrl+Alt+N</dt><dd>New Canvas</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>Edit</h4>
+            <dl>
+              <dt>Ctrl+Z / Ctrl+Y</dt><dd>Undo / Redo</dd>
+              <dt>Ctrl+A</dt><dd>Select All</dd>
+              <dt>Ctrl+D</dt><dd>Duplicate</dd>
+              <dt>Ctrl+G</dt><dd>Group</dd>
+              <dt>Ctrl+Shift+G</dt><dd>Ungroup</dd>
+              <dt>R</dt><dd>Rotate 90°</dd>
+              <dt>Del</dt><dd>Delete</dd>
+              <dt>Shift+Click</dt><dd>Add to Selection</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>Drawing</h4>
+            <dl>
+              <dt>Enter</dt><dd>Close Polyline / Finish</dd>
+              <dt>Esc</dt><dd>Cancel / Select Tool</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>View</h4>
+            <dl>
+              <dt>F</dt><dd>Zoom to Fit</dd>
+              <dt>+ / −</dt><dd>Zoom In / Out</dd>
+              <dt>V</dt><dd>Velocity Vectors</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>Simulation</h4>
+            <dl>
+              <dt>Space</dt><dd>Play / Pause</dd>
+              <dt>S</dt><dd>Step Forward</dd>
+            </dl>
+          </section>
         </div>
       </div>
     </div>
@@ -11772,6 +11922,100 @@ class ParticleGPURenderer {
         { binding: 2, resource: this.sampler }
       ]
     });
+
+    this._initVectorPipeline(pipelineLayout);
+  }
+
+  // Velocity arrows drawn straight from the compute particle buffer
+  // (pos, vel, radius), 9 vertices per particle: shaft quad + arrow head.
+  _initVectorPipeline(pipelineLayout) {
+    const device = this.device;
+    const shaderModule = device.createShaderModule({
+      label: 'ParticleVectorShader',
+      code: `
+        struct Uniforms {
+          uViewportSize: vec2f,
+          uPan: vec2f,
+          uZoom: f32,
+          uColorByVelocity: u32,
+          _pad: vec2f,
+          uDefaultColor: vec3f,
+          _pad2: f32,
+        };
+        @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+        const VECTOR_SCALE = 0.09;   // world length per (px/s), same as the 2D overlay
+        const MIN_SPEED = 2.0;
+        const HALF_WIDTH = 0.7;      // screen px
+
+        @vertex
+        fn vs_vector(
+          @builtin(vertex_index) vi: u32,
+          @location(1) aPos: vec2f,
+          @location(4) aVel: vec2f,
+          @location(2) aRadius: f32
+        ) -> @builtin(position) vec4f {
+          let speed = length(aVel);
+          if (aRadius <= 0.0 || aPos.x < -50000.0 || speed <= MIN_SPEED) {
+            return vec4f(2.0, 2.0, 2.0, 1.0);
+          }
+          let s0 = aPos * uniforms.uZoom + uniforms.uPan;
+          let d = aVel * (VECTOR_SCALE * uniforms.uZoom);
+          let len = max(length(d), 0.001);
+          let dir = d / len;
+          let n = vec2f(-dir.y, dir.x);
+          let headLen = min(len * 0.45, 6.0);
+          let headW = headLen * 0.55;
+          let e = s0 + dir * (len - headLen);
+          var pts = array<vec2f, 9>(
+            s0 + n * HALF_WIDTH, s0 - n * HALF_WIDTH, e + n * HALF_WIDTH,
+            e + n * HALF_WIDTH, s0 - n * HALF_WIDTH, e - n * HALF_WIDTH,
+            s0 + d, e + n * headW, e - n * headW
+          );
+          let p = pts[vi];
+          return vec4f(
+            (p.x / uniforms.uViewportSize.x) * 2.0 - 1.0,
+            1.0 - (p.y / uniforms.uViewportSize.y) * 2.0,
+            0.0, 1.0
+          );
+        }
+
+        @fragment
+        fn fs_vector() -> @location(0) vec4f {
+          return vec4f(1.0, 1.0, 1.0, 0.7);
+        }
+      `
+    });
+
+    this.vectorPipeline = device.createRenderPipeline({
+      label: 'ParticleVectorPipeline',
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_vector',
+        buffers: [{
+          arrayStride: 8 * 4,
+          stepMode: 'instance',
+          attributes: [
+            { shaderLocation: 1, offset: 0, format: 'float32x2' },     // pos
+            { shaderLocation: 4, offset: 2 * 4, format: 'float32x2' }, // vel
+            { shaderLocation: 2, offset: 4 * 4, format: 'float32' }    // radius
+          ]
+        }]
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_vector',
+        targets: [{
+          format: this.format,
+          blend: {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+          }
+        }]
+      },
+      primitive: { topology: 'triangle-list' }
+    });
   }
 
   resize(width, height) {
@@ -11800,7 +12044,7 @@ class ParticleGPURenderer {
     this.device.queue.submit([commandEncoder.finish()]);
   }
 
-  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true, showVectors = false) {
     if (!this.isSupported || !this.device || !this.context || !buffer || count === 0) {
       this.clear();
       return;
@@ -11843,6 +12087,11 @@ class ParticleGPURenderer {
     renderPass.setVertexBuffer(0, this.quadBuffer);
     renderPass.setVertexBuffer(1, buffer);
     renderPass.draw(4, count, 0, 0);
+    if (showVectors && this.vectorPipeline) {
+      renderPass.setPipeline(this.vectorPipeline);
+      renderPass.setVertexBuffer(0, buffer);
+      renderPass.draw(9, count, 0, 0);
+    }
     renderPass.end();
 
     this.device.queue.submit([commandEncoder.finish()]);
@@ -12093,7 +12342,7 @@ class Renderer {
     ctx.restore();
   }
 
-  render(engine, selectedItems = []) {
+  render(engine, selectedItems = [], isEditing = true) {
     const isItemSelected = (item) => Array.isArray(selectedItems) ? selectedItems.includes(item) : selectedItems === item;
 
     this.clear();
@@ -12139,7 +12388,15 @@ class Renderer {
     if (this.useWebGPU && this.gpuRenderer) {
       if (engine.isGPUSimulating()) {
         const outputBuffer = engine.gpuCompute.getOutputBuffer();
-        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
+        this.gpuRenderer.renderGPUBuffer(outputBuffer, engine.gpuCompute.count, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity, this.showVectors);
+        // Particle selection only exists in edit mode, where engine.particles
+        // still matches the GPU buffer.
+        if (isEditing) {
+          const pCount = engine.particles ? engine.particles.length : 0;
+          for (let i = 0; i < pCount; i++) {
+            if (engine.particles[i].selected) this.drawParticleOverlay(engine.particles[i], false);
+          }
+        }
       } else {
         this.gpuRenderer.render(engine.particles, this.panX, this.panY, this.zoom, this.maxSpeedReference, this.colorByVelocity);
         const pCount = engine.particles ? engine.particles.length : 0;
@@ -13324,7 +13581,7 @@ class Renderer {
     ctx.restore();
   }
 
-  drawParticleOverlay(p) {
+  drawParticleOverlay(p, withVector = true) {
     const ctx = this.ctx;
     const speed = p.getSpeed();
 
@@ -13343,7 +13600,7 @@ class Renderer {
     }
 
     // Optional Velocity Vector Arrow
-    if (this.showVectors && speed > 2) {
+    if (withVector && this.showVectors && speed > 2) {
       const scale = 0.09;
       const vx = p.vel.x * scale;
       const vy = p.vel.y * scale;
@@ -17291,11 +17548,76 @@ btnZoomOut.addEventListener('click', () => {
   updateZoomText();
   updatePopupPosition();
 });
-btnResetView.addEventListener('click', () => {
-  renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
+btnResetView.addEventListener('click', fitViewToScene);
+
+// World-space bounding box of all scene elements and edit-time particles.
+function getSceneBounds() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const add = (x, y) => {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  };
+  for (const item of engine.elements) {
+    if (item.p1 && item.p2) {
+      add(item.p1.x, item.p1.y);
+      add(item.p2.x, item.p2.y);
+    } else if (typeof item.getBounds === 'function') {
+      const b = item.getBounds();
+      add(b.left, b.top);
+      add(b.right, b.bottom);
+    } else if (item.x !== undefined && item.width !== undefined) {
+      add(item.x, item.y);
+      add(item.x + item.width, item.y + item.height);
+    }
+    if (typeof item.getHandlePositions === 'function') {
+      const h = item.getHandlePositions();
+      add(h.minHandle.x, h.minHandle.y);
+      add(h.maxHandle.x, h.maxHandle.y);
+    }
+  }
+  for (const p of engine.particles) add(p.pos.x, p.pos.y);
+  return minX <= maxX ? { minX, minY, maxX, maxY } : null;
+}
+
+// Screen rectangle not covered by the floating header, sidebars and dock.
+// Uses offset* (layout) values so running CSS transitions don't skew it.
+function getVisibleCanvasRect() {
+  let left = 0, top = 0, right = canvas.width, bottom = canvas.height;
+  const header = document.querySelector('.floating-header');
+  const sideL = document.getElementById('sidebarLeft');
+  const sideR = document.querySelector('.floating-sidebar.floating-right');
+  const dock = document.getElementById('unifiedBottomDock');
+  if (header?.offsetWidth) top = header.offsetTop + header.offsetHeight;
+  if (sideL?.offsetWidth) left = sideL.offsetLeft + sideL.offsetWidth;
+  if (sideR?.offsetWidth) right = sideR.offsetLeft;
+  if (dock?.offsetWidth) bottom = dock.offsetTop;
+  if (right - left < 200 || bottom - top < 150) return { left: 0, top: 0, right: canvas.width, bottom: canvas.height };
+  return { left, top, right, bottom };
+}
+
+// Zoom and pan so the whole scene fits into the visible canvas area.
+function fitViewToScene() {
+  const view = getVisibleCanvasRect();
+  const bounds = getSceneBounds();
+  const margin = 40;
+  const viewW = view.right - view.left - margin * 2;
+  const viewH = view.bottom - view.top - margin * 2;
+  const cx = (view.left + view.right) * 0.5;
+  const cy = (view.top + view.bottom) * 0.5;
+  if (!bounds) {
+    renderer.setViewport(cx, cy, 1.0);
+  } else {
+    const w = Math.max(bounds.maxX - bounds.minX, 50);
+    const h = Math.max(bounds.maxY - bounds.minY, 50);
+    renderer.setViewport(0, 0, Math.min(viewW / w, viewH / h, 1.5));
+    const z = renderer.zoom;
+    renderer.setViewport(cx - (bounds.minX + bounds.maxX) * 0.5 * z, cy - (bounds.minY + bounds.maxY) * 0.5 * z, z);
+  }
   updateZoomText();
   updatePopupPosition();
-});
+}
 
 
 // --- src/app/splash.js ---
@@ -17392,7 +17714,7 @@ function renderRecentProfiles() {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
     `;
     el.addEventListener('click', () => {
-      loadProfileData(item.name, item.data);
+      openScene(item.name, item.data);
     });
     splashRecentContainer.appendChild(el);
   });
@@ -17427,35 +17749,10 @@ function renderSplashPresets() {
     card.addEventListener('click', () => {
       stopAndResetSimulationForNewScene();
       p.load(engine);
-      app.currentProjectName = p.name;
-      headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-      const state = engine.exportState(p.name);
-      engine.setLoadedProfile(state);
-      addRecentProfile(p.name, state);
-      updateElementsList();
-      renderToolProperties(app.activeTool);
-      updateModelToggleUI();
-      updateGravityUI();
-      sequencerUI?.render();
-      app.hasActiveSession = true;
-      hideSplashScreen();
+      openScene(p.name, engine.exportState(p.name));
     });
     splashPresetsContainer.appendChild(card);
   });
-}
-
-function loadProfileData(name, data) {
-  stopAndResetSimulationForNewScene();
-  app.currentProjectName = name;
-  headerProjectTitle.textContent = `${name}.json`;
-  engine.setLoadedProfile(data);
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
-  sequencerUI?.render();
-  app.hasActiveSession = true;
-  hideSplashScreen();
 }
 
 function setupAmbientScene() {
@@ -17525,17 +17822,7 @@ btnSplashNew?.addEventListener('click', () => {
   stopAndResetSimulationForNewScene();
   engine.clear();
   engine.gravityEnabled = false;
-  
-  app.currentProjectName = 'Untitled Simulation';
-  headerProjectTitle.textContent = 'Untitled Simulation.json';
-  const state = engine.exportState('Untitled Simulation');
-  engine.setLoadedProfile(state);
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
-  sequencerUI?.render();
-  hideSplashScreen();
+  openScene('Untitled Simulation', engine.exportState('Untitled Simulation'), { addToRecent: false });
 });
 
 btnSplashOpen?.addEventListener('click', () => {
@@ -17571,10 +17858,10 @@ splashOverlay?.addEventListener('click', (e) => {
 
 
 // --- src/app/menus.js ---
-// Menu bar (File/Edit/View/Help) and the Save As dialog.
+// Menu bar (File/Edit/View/Simulation/Help), scene loading/saving and the Save As dialog.
 
 // ============================================================================
-// Desktop Menu Bar Logic (File, Edit, View, Help)
+// Desktop Menu Bar Logic
 // ============================================================================
 const menuItems = document.querySelectorAll('.menu-item');
 let isAnyMenuOpen = false;
@@ -17584,24 +17871,23 @@ function closeAllMenus() {
   isAnyMenuOpen = false;
 }
 
+function openMenu(item) {
+  closeAllMenus();
+  refreshMenuState();
+  item.classList.add('open');
+  isAnyMenuOpen = true;
+}
+
 menuItems.forEach(item => {
   const btn = item.querySelector('.menu-btn');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    const isOpen = item.classList.contains('open');
-    closeAllMenus();
-    if (!isOpen) {
-      item.classList.add('open');
-      isAnyMenuOpen = true;
-    }
+    if (item.classList.contains('open')) closeAllMenus();
+    else openMenu(item);
   });
 
   item.addEventListener('mouseenter', () => {
-    if (isAnyMenuOpen) {
-      closeAllMenus();
-      item.classList.add('open');
-      isAnyMenuOpen = true;
-    }
+    if (isAnyMenuOpen && !item.classList.contains('open')) openMenu(item);
   });
 });
 
@@ -17611,28 +17897,91 @@ window.addEventListener('click', (e) => {
   }
 });
 
-// File Menu Actions
-document.getElementById('menuEntryImport').addEventListener('click', () => {
-  closeAllMenus();
-  fileImportInput.click();
-});
+// Registers a menu entry: closes the menu and runs the action unless disabled.
+function onMenu(id, action) {
+  const el = document.getElementById(id);
+  el?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (el.classList.contains('disabled')) return;
+    closeAllMenus();
+    action();
+  });
+}
 
-document.getElementById('menuEntrySaveAs').addEventListener('click', () => {
-  closeAllMenus();
-  openSaveModal();
-});
+function setEntry(id, { enabled = true, checked } = {}) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('disabled', !enabled);
+  if (checked !== undefined) el.classList.toggle('checked', !!checked);
+}
+
+// Enabled/checked state of all entries, evaluated whenever a menu opens.
+function refreshMenuState() {
+  const editing = !app.isSimulating;
+  const hasSel = editing && app.selectedItems.length > 0;
+
+  setEntry('menuEntryClear', { enabled: editing });
+  setEntry('menuEntryUndo', { enabled: editing && undoStack.length > 0 });
+  setEntry('menuEntryRedo', { enabled: editing && redoStack.length > 0 });
+  setEntry('menuEntrySelectAll', { enabled: editing && engine.elements.length > 0 });
+  setEntry('menuEntryDuplicate', { enabled: hasSel });
+  setEntry('menuEntryGroup', { enabled: editing && canGroupSelection() });
+  setEntry('menuEntryUngroup', { enabled: editing && canUngroupSelection() });
+  setEntry('menuEntryRotate', { enabled: hasSel });
+  setEntry('menuEntryFlipH', { enabled: hasSel });
+  setEntry('menuEntryFlipV', { enabled: hasSel });
+  setEntry('menuEntryDelete', { enabled: hasSel });
+
+  setEntry('menuEntryToggleGrid', { checked: renderer.showGrid });
+  setEntry('menuEntryGrid10', { checked: renderer.gridSize === 10 });
+  setEntry('menuEntryGrid20', { checked: renderer.gridSize === 20 });
+  setEntry('menuEntryGrid40', { checked: renderer.gridSize === 40 });
+  setEntry('menuEntryToggleSnap', { checked: renderer.snapToGrid });
+  setEntry('menuEntryToggleVectors', { checked: renderer.showVectors });
+  setEntry('menuEntryToggleColor', { checked: renderer.colorByVelocity });
+
+  const labelPlay = document.getElementById('labelMenuPlay');
+  if (labelPlay) labelPlay.textContent = (app.isSimulating && !engine.isPaused) ? 'Pause' : 'Play';
+  setEntry('menuEntryStepBack', { enabled: app.isSimulating });
+  setEntry('menuEntryStop', { enabled: app.isSimulating });
+  const model = engine.simModel || 'hard_sphere';
+  setEntry('menuEntryModelIdeal', { checked: model === 'hard_sphere' });
+  setEntry('menuEntryModelReal', { checked: model === 'lennard_jones' });
+  setEntry('menuEntryGravity', { checked: engine.gravityEnabled });
+  setEntry('menuEntrySequencer', { checked: document.body.classList.contains('sequencer-expanded') });
+}
+
+// ============================================================================
+// Scene Lifecycle: open, new, revert, save
+// ============================================================================
+const PLAY_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
+
+function setProjectName(name) {
+  app.currentProjectName = name;
+  headerProjectTitle.textContent = `${name}.json`;
+}
+
+function refreshSceneUI() {
+  closePopup();
+  closeContextMenu();
+  updateElementsList();
+  renderToolProperties(app.activeTool);
+  updateModelToggleUI();
+  updateGravityUI();
+  sequencerUI?.render();
+}
 
 function stopAndResetSimulationForNewScene() {
   app.isSimulating = false;
   engine.isPaused = true;
   app.isAmbientSim = false;
-  
+
   document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
-  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
-  
+  btnToolbarClear?.removeAttribute('disabled');
+
   playIcon.classList.add('is-play');
-  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
-  
+  playIcon.innerHTML = PLAY_ICON;
+
   engine.totalTime = 0;
   timeVal.textContent = '0.00 s';
   clearHistoryBuffer();
@@ -17645,104 +17994,138 @@ function stopAndResetSimulationForNewScene() {
   closeContextMenu();
 }
 
-function resetToLoadedProfile() {
-  app.isSimulating = false;
-  engine.isPaused = true;
-  document.querySelector('.ribbon-row-construction')?.classList.remove('simulating-locked');
-  document.getElementById('btnToolbarClear')?.removeAttribute('disabled');
-  
+// Loads a scene state as the new document (presets, recent profiles, files).
+function openScene(name, data, { addToRecent = true } = {}) {
+  stopAndResetSimulationForNewScene();
+  data.profileName = name;
+  setProjectName(name);
+  engine.setLoadedProfile(data);
+  refreshSceneUI();
+  if (addToRecent) addRecentProfile(name, data);
+  app.hasActiveSession = true;
+  hideSplashScreen();
+  fitViewToScene();
+}
+
+function stopSimulationIfRunning() {
+  if (app.isSimulating) btnStopReset.click();
+}
+
+// Back to the last opened/saved state. Undoable.
+function revertToSaved() {
+  stopSimulationIfRunning();
+  recordUndoState();
   engine.resetToLoadedProfile();
-  
-  if (engine.currentProfileName) {
-    app.currentProjectName = engine.currentProfileName;
-    headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-  }
-  
+  if (engine.currentProfileName) setProjectName(engine.currentProfileName);
   app.selectedItems = [];
   resetPolygonDraft();
   pointer.arcSteps = [];
   clearHistoryBuffer();
-  undoStack.length = 0;
-  redoStack.length = 0;
-  
-  playIcon.classList.add('is-play');
-  playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
-  
-  closePopup();
-  closeContextMenu();
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
   timeVal.textContent = '0.00 s';
+  refreshSceneUI();
 }
 
-document.getElementById('menuEntryReset').addEventListener('click', () => {
-  closeAllMenus();
-  resetToLoadedProfile();
-});
-
-document.getElementById('menuEntryClear').addEventListener('click', () => {
-  closeAllMenus();
+// Empty canvas as a new untitled document. Undoable (restores the elements).
+function newCanvas() {
+  if (app.isSimulating) return;
   recordUndoState();
   engine.clear();
   resetPolygonDraft();
   pointer.arcSteps = [];
   app.selectedItems = [];
   clearHistoryBuffer();
+  setProjectName('Untitled Simulation');
+  engine.currentProfileName = app.currentProjectName;
+  engine.loadedProfileJSON = JSON.stringify(engine.exportState(app.currentProjectName));
+  refreshSceneUI();
+}
+
+// The design as built: while simulating that is the state at play time.
+function getSaveState(name) {
+  const state = (app.isSimulating && engine.simStartSnapshot)
+    ? JSON.parse(engine.simStartSnapshot)
+    : engine.exportState(name);
+  state.profileName = name;
+  return state;
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const safeFileName = (name) => name.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+function saveProject(name = app.currentProjectName) {
+  setProjectName(name);
+  const state = getSaveState(name);
+  engine.currentProfileName = name;
+  engine.loadedProfileJSON = JSON.stringify(state);
+  addRecentProfile(name, state);
+  downloadBlob(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), `${safeFileName(name)}.json`);
+}
+
+// PNG of the visible canvas area (background, particles and geometry layers).
+function exportCanvasPNG() {
+  const rect = getVisibleCanvasRect();
+  const w = Math.round(rect.right - rect.left);
+  const h = Math.round(rect.bottom - rect.top);
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg-app').trim() || '#101216';
+  ctx.fillRect(0, 0, w, h);
+  // Re-render first so the WebGPU canvas still holds this frame's image.
+  renderer.render(engine, app.selectedItems, !app.isSimulating);
+  for (const layer of [bgCanvas, gpuCanvas, canvas]) {
+    if (layer) ctx.drawImage(layer, rect.left, rect.top, w, h, 0, 0, w, h);
+  }
+  out.toBlob(blob => { if (blob) downloadBlob(blob, `${safeFileName(app.currentProjectName)}.png`); }, 'image/png');
+}
+
+// File Menu
+onMenu('menuEntryClear', newCanvas);
+onMenu('menuEntryImport', () => fileImportInput.click());
+onMenu('menuEntryWelcome', () => showSplashScreen({ isReturning: true }));
+onMenu('menuEntrySave', () => saveProject());
+onMenu('menuEntrySaveAs', openSaveModal);
+onMenu('menuEntryExportPNG', exportCanvasPNG);
+onMenu('menuEntryReset', revertToSaved);
+
+btnToolbarReset.addEventListener('click', revertToSaved);
+btnToolbarClear.addEventListener('click', newCanvas);
+
+// Edit Menu
+function selectAllElements() {
+  if (app.isSimulating) return;
+  app.selectedItems = [...engine.elements];
   closePopup();
-  closeContextMenu();
   updateElementsList();
-  renderToolProperties(app.activeTool);
-});
+}
 
-btnToolbarReset.addEventListener('click', resetToLoadedProfile);
+onMenu('menuEntryUndo', performUndo);
+onMenu('menuEntryRedo', performRedo);
+onMenu('menuEntrySelectAll', selectAllElements);
+onMenu('menuEntryDuplicate', () => ctxDuplicate.click());
+onMenu('menuEntryGroup', groupSelection);
+onMenu('menuEntryUngroup', ungroupSelection);
+onMenu('menuEntryRotate', () => document.getElementById('btnRotate90')?.click());
+onMenu('menuEntryFlipH', () => document.getElementById('btnFlipH')?.click());
+onMenu('menuEntryFlipV', () => document.getElementById('btnFlipV')?.click());
+onMenu('menuEntryDelete', deleteSelectedItems);
 
-btnToolbarClear.addEventListener('click', () => {
-  document.getElementById('menuEntryClear').click();
-});
-
-// Edit Menu Actions
-document.getElementById('menuEntryUndo').addEventListener('click', () => {
-  closeAllMenus();
-  performUndo();
-});
-
-document.getElementById('menuEntryRedo').addEventListener('click', () => {
-  closeAllMenus();
-  performRedo();
-});
-
-document.getElementById('menuEntryDuplicate').addEventListener('click', () => {
-  closeAllMenus();
-  ctxDuplicate.click();
-});
-
-document.getElementById('menuEntryGroup').addEventListener('click', () => {
-  closeAllMenus();
-  ctxGroup.click();
-});
-
-document.getElementById('menuEntryDelete').addEventListener('click', () => {
-  closeAllMenus();
-  deleteSelectedItems();
-});
-
-// View Menu Actions
+// View Menu + ribbon toggles (both sync through updateViewMenuLabels)
 function updateViewMenuLabels() {
-  document.getElementById('labelMenuGrid').textContent = renderer.showGrid ? '✓ Show Grid' : 'Show Grid';
-  document.getElementById('labelGrid10').textContent = renderer.gridSize === 10 ? '✓ Grid Size: 10 px' : 'Grid Size: 10 px';
-  document.getElementById('labelGrid20').textContent = renderer.gridSize === 20 ? '✓ Grid Size: 20 px' : 'Grid Size: 20 px';
-  document.getElementById('labelGrid40').textContent = renderer.gridSize === 40 ? '✓ Grid Size: 40 px' : 'Grid Size: 40 px';
-  document.getElementById('labelMenuSnap').textContent = renderer.snapToGrid ? '✓ Snap to Grid' : 'Snap to Grid';
-  document.getElementById('labelMenuVectors').textContent = renderer.showVectors ? '✓ Velocity Vectors (v⃗)' : 'Velocity Vectors (v⃗)';
-  const labelColor = document.getElementById('labelMenuColor');
-  if (labelColor) labelColor.textContent = renderer.colorByVelocity ? '✓ Color by Speed (|v|)' : 'Color by Speed (|v|)';
-
   btnToggleGrid.classList.toggle('active', renderer.showGrid);
   btnToggleSnap.classList.toggle('active', renderer.snapToGrid);
   btnToggleVectors.classList.toggle('active', renderer.showVectors);
-  if (btnToggleColor) btnToggleColor.classList.toggle('active', renderer.colorByVelocity);
+  btnToggleColor?.classList.toggle('active', renderer.colorByVelocity);
+  selectGridSize.value = String(renderer.gridSize);
 
   const floatingVelLegend = document.getElementById('floatingVelLegend');
   if (floatingVelLegend) {
@@ -17750,95 +18133,62 @@ function updateViewMenuLabels() {
   }
 }
 
-document.getElementById('menuEntryToggleGrid').addEventListener('click', () => {
-  renderer.showGrid = !renderer.showGrid;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-btnToggleGrid.addEventListener('click', () => {
-  renderer.showGrid = !renderer.showGrid;
-  updateViewMenuLabels();
-});
-
-selectGridSize.addEventListener('change', (e) => {
-  renderer.gridSize = parseInt(e.target.value, 10);
-  updateViewMenuLabels();
-});
-
-document.getElementById('menuEntryGrid10').addEventListener('click', () => {
-  renderer.gridSize = 10;
-  selectGridSize.value = "10";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryGrid20').addEventListener('click', () => {
-  renderer.gridSize = 20;
-  selectGridSize.value = "20";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryGrid40').addEventListener('click', () => {
-  renderer.gridSize = 40;
-  selectGridSize.value = "40";
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-document.getElementById('menuEntryToggleSnap').addEventListener('click', () => {
-  renderer.snapToGrid = !renderer.snapToGrid;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
-
-btnToggleSnap.addEventListener('click', () => {
-  renderer.snapToGrid = !renderer.snapToGrid;
-  updateViewMenuLabels();
-});
-
-document.getElementById('menuEntryToggleVectors').addEventListener('click', () => {
+function toggleVectors() {
   renderer.showVectors = !renderer.showVectors;
   updateViewMenuLabels();
-  closeAllMenus();
-});
+}
 
-btnToggleVectors.addEventListener('click', () => {
-  renderer.showVectors = !renderer.showVectors;
-  updateViewMenuLabels();
-});
+function toggleGrid() { renderer.showGrid = !renderer.showGrid; updateViewMenuLabels(); }
+function toggleSnap() { renderer.snapToGrid = !renderer.snapToGrid; updateViewMenuLabels(); }
+function toggleColor() { renderer.colorByVelocity = !renderer.colorByVelocity; updateViewMenuLabels(); }
+function setGridSize(size) { renderer.gridSize = size; updateViewMenuLabels(); }
 
-document.getElementById('menuEntryToggleColor')?.addEventListener('click', () => {
-  renderer.colorByVelocity = !renderer.colorByVelocity;
-  updateViewMenuLabels();
-  closeAllMenus();
-});
+onMenu('menuEntryToggleGrid', toggleGrid);
+onMenu('menuEntryGrid10', () => setGridSize(10));
+onMenu('menuEntryGrid20', () => setGridSize(20));
+onMenu('menuEntryGrid40', () => setGridSize(40));
+onMenu('menuEntryToggleSnap', toggleSnap);
+onMenu('menuEntryToggleVectors', toggleVectors);
+onMenu('menuEntryToggleColor', toggleColor);
+onMenu('menuEntryZoomIn', () => btnZoomIn.click());
+onMenu('menuEntryZoomOut', () => btnZoomOut.click());
+onMenu('menuEntryResetView', fitViewToScene);
 
-btnToggleColor?.addEventListener('click', () => {
-  renderer.colorByVelocity = !renderer.colorByVelocity;
-  updateViewMenuLabels();
-});
+btnToggleGrid.addEventListener('click', toggleGrid);
+btnToggleSnap.addEventListener('click', toggleSnap);
+btnToggleVectors.addEventListener('click', toggleVectors);
+btnToggleColor?.addEventListener('click', toggleColor);
+selectGridSize.addEventListener('change', (e) => setGridSize(parseInt(e.target.value, 10)));
 
-document.getElementById('menuEntryResetView').addEventListener('click', () => {
-  renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
-  updateZoomText();
-  closeAllMenus();
-});
+// Simulation Menu (delegates to the playback dock controls)
+function selectModel(model) {
+  [...modelToggleBtns].find(b => b.dataset.model === model)?.click();
+}
+
+onMenu('menuEntryPlay', () => btnPlayPause.click());
+onMenu('menuEntryStep', () => btnStep.click());
+onMenu('menuEntryStepBack', () => btnStepBack.click());
+onMenu('menuEntryStop', () => btnStopReset.click());
+onMenu('menuEntryModelIdeal', () => selectModel('hard_sphere'));
+onMenu('menuEntryModelReal', () => selectModel('lennard_jones'));
+onMenu('menuEntryGravity', () => btnToggleGravity?.click());
+onMenu('menuEntrySequencer', () => document.getElementById('btnToggleSequencer')?.click());
 
 // Help Menu
-document.getElementById('menuEntryGuide').addEventListener('click', () => {
-  infoModal.style.display = 'flex';
-  closeAllMenus();
-});
+function openShortcutsModal() {
+  const modal = document.getElementById('shortcutsModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+onMenu('menuEntryGuide', () => { infoModal.style.display = 'flex'; });
+onMenu('menuEntryShortcuts', openShortcutsModal);
 
 // ============================================================================
 // Save Project As Dialog Workflow
 // ============================================================================
 function updateSaveFilePreview() {
   const name = saveProjectNameInput.value.trim() || 'Project';
-  const cleanName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  saveFilenamePreview.textContent = `${cleanName}.json`;
+  saveFilenamePreview.textContent = `${safeFileName(name)}.json`;
 }
 
 function openSaveModal() {
@@ -17853,24 +18203,15 @@ function closeSaveModal() {
 }
 
 saveProjectNameInput.addEventListener('input', updateSaveFilePreview);
+saveProjectNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') btnSaveDownload.click();
+});
 btnSaveClose.addEventListener('click', closeSaveModal);
 btnSaveCancel.addEventListener('click', closeSaveModal);
 window.addEventListener('click', (e) => { if (e.target === saveModal) closeSaveModal(); });
 
 btnSaveDownload.addEventListener('click', () => {
-  const chosenName = saveProjectNameInput.value.trim() || 'Project';
-  app.currentProjectName = chosenName;
-  headerProjectTitle.textContent = `${chosenName}.json`;
-
-  const state = engine.exportState(chosenName);
-  addRecentProfile(chosenName, state);
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${chosenName.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  saveProject(saveProjectNameInput.value.trim() || 'Project');
   closeSaveModal();
 });
 
@@ -17880,24 +18221,10 @@ fileImportInput.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (evt) => {
     try {
-      stopAndResetSimulationForNewScene();
       const data = JSON.parse(evt.target.result);
-      if (data.profileName) {
-        app.currentProjectName = data.profileName;
-      } else {
-        app.currentProjectName = file.name.replace(/\.json$/i, '');
-        data.profileName = app.currentProjectName;
-      }
-      headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-      engine.setLoadedProfile(data);
-      updateElementsList();
-      renderToolProperties(app.activeTool);
-      updateModelToggleUI();
-      updateGravityUI();
-      addRecentProfile(app.currentProjectName, data);
-      app.hasActiveSession = true;
-      hideSplashScreen();
+      openScene(data.profileName || file.name.replace(/\.json$/i, ''), data);
     } catch (err) {
+      console.warn('Import failed:', err);
       alert('Invalid JSON configuration file.');
     }
   };
@@ -18004,7 +18331,6 @@ window.addEventListener('click', (e) => {
 });
 
 ctxDelete?.addEventListener('click', () => {
-  recordUndoState();
   deleteSelectedItems();
   closeContextMenu();
 });
@@ -18884,6 +19210,30 @@ function toggleGroupSelection() {
     const gid = 'g_' + Math.random().toString(36).substring(2, 8);
     app.selectedItems.forEach(i => { i.groupId = gid; });
   }
+  updateElementsList();
+}
+
+function canGroupSelection() {
+  const sel = app.selectedItems;
+  return sel.length > 1 && !sel.every(i => i.groupId && i.groupId === sel[0].groupId);
+}
+
+function canUngroupSelection() {
+  return app.selectedItems.some(i => i.groupId);
+}
+
+function groupSelection() {
+  if (app.isSimulating || !canGroupSelection()) return;
+  recordUndoState();
+  const gid = 'g_' + Math.random().toString(36).substring(2, 8);
+  app.selectedItems.forEach(i => { i.groupId = gid; });
+  updateElementsList();
+}
+
+function ungroupSelection() {
+  if (app.isSimulating || !canUngroupSelection()) return;
+  recordUndoState();
+  app.selectedItems.forEach(i => { delete i.groupId; });
   updateElementsList();
 }
 
@@ -20807,7 +21157,7 @@ function performUndo() {
   const current = engine.exportState(app.currentProjectName);
   redoStack.push(JSON.stringify(current));
   const prevJSON = undoStack.pop();
-  engine.importState(JSON.parse(prevJSON));
+  engine.importState(JSON.parse(prevJSON), false);
   app.selectedItems = [];
   closePopup();
   closeContextMenu();
@@ -20820,7 +21170,7 @@ function performRedo() {
   const current = engine.exportState(app.currentProjectName);
   undoStack.push(JSON.stringify(current));
   const nextJSON = redoStack.pop();
-  engine.importState(JSON.parse(nextJSON));
+  engine.importState(JSON.parse(nextJSON), false);
   app.selectedItems = [];
   closePopup();
   closeContextMenu();
@@ -21233,36 +21583,42 @@ function renderLiveToolPreviews() {
 
 // Keyboard Shortcuts
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const t = e.target;
+  if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return;
+  if (app.isSplashActive && e.code !== 'Escape') return;
 
-  if (e.ctrlKey && e.code === 'KeyZ') {
-    e.preventDefault();
-    if (e.shiftKey) performRedo();
-    else performUndo();
+  if (e.ctrlKey || e.metaKey) {
+    const handled = {
+      KeyZ: () => (e.shiftKey ? performRedo() : performUndo()),
+      KeyY: performRedo,
+      KeyD: () => ctxDuplicate.click(),
+      KeyO: () => fileImportInput.click(),
+      KeyS: () => (e.shiftKey ? openSaveModal() : saveProject()),
+      KeyA: selectAllElements,
+      KeyG: () => (e.shiftKey ? ungroupSelection() : groupSelection()),
+      KeyN: () => { if (e.altKey) btnToolbarClear.click(); }
+    }[e.code];
+    if (handled) {
+      e.preventDefault();
+      handled();
+    }
     return;
   }
-  if (e.ctrlKey && e.code === 'KeyY') {
-    e.preventDefault();
-    performRedo();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyD') {
-    e.preventDefault();
-    ctxDuplicate.click();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyO') {
-    e.preventDefault();
-    fileImportInput.click();
-    return;
-  }
-  if (e.ctrlKey && e.code === 'KeyS') {
-    e.preventDefault();
-    openSaveModal();
-    return;
-  }
+  if (e.altKey) return;
 
-  if (e.code === 'Delete' || e.code === 'Backspace') {
+  if (e.key === '?') {
+    openShortcutsModal();
+  } else if (e.key === '+' || e.key === '=') {
+    btnZoomIn.click();
+  } else if (e.key === '-') {
+    btnZoomOut.click();
+  } else if (e.code === 'KeyF') {
+    fitViewToScene();
+  } else if (e.code === 'KeyV') {
+    toggleVectors();
+  } else if (e.code === 'KeyR' && app.selectedItems.length > 0) {
+    btnRotate90.click();
+  } else if (e.code === 'Delete' || e.code === 'Backspace') {
     deleteSelectedItems();
   } else if (e.code === 'Space') {
     e.preventDefault();
@@ -21282,7 +21638,7 @@ window.addEventListener('keydown', (e) => {
           groupId: pointer.polygonGroupId
         });
         pointer.polygonWalls.push(w);
-        app.selectedItems = [...polygonWalls];
+        app.selectedItems = [...pointer.polygonWalls];
         resetPolygonDraft();
         updateElementsList();
       }
@@ -21306,12 +21662,19 @@ window.addEventListener('keydown', (e) => {
     closeContextMenu();
     closeAllMenus();
     closeSaveModal();
+    infoModal.style.display = 'none';
+    shortcutsModal.style.display = 'none';
   }
 });
 
-// Info Modal
+// Info & Shortcuts Modals
+const shortcutsModal = document.getElementById('shortcutsModal');
 btnInfoClose.addEventListener('click', () => { infoModal.style.display = 'none'; });
-window.addEventListener('click', (e) => { if (e.target === infoModal) infoModal.style.display = 'none'; });
+document.getElementById('btnShortcutsClose')?.addEventListener('click', () => { shortcutsModal.style.display = 'none'; });
+window.addEventListener('click', (e) => {
+  if (e.target === infoModal) infoModal.style.display = 'none';
+  if (e.target === shortcutsModal) shortcutsModal.style.display = 'none';
+});
 
 // Chart Tabs
 tabTemp.addEventListener('click', () => {
@@ -21323,6 +21686,31 @@ tabPV.addEventListener('click', () => {
   tabPV.classList.add('active');
   tabTemp.classList.remove('active');
   tempChart.setMode('pv');
+});
+
+
+// --- src/app/ribbonLayout.js ---
+// Responsive ribbon: a row that would overflow switches to icon-only tool
+// buttons; if it still overflows, the mouse wheel scrolls it horizontally.
+const ribbonRows = document.querySelectorAll('.header-row-ribbon');
+
+function fitRibbonRow(row) {
+  row.classList.remove('ribbon-compact');
+  if (row.scrollWidth > row.clientWidth + 1) row.classList.add('ribbon-compact');
+}
+
+function fitRibbon() {
+  ribbonRows.forEach(fitRibbonRow);
+}
+
+const ribbonObserver = new ResizeObserver(fitRibbon);
+ribbonRows.forEach(row => {
+  ribbonObserver.observe(row);
+  row.addEventListener('wheel', (e) => {
+    if (row.scrollWidth <= row.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    row.scrollLeft += e.deltaY;
+  }, { passive: false });
 });
 
 
@@ -21372,7 +21760,7 @@ function animate(now) {
     engine.step(dt);
   }
 
-  renderer.render(engine, app.selectedItems);
+  renderer.render(engine, app.selectedItems, !app.isSimulating && !app.isAmbientSim);
   renderLiveToolPreviews();
   sequencerUI?.updateLive();
 

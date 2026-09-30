@@ -186,12 +186,26 @@ def run_pass(page, label):
     after_undo = page.eval(COUNT_JS)
     page.key('Escape', 'Escape', 27)
 
-    # View menu toggles and help
-    for entry in ['menuEntryToggleGrid', 'menuEntryGrid20', 'menuEntryToggleSnap', 'menuEntryToggleVectors',
-                  'menuEntryToggleColor', 'menuEntryResetView', 'menuEntryGuide']:
+    # Edit menu / shortcuts: select all, group, ungroup
+    page.key('a', 'KeyA', 65, modifiers=2)
+    all_selected = page.eval('window.app.selectedItems.length')
+    page.key('g', 'KeyG', 71, modifiers=2)
+    grouped = page.eval('new Set(window.app.selectedItems.map(i => i.groupId)).size === 1 && !!window.app.selectedItems[0].groupId')
+    page.key('G', 'KeyG', 71, modifiers=10)
+    ungrouped = page.eval('window.app.selectedItems.every(i => !i.groupId)')
+    page.key('Escape', 'Escape', 27)
+
+    # View menu toggles (grid size, vectors, zoom to fit), simulation menu and help
+    for entry in ['menuEntryToggleGrid', 'menuEntryGrid10', 'menuEntryGrid20', 'menuEntryToggleSnap',
+                  'menuEntryToggleVectors', 'menuEntryToggleColor', 'menuEntryZoomIn', 'menuEntryZoomOut',
+                  'menuEntryResetView', 'menuEntryModelReal', 'menuEntryModelIdeal', 'menuEntryGravity',
+                  'menuEntryGravity', 'menuEntrySequencer', 'menuEntrySequencer', 'menuEntryGuide']:
         page.click_id(entry)
     page.key('Escape', 'Escape', 27)
-    page.click_id('btnInfoClose')
+    page.click_id('menuEntryShortcuts')
+    page.key('Escape', 'Escape', 27)
+    page.key('f', 'KeyF', 70)
+    view_ok = page.eval('window.renderer.showVectors && window.renderer.gridSize === 20 && Number.isFinite(window.renderer.zoom)')
 
     # Playback: play, step back, stop/reset
     page.click_id('btnPlayPause')
@@ -203,6 +217,17 @@ def run_pass(page, label):
     page.click_id('btnStopReset')
     time.sleep(0.3)
     page.eval('1')  # drain pending events
+
+    # History group: New Canvas and Revert are undoable
+    n_before_clear = page.eval('window.engine.elements.length')
+    page.click_id('btnToolbarClear')
+    n_cleared = page.eval('window.engine.elements.length')
+    page.key('z', 'KeyZ', 90, modifiers=2)
+    n_restored = page.eval('window.engine.elements.length')
+    page.click_id('btnToolbarReset')
+    n_reverted = page.eval('window.engine.elements.length')
+    page.key('z', 'KeyZ', 90, modifiers=2)
+    n_revert_undone = page.eval('window.engine.elements.length')
 
     print(f'tools: {n_tools}, elements: {before} -> {after_draw} after drawing ({walls} walls)')
     print(f'box selection: {selected} items of {after_box}, {after_delete} after Delete, {after_undo} after Ctrl+Z')
@@ -216,6 +241,11 @@ def run_pass(page, label):
     assert after_delete < after_box, 'Delete key did not delete the selection'
     assert after_undo == after_box, 'Ctrl+Z did not restore the deleted elements'
     assert state['sim'] and state['t'] > 0, 'simulation did not run'
+    assert all_selected == page.eval('window.engine.elements.length'), 'Ctrl+A did not select all elements'
+    assert grouped and ungrouped, 'Ctrl+G / Ctrl+Shift+G did not group / ungroup'
+    assert view_ok, 'view menu state is wrong (vectors, grid size, zoom)'
+    assert n_cleared == 0 and n_restored == n_before_clear, 'New Canvas is not undoable'
+    assert n_reverted == 0 and n_revert_undone == n_before_clear, f'Revert to Saved is not undoable ({n_before_clear} -> {n_reverted} -> {n_revert_undone})'
     assert not page.problems, f'{len(page.problems)} runtime error(s) in {label} mode'
     print(f'{label}: PASSED')
 

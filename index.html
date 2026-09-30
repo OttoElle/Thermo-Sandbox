@@ -126,22 +126,15 @@
             <div class="menu-item" id="menuFile">
               <button class="menu-btn">File</button>
               <div class="menu-dropdown">
-                <div class="menu-entry" id="menuEntryImport">
-                  <span>Open / Import JSON...</span>
-                  <span class="menu-shortcut">Ctrl+O</span>
-                </div>
-                <div class="menu-entry" id="menuEntrySaveAs">
-                  <span>Save As / Export...</span>
-                  <span class="menu-shortcut">Ctrl+S</span>
-                </div>
+                <div class="menu-entry" id="menuEntryClear"><span>New Canvas</span><span class="menu-shortcut">Ctrl+Alt+N</span></div>
+                <div class="menu-entry" id="menuEntryImport"><span>Open…</span><span class="menu-shortcut">Ctrl+O</span></div>
+                <div class="menu-entry" id="menuEntryWelcome"><span>Examples &amp; Recent…</span></div>
                 <div class="menu-divider"></div>
-                <div class="menu-entry" id="menuEntryReset">
-                  <span>Reset to Initial State</span>
-                </div>
-                <div class="menu-entry menu-entry-danger" id="menuEntryClear">
-                  <span>Clear All (New Canvas)</span>
-                  <span class="menu-shortcut">Ctrl+N</span>
-                </div>
+                <div class="menu-entry" id="menuEntrySave"><span>Save</span><span class="menu-shortcut">Ctrl+S</span></div>
+                <div class="menu-entry" id="menuEntrySaveAs"><span>Save As…</span><span class="menu-shortcut">Ctrl+Shift+S</span></div>
+                <div class="menu-entry" id="menuEntryExportPNG"><span>Export Image (PNG)</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry" id="menuEntryReset"><span>Revert to Saved</span></div>
               </div>
             </div>
 
@@ -149,26 +142,19 @@
             <div class="menu-item" id="menuEdit">
               <button class="menu-btn">Edit</button>
               <div class="menu-dropdown">
-                <div class="menu-entry" id="menuEntryUndo">
-                  <span>Undo</span>
-                  <span class="menu-shortcut">Ctrl+Z</span>
-                </div>
-                <div class="menu-entry" id="menuEntryRedo">
-                  <span>Redo</span>
-                  <span class="menu-shortcut">Ctrl+Y</span>
-                </div>
+                <div class="menu-entry" id="menuEntryUndo"><span>Undo</span><span class="menu-shortcut">Ctrl+Z</span></div>
+                <div class="menu-entry" id="menuEntryRedo"><span>Redo</span><span class="menu-shortcut">Ctrl+Y</span></div>
                 <div class="menu-divider"></div>
-                <div class="menu-entry" id="menuEntryDuplicate">
-                  <span>Duplicate Selection</span>
-                  <span class="menu-shortcut">Ctrl+D</span>
-                </div>
-                <div class="menu-entry" id="menuEntryGroup">
-                  <span>Group Selected</span>
-                </div>
-                <div class="menu-entry menu-entry-danger" id="menuEntryDelete">
-                  <span>Delete Selection</span>
-                  <span class="menu-shortcut">Del</span>
-                </div>
+                <div class="menu-entry" id="menuEntrySelectAll"><span>Select All</span><span class="menu-shortcut">Ctrl+A</span></div>
+                <div class="menu-entry" id="menuEntryDuplicate"><span>Duplicate</span><span class="menu-shortcut">Ctrl+D</span></div>
+                <div class="menu-entry" id="menuEntryGroup"><span>Group</span><span class="menu-shortcut">Ctrl+G</span></div>
+                <div class="menu-entry" id="menuEntryUngroup"><span>Ungroup</span><span class="menu-shortcut">Ctrl+Shift+G</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry" id="menuEntryRotate"><span>Rotate 90°</span><span class="menu-shortcut">R</span></div>
+                <div class="menu-entry" id="menuEntryFlipH"><span>Flip Horizontal</span></div>
+                <div class="menu-entry" id="menuEntryFlipV"><span>Flip Vertical</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry menu-entry-danger" id="menuEntryDelete"><span>Delete</span><span class="menu-shortcut">Del</span></div>
               </div>
             </div>
 
@@ -176,45 +162,44 @@
             <div class="menu-item" id="menuView">
               <button class="menu-btn">View</button>
               <div class="menu-dropdown">
-                <div class="menu-entry" id="menuEntryToggleGrid">
-                  <span id="labelMenuGrid">✓ Show Grid</span>
-                </div>
-                <div class="menu-entry" id="menuEntryGrid10">
-                  <span id="labelGrid10">Grid Size: 10 px</span>
-                </div>
-                <div class="menu-entry" id="menuEntryGrid20">
-                  <span id="labelGrid20">✓ Grid Size: 20 px</span>
-                </div>
-                <div class="menu-entry" id="menuEntryGrid40">
-                  <span id="labelGrid40">Grid Size: 40 px</span>
-                </div>
+                <div class="menu-entry menu-entry-check" id="menuEntryToggleGrid"><span>Show Grid</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryGrid10"><span>Grid Size 10 px</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryGrid20"><span>Grid Size 20 px</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryGrid40"><span>Grid Size 40 px</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryToggleSnap"><span>Snap to Grid</span></div>
                 <div class="menu-divider"></div>
-                <div class="menu-entry" id="menuEntryToggleSnap">
-                  <span id="labelMenuSnap">✓ Snap to Grid</span>
-                </div>
-                <div class="menu-entry" id="menuEntryToggleVectors">
-                  <span id="labelMenuVectors">Velocity Vectors (v⃗)</span>
-                </div>
-                <div class="menu-entry" id="menuEntryToggleColor">
-                  <span id="labelMenuColor">✓ Color by Speed (|v|)</span>
-                </div>
+                <div class="menu-entry menu-entry-check" id="menuEntryToggleVectors"><span>Velocity Vectors</span><span class="menu-shortcut">V</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryToggleColor"><span>Color by Speed</span></div>
                 <div class="menu-divider"></div>
-                <div class="menu-entry" id="menuEntryResetView">
-                  <span>Center View</span>
-                </div>
+                <div class="menu-entry menu-entry-check" id="menuEntryZoomIn"><span>Zoom In</span><span class="menu-shortcut">+</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryZoomOut"><span>Zoom Out</span><span class="menu-shortcut">−</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryResetView"><span>Zoom to Fit</span><span class="menu-shortcut">F</span></div>
               </div>
             </div>
 
-            <!-- 4. HELP MENU -->
+            <!-- 4. SIMULATION MENU -->
+            <div class="menu-item" id="menuSim">
+              <button class="menu-btn">Simulation</button>
+              <div class="menu-dropdown">
+                <div class="menu-entry menu-entry-check" id="menuEntryPlay"><span id="labelMenuPlay">Play</span><span class="menu-shortcut">Space</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryStep"><span>Step Forward</span><span class="menu-shortcut">S</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryStepBack"><span>Step Back</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryStop"><span>Stop &amp; Rewind to t = 0</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryModelIdeal"><span>Ideal Fluid (Hard Spheres)</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryModelReal"><span>Real Fluid (Lennard-Jones)</span></div>
+                <div class="menu-entry menu-entry-check" id="menuEntryGravity"><span>Gravity</span></div>
+                <div class="menu-divider"></div>
+                <div class="menu-entry menu-entry-check" id="menuEntrySequencer"><span>Cycle Sequencer Panel</span></div>
+              </div>
+            </div>
+
+            <!-- 5. HELP MENU -->
             <div class="menu-item" id="menuHelp">
               <button class="menu-btn">Help</button>
               <div class="menu-dropdown">
-                <div class="menu-entry" id="menuEntryGuide">
-                  <span>Interactive Guide & Docs</span>
-                </div>
-                <div class="menu-entry" id="menuEntryShortcuts">
-                  <span>Keyboard Shortcuts</span>
-                </div>
+                <div class="menu-entry" id="menuEntryGuide"><span>Quick Guide</span></div>
+                <div class="menu-entry" id="menuEntryShortcuts"><span>Keyboard Shortcuts</span><span class="menu-shortcut">?</span></div>
               </div>
             </div>
           </nav>
@@ -235,33 +220,7 @@
         <!-- SUB-ROW 1: General Tools, Grid, Transforms & Actions -->
         <div class="header-row-ribbon ribbon-row-general">
           
-          <!-- Group 1: Grid & View Controls -->
-          <div class="ribbon-group" title="Grid & View Settings">
-            <span class="ribbon-group-title">VIEW & GRID</span>
-            <div class="ribbon-group-controls">
-              <button id="btnToggleGrid" class="ribbon-btn active" title="Toggle Grid Visibility">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-              </button>
-              <select id="selectGridSize" class="ribbon-select" title="Grid Size">
-                <option value="10">10px</option>
-                <option value="20" selected>20px</option>
-                <option value="40">40px</option>
-              </select>
-              <button id="btnToggleSnap" class="ribbon-btn active" title="Toggle Snap-to-Grid & Vertex Magnet">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="3" x2="8" y2="3"/><line x1="16" y1="3" x2="20" y2="3"/></svg>
-              </button>
-              <button id="btnToggleVectors" class="ribbon-btn" title="Toggle Velocity Vectors (v⃗)">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="5" cy="19" r="2.5" fill="currentColor"/><path d="M7.5 16.5L19 5m0 0h-6.5m6.5 0v6.5"/></svg>
-              </button>
-              <button id="btnToggleColor" class="ribbon-btn active" title="Toggle Particle Color by Speed / Colormap">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.7-1.7h2c3 0 5.5-2.5 5.5-5.5C22 6.2 17.5 2 12 2z"/><circle cx="7.5" cy="10.5" r="1.2" fill="currentColor"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/><circle cx="16.5" cy="10.5" r="1.2" fill="currentColor"/></svg>
-              </button>
-            </div>
-          </div>
-
-          <div class="ribbon-divider"></div>
-
-          <!-- Group 2: History (Undo/Redo) -->
+          <!-- History: undo/redo and document-level reset/clear -->
           <div class="ribbon-group" title="History">
             <span class="ribbon-group-title">HISTORY</span>
             <div class="ribbon-group-controls">
@@ -271,12 +230,19 @@
               <button id="btnRedo" class="ribbon-btn" title="Redo (Ctrl+Y)">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
               </button>
+              <span class="ribbon-sep"></span>
+              <button id="btnToolbarReset" class="ribbon-btn" title="Revert to the last opened / saved state (undoable)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
+              </button>
+              <button id="btnToolbarClear" class="ribbon-btn btn-danger" title="Clear Canvas / New Document (Ctrl+Alt+N, undoable)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
             </div>
           </div>
 
           <div class="ribbon-divider"></div>
 
-          <!-- Group 3: General Selection Tools -->
+          <!-- General tools -->
           <div class="ribbon-group" title="General Tools">
             <span class="ribbon-group-title">TOOLS</span>
             <div class="ribbon-group-controls">
@@ -293,7 +259,7 @@
 
           <div class="ribbon-divider"></div>
 
-          <!-- Group 4: Transform Controls (Rotate & Flip) -->
+          <!-- Transform selected objects -->
           <div class="ribbon-group" title="Transform Selected Objects">
             <span class="ribbon-group-title">TRANSFORM</span>
             <div class="ribbon-group-controls">
@@ -314,15 +280,35 @@
 
           <div class="ribbon-divider"></div>
 
-          <!-- Group 5: Actions (Reset, Clear) -->
-          <div class="ribbon-group" title="Canvas Actions">
-            <span class="ribbon-group-title">ACTIONS</span>
+          <!-- Grid -->
+          <div class="ribbon-group" title="Grid & Snapping">
+            <span class="ribbon-group-title">GRID</span>
             <div class="ribbon-group-controls">
-              <button id="btnToolbarReset" class="ribbon-btn" title="Reset Simulation to Initial State (Rewind to t=0)">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></svg>
+              <button id="btnToggleGrid" class="ribbon-btn active" title="Toggle Grid Visibility">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
               </button>
-              <button id="btnToolbarClear" class="ribbon-btn btn-danger" title="Clear Canvas (New Document)">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <select id="selectGridSize" class="ribbon-select" title="Grid Size">
+                <option value="10">10px</option>
+                <option value="20" selected>20px</option>
+                <option value="40">40px</option>
+              </select>
+              <button id="btnToggleSnap" class="ribbon-btn active" title="Toggle Snap-to-Grid & Vertex Magnet">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="3" x2="8" y2="3"/><line x1="16" y1="3" x2="20" y2="3"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="ribbon-divider"></div>
+
+          <!-- View -->
+          <div class="ribbon-group" title="Particle Display">
+            <span class="ribbon-group-title">VIEW</span>
+            <div class="ribbon-group-controls">
+              <button id="btnToggleVectors" class="ribbon-btn" title="Toggle Velocity Vectors (v⃗)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="5" cy="19" r="2.5" fill="currentColor"/><path d="M7.5 16.5L19 5m0 0h-6.5m6.5 0v6.5"/></svg>
+              </button>
+              <button id="btnToggleColor" class="ribbon-btn active" title="Toggle Particle Color by Speed / Colormap">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.7-1.7h2c3 0 5.5-2.5 5.5-5.5C22 6.2 17.5 2 12 2z"/><circle cx="7.5" cy="10.5" r="1.2" fill="currentColor"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/><circle cx="16.5" cy="10.5" r="1.2" fill="currentColor"/></svg>
               </button>
             </div>
           </div>
@@ -712,7 +698,7 @@
       <button id="btnZoomIn" class="zoom-btn" title="Zoom In">+</button>
       <span id="zoomDisplay" class="zoom-text">100%</span>
       <button id="btnZoomOut" class="zoom-btn" title="Zoom Out">−</button>
-      <button id="btnResetView" class="zoom-btn" title="Reset View to Center">
+      <button id="btnResetView" class="zoom-btn" title="Zoom to Fit (F)">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
     </div>
@@ -774,6 +760,62 @@
             <button id="btnChartCancel" class="btn-pill btn-secondary-action">Cancel</button>
             <button id="btnChartConfirm" class="btn-pill btn-primary-action">Add to Dashboard</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Keyboard Shortcuts -->
+    <div id="shortcutsModal" class="modal-overlay" style="display: none;">
+      <div class="modal-card shortcuts-card">
+        <div class="modal-header">
+          <h3>Keyboard Shortcuts</h3>
+          <button id="btnShortcutsClose" class="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body shortcuts-body">
+          <section>
+            <h4>File</h4>
+            <dl>
+              <dt>Ctrl+O</dt><dd>Open</dd>
+              <dt>Ctrl+S</dt><dd>Save</dd>
+              <dt>Ctrl+Shift+S</dt><dd>Save As</dd>
+              <dt>Ctrl+Alt+N</dt><dd>New Canvas</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>Edit</h4>
+            <dl>
+              <dt>Ctrl+Z / Ctrl+Y</dt><dd>Undo / Redo</dd>
+              <dt>Ctrl+A</dt><dd>Select All</dd>
+              <dt>Ctrl+D</dt><dd>Duplicate</dd>
+              <dt>Ctrl+G</dt><dd>Group</dd>
+              <dt>Ctrl+Shift+G</dt><dd>Ungroup</dd>
+              <dt>R</dt><dd>Rotate 90°</dd>
+              <dt>Del</dt><dd>Delete</dd>
+              <dt>Shift+Click</dt><dd>Add to Selection</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>Drawing</h4>
+            <dl>
+              <dt>Enter</dt><dd>Close Polyline / Finish</dd>
+              <dt>Esc</dt><dd>Cancel / Select Tool</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>View</h4>
+            <dl>
+              <dt>F</dt><dd>Zoom to Fit</dd>
+              <dt>+ / −</dt><dd>Zoom In / Out</dd>
+              <dt>V</dt><dd>Velocity Vectors</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>Simulation</h4>
+            <dl>
+              <dt>Space</dt><dd>Play / Pause</dd>
+              <dt>S</dt><dd>Step Forward</dd>
+            </dl>
+          </section>
         </div>
       </div>
     </div>

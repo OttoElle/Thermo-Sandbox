@@ -1,12 +1,9 @@
 // Splash screen, presets, recent profiles and the ambient background scene.
 import { Presets } from '../presets/index.js';
-import { brandBadge, brandTitle, btnClearRecent, btnSplashClose, btnSplashNew, btnSplashOpen, btnSplashResume, canvas, fileImportInput, headerProjectTitle, splashOverlay, splashPresetsContainer, splashRecentContainer } from './dom.js';
-import { engine, renderer, sequencerUI } from './core.js';
+import { brandBadge, brandTitle, btnClearRecent, btnSplashClose, btnSplashNew, btnSplashOpen, btnSplashResume, canvas, fileImportInput, splashOverlay, splashPresetsContainer, splashRecentContainer } from './dom.js';
+import { engine, renderer } from './core.js';
 import { app } from './state.js';
-import { renderToolProperties } from './toolPanel.js';
-import { updateElementsList } from './elementTree.js';
-import { stopAndResetSimulationForNewScene } from './menus.js';
-import { updateGravityUI, updateModelToggleUI } from './playback.js';
+import { openScene, stopAndResetSimulationForNewScene } from './menus.js';
 
 // ============================================================================
 // Splash Screen / Welcome Dashboard Controller
@@ -99,7 +96,7 @@ function renderRecentProfiles() {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
     `;
     el.addEventListener('click', () => {
-      loadProfileData(item.name, item.data);
+      openScene(item.name, item.data);
     });
     splashRecentContainer.appendChild(el);
   });
@@ -134,35 +131,10 @@ function renderSplashPresets() {
     card.addEventListener('click', () => {
       stopAndResetSimulationForNewScene();
       p.load(engine);
-      app.currentProjectName = p.name;
-      headerProjectTitle.textContent = `${app.currentProjectName}.json`;
-      const state = engine.exportState(p.name);
-      engine.setLoadedProfile(state);
-      addRecentProfile(p.name, state);
-      updateElementsList();
-      renderToolProperties(app.activeTool);
-      updateModelToggleUI();
-      updateGravityUI();
-      sequencerUI?.render();
-      app.hasActiveSession = true;
-      hideSplashScreen();
+      openScene(p.name, engine.exportState(p.name));
     });
     splashPresetsContainer.appendChild(card);
   });
-}
-
-function loadProfileData(name, data) {
-  stopAndResetSimulationForNewScene();
-  app.currentProjectName = name;
-  headerProjectTitle.textContent = `${name}.json`;
-  engine.setLoadedProfile(data);
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
-  sequencerUI?.render();
-  app.hasActiveSession = true;
-  hideSplashScreen();
 }
 
 export function setupAmbientScene() {
@@ -232,17 +204,7 @@ btnSplashNew?.addEventListener('click', () => {
   stopAndResetSimulationForNewScene();
   engine.clear();
   engine.gravityEnabled = false;
-  
-  app.currentProjectName = 'Untitled Simulation';
-  headerProjectTitle.textContent = 'Untitled Simulation.json';
-  const state = engine.exportState('Untitled Simulation');
-  engine.setLoadedProfile(state);
-  updateElementsList();
-  renderToolProperties(app.activeTool);
-  updateModelToggleUI();
-  updateGravityUI();
-  sequencerUI?.render();
-  hideSplashScreen();
+  openScene('Untitled Simulation', engine.exportState('Untitled Simulation'), { addToRecent: false });
 });
 
 btnSplashOpen?.addEventListener('click', () => {

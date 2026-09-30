@@ -151,3 +151,52 @@
   font-family: 'JetBrains Mono', monospace;
 }
 
+
+/* Keyboard shortcuts dialog */
+.shortcuts-card {
+  width: 560px;
+}
+
+.shortcuts-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.shortcuts-body h4 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.shortcuts-body dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.shortcuts-body dt {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--accent-green);
+  white-space: nowrap;
+}
+
+.shortcuts-body dd {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+@media (max-width: 600px) {
+  .shortcuts-body {
+    grid-template-columns: 1fr;
+  }
+}

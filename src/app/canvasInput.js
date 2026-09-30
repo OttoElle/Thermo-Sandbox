@@ -119,7 +119,6 @@ window.addEventListener('click', (e) => {
 });
 
 ctxDelete?.addEventListener('click', () => {
-  recordUndoState();
   deleteSelectedItems();
   closeContextMenu();
 });

@@ -26,7 +26,7 @@ export function performUndo() {
   const current = engine.exportState(app.currentProjectName);
   redoStack.push(JSON.stringify(current));
   const prevJSON = undoStack.pop();
-  engine.importState(JSON.parse(prevJSON));
+  engine.importState(JSON.parse(prevJSON), false);
   app.selectedItems = [];
   closePopup();
   closeContextMenu();
@@ -39,7 +39,7 @@ export function performRedo() {
   const current = engine.exportState(app.currentProjectName);
   undoStack.push(JSON.stringify(current));
   const nextJSON = redoStack.pop();
-  engine.importState(JSON.parse(nextJSON));
+  engine.importState(JSON.parse(nextJSON), false);
   app.selectedItems = [];
   closePopup();
   closeContextMenu();

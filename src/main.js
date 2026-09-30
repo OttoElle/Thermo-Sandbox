@@ -11,6 +11,7 @@ import { customCharts, updateChamberCards, updateSystemStats } from './app/dashb
 import { renderLiveToolPreviews } from './app/toolPreview.js';
 import { setupAmbientScene, showSplashScreen } from './app/splash.js';
 import './app/keyboard.js';
+import './app/ribbonLayout.js';
 
 // App Startup: Launch in Ambient Splash Mode
 setupAmbientScene();
@@ -54,7 +55,7 @@ function animate(now) {
     engine.step(dt);
   }
 
-  renderer.render(engine, app.selectedItems);
+  renderer.render(engine, app.selectedItems, !app.isSimulating && !app.isAmbientSim);
   renderLiveToolPreviews();
   sequencerUI?.updateLive();
 

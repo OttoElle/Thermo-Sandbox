@@ -353,6 +353,100 @@ export class ParticleGPURenderer {
         { binding: 2, resource: this.sampler }
       ]
     });
+
+    this._initVectorPipeline(pipelineLayout);
+  }
+
+  // Velocity arrows drawn straight from the compute particle buffer
+  // (pos, vel, radius), 9 vertices per particle: shaft quad + arrow head.
+  _initVectorPipeline(pipelineLayout) {
+    const device = this.device;
+    const shaderModule = device.createShaderModule({
+      label: 'ParticleVectorShader',
+      code: `
+        struct Uniforms {
+          uViewportSize: vec2f,
+          uPan: vec2f,
+          uZoom: f32,
+          uColorByVelocity: u32,
+          _pad: vec2f,
+          uDefaultColor: vec3f,
+          _pad2: f32,
+        };
+        @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+        const VECTOR_SCALE = 0.09;   // world length per (px/s), same as the 2D overlay
+        const MIN_SPEED = 2.0;
+        const HALF_WIDTH = 0.7;      // screen px
+
+        @vertex
+        fn vs_vector(
+          @builtin(vertex_index) vi: u32,
+          @location(1) aPos: vec2f,
+          @location(4) aVel: vec2f,
+          @location(2) aRadius: f32
+        ) -> @builtin(position) vec4f {
+          let speed = length(aVel);
+          if (aRadius <= 0.0 || aPos.x < -50000.0 || speed <= MIN_SPEED) {
+            return vec4f(2.0, 2.0, 2.0, 1.0);
+          }
+          let s0 = aPos * uniforms.uZoom + uniforms.uPan;
+          let d = aVel * (VECTOR_SCALE * uniforms.uZoom);
+          let len = max(length(d), 0.001);
+          let dir = d / len;
+          let n = vec2f(-dir.y, dir.x);
+          let headLen = min(len * 0.45, 6.0);
+          let headW = headLen * 0.55;
+          let e = s0 + dir * (len - headLen);
+          var pts = array<vec2f, 9>(
+            s0 + n * HALF_WIDTH, s0 - n * HALF_WIDTH, e + n * HALF_WIDTH,
+            e + n * HALF_WIDTH, s0 - n * HALF_WIDTH, e - n * HALF_WIDTH,
+            s0 + d, e + n * headW, e - n * headW
+          );
+          let p = pts[vi];
+          return vec4f(
+            (p.x / uniforms.uViewportSize.x) * 2.0 - 1.0,
+            1.0 - (p.y / uniforms.uViewportSize.y) * 2.0,
+            0.0, 1.0
+          );
+        }
+
+        @fragment
+        fn fs_vector() -> @location(0) vec4f {
+          return vec4f(1.0, 1.0, 1.0, 0.7);
+        }
+      `
+    });
+
+    this.vectorPipeline = device.createRenderPipeline({
+      label: 'ParticleVectorPipeline',
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_vector',
+        buffers: [{
+          arrayStride: 8 * 4,
+          stepMode: 'instance',
+          attributes: [
+            { shaderLocation: 1, offset: 0, format: 'float32x2' },     // pos
+            { shaderLocation: 4, offset: 2 * 4, format: 'float32x2' }, // vel
+            { shaderLocation: 2, offset: 4 * 4, format: 'float32' }    // radius
+          ]
+        }]
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_vector',
+        targets: [{
+          format: this.format,
+          blend: {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+          }
+        }]
+      },
+      primitive: { topology: 'triangle-list' }
+    });
   }
 
   resize(width, height) {
@@ -381,7 +475,7 @@ export class ParticleGPURenderer {
     this.device.queue.submit([commandEncoder.finish()]);
   }
 
-  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true) {
+  renderGPUBuffer(buffer, count, panX, panY, zoom, maxSpeedReference = 380, colorByVelocity = true, showVectors = false) {
     if (!this.isSupported || !this.device || !this.context || !buffer || count === 0) {
       this.clear();
       return;
@@ -424,6 +518,11 @@ export class ParticleGPURenderer {
     renderPass.setVertexBuffer(0, this.quadBuffer);
     renderPass.setVertexBuffer(1, buffer);
     renderPass.draw(4, count, 0, 0);
+    if (showVectors && this.vectorPipeline) {
+      renderPass.setPipeline(this.vectorPipeline);
+      renderPass.setVertexBuffer(0, buffer);
+      renderPass.draw(9, count, 0, 0);
+    }
     renderPass.end();
 
     this.device.queue.submit([commandEncoder.finish()]);

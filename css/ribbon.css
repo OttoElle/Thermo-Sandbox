@@ -169,6 +169,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  white-space: nowrap;
   padding: 6px 10px;
   border-radius: 4px;
   font-size: 11.5px;
@@ -504,3 +505,61 @@
   border-color: var(--accent-green);
 }
 
+
+.ribbon-btn:disabled,
+.ribbon-btn[disabled] {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Thin separator between sub-clusters inside one ribbon group */
+.ribbon-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background-color: var(--border-subtle);
+  flex-shrink: 0;
+}
+
+/* Compact ribbon (set by ribbonLayout.js when a row would overflow):
+   tool buttons become icon-only, their title attribute stays as tooltip. */
+.header-row-ribbon.ribbon-compact .ribbon-tool-btn {
+  padding: 3px 6px;
+}
+
+.header-row-ribbon.ribbon-compact .ribbon-tool-btn > span {
+  display: none;
+}
+
+/* Menu entries: check column, disabled state */
+.menu-entry-check {
+  justify-content: flex-start;
+}
+
+.menu-entry-check::before {
+  content: '✓';
+  width: 16px;
+  flex-shrink: 0;
+  color: var(--accent-green);
+  font-weight: 700;
+  visibility: hidden;
+}
+
+.menu-entry-check.checked::before {
+  visibility: visible;
+}
+
+.menu-entry-check .menu-shortcut {
+  margin-left: auto;
+  padding-left: 10px;
+}
+
+.menu-entry.disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.menu-entry.disabled:hover {
+  background-color: transparent;
+  color: var(--text-muted);
+}

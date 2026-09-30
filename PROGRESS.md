@@ -438,9 +438,32 @@
 - [x] **Ergebnis**: Box mit C = 80: 300 K stabil, Energiedrift 0,003 %; Extremfall C = 10, Leitfähigkeit 1: 305 K stabil. Kein messbarer Performance-Unterschied.
 - [x] **Tests**: Abschnitt 15 in `test_gpu_compute_cdp.py` (GPU + CPU, Readbacks nur alle 4 Frames wie in der App; auf dem alten Code: 218.000 K → rot). UI-Smoke-Test nutzt einen Server mit Threads (sporadische Fetch-Fehler im Dev-Modus).
 
+### AF. UI-Polish Phase 1: Ribbon, Menüs, View (Claude Code, siehe `UI_POLISH_PLAN.md`)
+- [x] **Ribbon Zeile 1 neu gruppiert**: HISTORY (Undo, Redo | Revert, Clear) · TOOLS · TRANSFORM · GRID · VIEW. Grid und View sind getrennt; die ACTIONS-Gruppe entfällt.
+- [x] **Geschwindigkeitsvektoren im WebGPU-Modus**: Vorher wurden sie nie gezeichnet, weil das 2D-Overlay nur im Nicht-GPU-Zweig lief und `isGPUSimulating()` auch im Edit-Modus true ist. Jetzt gibt es einen eigenen Instanced-Pass (`vs_vector`, 9 Vertices/Partikel: Schaft + Spitze) direkt aus dem Compute-Puffer, zero-copy. Die Auswahl-Hervorhebung einzelner Partikel wird im Edit-Modus wieder gezeichnet.
+- [x] **Zoom to Fit** (`fitViewToScene`, Taste `F`, Zoom-Panel-Button, View-Menü) passt die Szene in den Bereich, den Header, Sidebars und Dock frei lassen. Das passiert automatisch beim Öffnen von Presets, Recent-Einträgen und Dateien.
+- [x] **Einheitliches Laden** über `openScene()`: Presets, Recent und Datei-Import teilen sich einen Pfad. Beim Datei-Import wurde der Sequencer vorher nicht neu gerendert.
+- [x] **Menüs**:
+  - *File*: New Canvas, Open, Examples & Recent (Splash), Save (direkt), Save As, Export Image (PNG des sichtbaren Bereichs inkl. GPU-Partikel), Revert to Saved.
+  - *Edit*: Undo/Redo, Select All, Duplicate, Group/Ungroup, Rotate/Flip, Delete.
+  - *View*: Grid/Snap, Vectors, Color, Zoom In/Out/Fit.
+  - *Simulation* (neu): Play/Pause, Step, Step Back, Stop, Modell, Gravity, Sequencer.
+  - *Help*: Guide, Keyboard Shortcuts (neuer Dialog; der Eintrag hatte vorher keinen Handler).
+  - Häkchen-Spalte und deaktivierte Einträge je nach Zustand.
+- [x] **Shortcuts**: Ctrl+S speichert direkt, Ctrl+Shift+S = Save As, Ctrl+A, Ctrl+G / Ctrl+Shift+G (war im Tooltip angekündigt, fehlte), Ctrl+Alt+N, R, V, F, +/−, ?. Außerdem sind Shortcuts im Splash und in Textareas jetzt inaktiv.
+- [x] **Responsive Ribbon** (`ribbonLayout.js`): Läuft eine Zeile über, werden die Tool-Buttons icon-only (Tooltip bleibt); sonst scrollt das Mausrad horizontal.
+- [x] **Bugfixes**:
+  - Undo/Redo überschrieb den „geladenen“ Stand (`importState` ohne `updateProfile=false`), dadurch setzte Reset auf einen Undo-Zwischenstand zurück.
+  - Revert und Clear sind jetzt per Undo rückgängig machbar; Revert hatte vorher den Undo-Stack gelöscht.
+  - Enter zum Schließen einer Polylinie warf einen `ReferenceError` (`polygonWalls`).
+  - Löschen per Kontextmenü legte zwei Undo-Einträge an.
+  - Speichern während einer Simulation speichert den Aufbau (Start-Snapshot) statt eines Mischzustands.
+- [x] **Tests**: Der UI-Smoke-Test prüft zusätzlich Ctrl+A/G/Shift+G, alle View-/Simulation-Menüeinträge, den Shortcut-Dialog, `F` sowie die Undo-Fähigkeit von New Canvas und Revert.
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)
+- [ ] **UI-Polish Phase 2** (Canvas-Interaktion & Formen, Bemaßung) laut `UI_POLISH_PLAN.md`.
 - [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren.
 - [ ] **Weitere Performance**: Pair-Suche dominiert weiterhin (Kernel-Profil siehe Abschnitt AC); Telemetrie-/Upload-Overhead pro Frame (`getGPUWalls()` allokiert jedes Frame).
 - [ ] **Große App-Module weiter zerlegen**: `canvasInput.js` (~850 Zeilen, ein großer mousedown/mouseup-Handler pro Werkzeug), `toolPanel.js` und `inspector.js` (je ~650, pro Elementtyp duplizierte Formulare) könnten pro Elementtyp datengetrieben werden.

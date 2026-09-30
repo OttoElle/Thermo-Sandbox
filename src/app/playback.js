@@ -145,8 +145,73 @@ btnZoomOut.addEventListener('click', () => {
   updateZoomText();
   updatePopupPosition();
 });
-btnResetView.addEventListener('click', () => {
-  renderer.setViewport(canvas.width * 0.5 - 450, canvas.height * 0.5 - 300, 1.0);
+btnResetView.addEventListener('click', fitViewToScene);
+
+// World-space bounding box of all scene elements and edit-time particles.
+function getSceneBounds() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const add = (x, y) => {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  };
+  for (const item of engine.elements) {
+    if (item.p1 && item.p2) {
+      add(item.p1.x, item.p1.y);
+      add(item.p2.x, item.p2.y);
+    } else if (typeof item.getBounds === 'function') {
+      const b = item.getBounds();
+      add(b.left, b.top);
+      add(b.right, b.bottom);
+    } else if (item.x !== undefined && item.width !== undefined) {
+      add(item.x, item.y);
+      add(item.x + item.width, item.y + item.height);
+    }
+    if (typeof item.getHandlePositions === 'function') {
+      const h = item.getHandlePositions();
+      add(h.minHandle.x, h.minHandle.y);
+      add(h.maxHandle.x, h.maxHandle.y);
+    }
+  }
+  for (const p of engine.particles) add(p.pos.x, p.pos.y);
+  return minX <= maxX ? { minX, minY, maxX, maxY } : null;
+}
+
+// Screen rectangle not covered by the floating header, sidebars and dock.
+// Uses offset* (layout) values so running CSS transitions don't skew it.
+export function getVisibleCanvasRect() {
+  let left = 0, top = 0, right = canvas.width, bottom = canvas.height;
+  const header = document.querySelector('.floating-header');
+  const sideL = document.getElementById('sidebarLeft');
+  const sideR = document.querySelector('.floating-sidebar.floating-right');
+  const dock = document.getElementById('unifiedBottomDock');
+  if (header?.offsetWidth) top = header.offsetTop + header.offsetHeight;
+  if (sideL?.offsetWidth) left = sideL.offsetLeft + sideL.offsetWidth;
+  if (sideR?.offsetWidth) right = sideR.offsetLeft;
+  if (dock?.offsetWidth) bottom = dock.offsetTop;
+  if (right - left < 200 || bottom - top < 150) return { left: 0, top: 0, right: canvas.width, bottom: canvas.height };
+  return { left, top, right, bottom };
+}
+
+// Zoom and pan so the whole scene fits into the visible canvas area.
+export function fitViewToScene() {
+  const view = getVisibleCanvasRect();
+  const bounds = getSceneBounds();
+  const margin = 40;
+  const viewW = view.right - view.left - margin * 2;
+  const viewH = view.bottom - view.top - margin * 2;
+  const cx = (view.left + view.right) * 0.5;
+  const cy = (view.top + view.bottom) * 0.5;
+  if (!bounds) {
+    renderer.setViewport(cx, cy, 1.0);
+  } else {
+    const w = Math.max(bounds.maxX - bounds.minX, 50);
+    const h = Math.max(bounds.maxY - bounds.minY, 50);
+    renderer.setViewport(0, 0, Math.min(viewW / w, viewH / h, 1.5));
+    const z = renderer.zoom;
+    renderer.setViewport(cx - (bounds.minX + bounds.maxX) * 0.5 * z, cy - (bounds.minY + bounds.maxY) * 0.5 * z, z);
+  }
   updateZoomText();
   updatePopupPosition();
-});
+}
