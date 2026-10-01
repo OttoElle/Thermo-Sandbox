@@ -1,42 +1,9 @@
 import { SequencerConditions } from './SequencerConditions.js';
+import { summarizeAction } from './SequencerActions.js';
 
 export class SequencerSummary {
-  static getActionSummary(act) {
-    if (!act) return 'No action';
-    const type = act.type || '';
-    if (type === 'piston') {
-      const mode = act.strokeCommand || act.mode || 'drive_tdc';
-      if (mode === 'drive_tdc') return 'Drive to TDC';
-      if (mode === 'drive_bdc') return 'Drive to BDC';
-      if (mode === 'hold') return 'Hold Position';
-      if (mode === 'free') return 'Free Float';
-      return `Target ${act.targetPos || 0}px`;
-    }
-    if (type === 'throttle_valve') {
-      return act.state === 'bypassed' ? 'Bypassed (100%)' : `Aperture ${Math.round((act.openRatio !== undefined ? act.openRatio : 0.3) * 100)}%`;
-    }
-    if (type === 'manual_valve') {
-      return act.valveState === 'closed' ? 'Closed' : 'Open';
-    }
-    if (type === 'check_valve') {
-      return act.direction === -1 ? 'Reverse (←)' : 'Forward (→)';
-    }
-    if (type === 'relief_valve') {
-      return `P_max: ${act.triggerPressure || 250} Pa`;
-    }
-    if (type === 'reservoir' || type === 'thermal_block' || type === 'heat_exchanger' || type === 'regenerator') {
-      return act.isActive === false ? 'Insulated' : `${Math.round(act.temperature || 300)} K`;
-    }
-    if (type === 'emitter') {
-      return act.state === 'paused' ? 'Paused' : `${act.rate || 8} pts/s @ ${Math.round(act.temperature || 300)}K`;
-    }
-    if (type === 'sink') {
-      return act.isActive === false ? 'Inactive' : `${Math.round((act.absorptionEfficiency !== undefined ? act.absorptionEfficiency : 1.0) * 100)}% Eff`;
-    }
-    if (type === 'regulator') {
-      return act.isActive === false ? 'Inactive' : `Target N = ${act.targetCount || 50}`;
-    }
-    return 'Snapshot set';
+  static getActionSummary(act, item = null) {
+    return summarizeAction(act, item);
   }
 
   static formatConditionSummary(cond) {

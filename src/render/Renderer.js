@@ -484,7 +484,7 @@ export class Renderer {
       ctx.fillStyle = '#7dd3fc';
       ctx.font = 'bold 10.5px Inter, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(`Sink (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
+      ctx.fillText(`Heat Bath (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
 
     } else if (tool === 'storage_block' || tool === 'solidblock') {
       ctx.fillStyle = 'rgba(245, 158, 11, 0.15)';
@@ -514,7 +514,7 @@ export class Renderer {
       ctx.fillStyle = '#fde047';
       ctx.font = 'bold 10.5px Inter, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(`Ressavoir (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
+      ctx.fillText(`Thermal Mass (${Math.round(w)}×${Math.round(h)})`, minX + w * 0.5, minY + h * 0.5 + 4);
 
     } else if (tool === 'regulator') {
       ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
@@ -565,7 +565,7 @@ export class Renderer {
         let label = '';
         if (tool === 'gas') label = `Spawner (${Math.round(w)}×${Math.round(h)})`;
         else if (tool === 'emitter') label = `Emitter (${Math.round(w)}×${Math.round(h)})`;
-        else if (tool === 'sink') label = `Sink (${Math.round(w)}×${Math.round(h)})`;
+        else if (tool === 'sink') label = `Absorber (${Math.round(w)}×${Math.round(h)})`;
         else if (tool === 'sensor') label = `Sensor (${Math.round(w)}×${Math.round(h)})`;
         if (label) {
           ctx.fillText(label, minX + w * 0.5, minY + h * 0.5 + 4);
@@ -737,7 +737,7 @@ export class Renderer {
     ctx.setLineDash([]);
 
     // Solid Isotherm Fill (No inner hatching, distinct glowing label)
-    const textStr = `Sink ${Math.round(res.temperature)}K${isActive ? '' : ' [OFF]'}`;
+    const textStr = `Heat Bath ${Math.round(res.temperature)}K${isActive ? '' : ' [OFF]'}`;
     ctx.font = 'bold 11px Inter, sans-serif';
     ctx.textAlign = 'center';
     const textWidth = ctx.measureText(textStr).width;
@@ -927,7 +927,7 @@ export class Renderer {
     ctx.setLineDash([]);
 
     // Label with solid background badge for clear readability
-    const textStr = `Ressavoir ${Math.round(block.temperature)}K${isActive ? '' : ' [OFF]'}`;
+    const textStr = `Thermal Mass ${Math.round(block.temperature)}K${isActive ? '' : ' [OFF]'}`;
     ctx.font = 'bold 11px Inter, sans-serif';
     ctx.textAlign = 'center';
     const textWidth = ctx.measureText(textStr).width;

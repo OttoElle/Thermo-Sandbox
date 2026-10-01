@@ -5,7 +5,7 @@
  */
 
 import { SequencerActionFields } from './SequencerActionFields.js';
-import { SequencerCatalogDefaults } from './SequencerCatalogDefaults.js';
+import { defaultValues, ELEMENT_TYPES } from '../model/elementSchema.js';
 
 export class SequencerActionDialog {
   constructor(engine, onActionSaved, renderer = null) {
@@ -144,10 +144,7 @@ export class SequencerActionDialog {
   }
 
   isPickable(item) {
-    if (!item) return false;
-    if (item.isParticleGroup || item.label?.includes('Spawner') || item.permeable === 'sensor') return false;
-    if (item.contains && item.label && item.pressure !== undefined) return false;
-    return true;
+    return SequencerActionFields.getElementType(item) !== 'unknown';
   }
 
   handleItemPicked(item) {
@@ -175,8 +172,8 @@ export class SequencerActionDialog {
     const formContainer = document.getElementById('seqActFormContainer');
 
     const type = SequencerActionFields.getElementType(item);
-    if (badgeEl) badgeEl.textContent = type.toUpperCase().replace('_', ' ');
-    if (titleEl) titleEl.textContent = `Configure Action: ${item.label || item.name || type}`;
+    if (badgeEl) badgeEl.textContent = ELEMENT_TYPES[type]?.tag || type.toUpperCase();
+    if (titleEl) titleEl.textContent = `Action: ${ELEMENT_TYPES[type]?.label || type}`;
 
     SequencerActionFields.renderFields(formContainer, item, existingAction || {});
 
@@ -308,9 +305,7 @@ export class SequencerActionDialog {
     const formContainer = document.getElementById('seqActFormContainer');
     if (!formContainer) return;
     const type = SequencerActionFields.getElementType(this.selectedItem);
-    const defaults = SequencerCatalogDefaults.getDefaultsForType(type);
-    defaults.type = type;
-    SequencerActionFields.renderFields(formContainer, this.selectedItem, defaults);
+    SequencerActionFields.renderFields(formContainer, this.selectedItem, defaultValues(type, 'sequencer'));
   }
 
   close() {

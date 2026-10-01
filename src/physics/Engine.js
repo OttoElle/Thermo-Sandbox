@@ -1456,6 +1456,8 @@ export class Engine {
       textLabels: this.textLabels.map(l => l.toJSON()),
       particleGroups: this.particleGroups.map(g => g.toJSON()),
       elementOrder: this.elements.map(el => el.id),
+      elementNames: Object.fromEntries(this.elements.filter(el => el.name).map(el => [el.id, el.name])),
+      groupNames: { ...(this.groupNames || {}) },
       cycleSequencer: this.sequencer ? this.sequencer.exportState() : null,
       particles: this.particles.map(p => ({
         x: p.initialPos.x,
@@ -1505,6 +1507,9 @@ export class Engine {
       ...this.particleGroups,
       ...this.pistons
     ];
+    const names = state.elementNames || {};
+    this.elements.forEach(el => { if (names[el.id]) el.name = names[el.id]; });
+    this.groupNames = { ...(state.groupNames || {}) };
     // Restore the saved z-order (files without it keep the type order).
     if (Array.isArray(state.elementOrder)) {
       const rank = new Map(state.elementOrder.map((id, i) => [id, i]));

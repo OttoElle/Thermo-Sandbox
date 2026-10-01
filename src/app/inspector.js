@@ -212,7 +212,6 @@ export function renderInspector(force = false) {
       onChange: (k, v) => {
         const field = fieldsFor(type, 'inspector').find(f => f.key === k);
         items.forEach(it => setFieldValue(field, it, v, engine));
-        if (type === 'sink') engine.syncSinksToGPU();
         updateInfo();
         scheduleTreeRefresh();
       }

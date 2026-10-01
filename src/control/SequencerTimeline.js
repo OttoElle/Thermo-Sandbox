@@ -6,6 +6,9 @@
 
 import { SequencerActionFields } from './SequencerActionFields.js';
 import { SequencerSummary } from './SequencerSummary.js';
+import { actionTypeOf } from './SequencerActions.js';
+import { ELEMENT_TYPES } from '../model/elementSchema.js';
+import { elementName } from '../model/elementNames.js';
 
 export class SequencerTimeline {
   constructor(engine, callbacks = {}, renderer = null) {
@@ -76,8 +79,9 @@ export class SequencerTimeline {
     } else {
       actions.forEach((act, aIdx) => {
         const item = this._findTargetItem(act.targetId);
-        const tag = (act.type || 'ITEM').toUpperCase().substring(0, 7);
-        const label = item?.label || item?.name || `${act.type} ${act.targetId ? act.targetId.substring(0, 6) : ''}`;
+        const type = item ? actionTypeOf(item) : null;
+        const tag = type ? ELEMENT_TYPES[type].tag : 'MISSING';
+        const label = item ? `${elementName(item, this.engine)} · ${SequencerSummary.getActionSummary(act, item)}` : 'Element was deleted';
         const key = `${sIdx}_${aIdx}`;
         const isExpanded = this.expandedActions.has(key);
 

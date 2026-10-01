@@ -4,6 +4,7 @@
  * Evaluates Time, Piston Position, and Sensor Metrics with AND/OR Logic.
  */
 
+import { normalizeAction } from './SequencerActions.js';
 export class SequencerConditions {
   /**
    * Helper to resolve target position for a piston given a command:
@@ -55,7 +56,8 @@ export class SequencerConditions {
         for (const act of driving) {
           const p = (engine.pistons || []).find(item => item.id === act.targetId);
           if (p) {
-            const tgt = (act.mode === 'drive_tdc' || act.mode === 'drive_bdc') ? act.mode.replace('drive_', '') : (act.mode === 'controlled' ? 'custom' : 'tdc');
+            const cmd = normalizeAction(act, p).command;
+            const tgt = (cmd === 'drive_tdc' || cmd === 'drive_bdc') ? cmd.replace('drive_', '') : 'tdc';
             targetPistons.push({
               piston: p,
               target: tgt,

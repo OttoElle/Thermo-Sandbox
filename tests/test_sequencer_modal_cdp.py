@@ -142,8 +142,12 @@ def test_sequencer_modal():
                 window.sequencerUI.actionDialog.openForElement(p, 0);
                 const dlg = document.getElementById('seqActionDialog');
                 const glow = window.renderer.highlightedSequencerItem === p;
-                const dualInputSlider = !!dlg.querySelector('#seqAct_pSpring_slider');
-                const dualInputNum = !!dlg.querySelector('#seqAct_pSpring_num');
+                const cmd = dlg.querySelector('.prop-row[data-key="command"] select');
+                cmd.value = '3';  // Release (run in mode below)
+                cmd.dispatchEvent(new Event('change'));
+                const springRow = dlg.querySelector('.prop-row[data-key="springK"]');
+                const dualInputSlider = !!springRow?.querySelector('.prop-slider') && springRow.querySelector('.prop-num').value === '75';
+                const dualInputNum = !!springRow?.querySelector('.prop-num');
                 const rect = dlg.getBoundingClientRect();
                 return {
                     pistonId: p.id,
@@ -167,7 +171,7 @@ def test_sequencer_modal():
         res3 = eval_js("""
             (() => {
                 // Change mass and spring values
-                const massSlider = document.getElementById('seqAct_pMass_slider');
+                const massSlider = document.querySelector('#seqActionDialog .prop-row[data-key="mass"] .prop-slider');
                 if (massSlider) { massSlider.value = '45'; massSlider.dispatchEvent(new Event('input')); }
                 const saveBtn = document.getElementById('seqActBtnSave');
                 saveBtn.click();
@@ -180,7 +184,8 @@ def test_sequencer_modal():
                     targetId: action?.targetId,
                     mass: action?.mass,
                     springK: action?.springK,
-                    motionType: action?.motionType,
+                    command: action?.command,
+                    mode: action?.mode,
                     glowCleared: glowCleared,
                     displayAfterClose: dlg.style.display
                 };
@@ -188,6 +193,8 @@ def test_sequencer_modal():
         """)
         print("Save action test:", res3)
         assert res3['actionSaved'], "Action was not saved to step"
+        assert res3['mass'] == 45 and res3['springK'] == 75, f"Saved action values wrong: {res3}"
+        assert res3['command'] == 'release' and res3['mode'] == 'spring', f"Saved piston command wrong: {res3}"
         assert res3['glowCleared'], "Glow highlight should be cleared after save"
         assert res3['displayAfterClose'] == 'none', "Dialog should be hidden after save"
 
@@ -212,13 +219,14 @@ def test_sequencer_modal():
                 return {
                     emitterId: em.id,
                     badge: dlg.querySelector('#seqActBadge')?.textContent,
-                    dirButtonsCount: dlg.querySelectorAll('#seqAct_emDir button').length,
-                    activeDir: dlg.querySelector('#seqAct_emDir button.active')?.dataset.dir,
+                    dirButtonsCount: dlg.querySelectorAll('.prop-row[data-key="direction"] .prop-seg').length,
+                    activeDir: dlg.querySelector('.prop-row[data-key="direction"] .prop-seg.active')?.textContent.trim(),
                     display: dlg.style.display
                 };
             })()
         """)
         print("Emitter action dialog test:", json.dumps(res4))
+        assert res4['dirButtonsCount'] == 5 and res4['activeDir'] == '↓', f"Emitter direction buttons wrong: {res4}"
         # 6. Test Wider Sequencer Drawer, Lifted Panels, and Centered Controls
         res_ui = eval_js("""
             (async () => {
@@ -308,13 +316,13 @@ def test_sequencer_modal():
                 const cardAfterClick = document.querySelector('.seq-action-card[data-action="0"]');
                 const isExpanded = cardAfterClick ? cardAfterClick.classList.contains('is-expanded') : false;
                 const actionBody = cardAfterClick ? cardAfterClick.querySelector('.seq-action-body') : null;
-                const inlineSliders = actionBody ? actionBody.querySelectorAll('.styled-slider') : [];
-                const inlineNotches = actionBody ? actionBody.querySelectorAll('.slider-notch') : [];
+                const inlineSliders = actionBody ? actionBody.querySelectorAll('.prop-slider') : [];
+                const inlineNotches = actionBody ? actionBody.querySelectorAll('.prop-notch') : [];
                 const dialogAfter = document.getElementById('seqActionDialog').style.display;
                 const highlighted = window.renderer.highlightedSequencerItem !== null;
 
                 // Test live update: drag the in-line mass slider
-                const massSlider = actionBody ? actionBody.querySelector('[id$="pMass_slider"]') : null;
+                const massSlider = actionBody ? actionBody.querySelector('.prop-row[data-key="mass"] .prop-slider') : null;
                 let massBefore = massSlider ? parseFloat(massSlider.value) : -1;
                 if (massSlider) {
                     massSlider.value = 65;
@@ -365,11 +373,14 @@ def test_sequencer_modal():
                 const hasSvg = resetBtn && resetBtn.querySelector('svg') !== null;
 
                 // Check notches
-                const notches = dlg.querySelectorAll('.slider-notch');
+                const notches = dlg.querySelectorAll('.prop-notch');
 
-                // Check speed slider default (160 px/s)
-                const speedSlider = dlg.querySelector('#seqAct_pSpeed_slider');
-                const speedRow = dlg.querySelector('#row_seqAct_pSpeed');
+                // Drive command shows the drive speed (default 160 px/s)
+                const cmd = dlg.querySelector('.prop-row[data-key="command"] select');
+                cmd.value = '0';
+                cmd.dispatchEvent(new Event('change'));
+                const speedRow = dlg.querySelector('.prop-row[data-key="targetSpeed"]');
+                const speedSlider = speedRow.querySelector('.prop-slider');
 
                 // Modify speed away from default
                 speedSlider.value = 350;
@@ -379,8 +390,8 @@ def test_sequencer_modal():
                 // Click Reset to Default arrow in header
                 resetBtn.click();
 
-                const speedAfterReset = parseFloat(dlg.querySelector('#seqAct_pSpeed_slider').value);
-                const isModifiedAfterReset = dlg.querySelector('#row_seqAct_pSpeed').classList.contains('is-modified');
+                const speedAfterReset = parseFloat(dlg.querySelector('.prop-row[data-key="targetSpeed"] .prop-slider').value);
+                const isModifiedAfterReset = dlg.querySelector('.prop-row[data-key="targetSpeed"]').classList.contains('is-modified');
 
                 dlg.style.display = 'none';
                 return {
@@ -453,6 +464,37 @@ def test_sequencer_modal():
         assert res_hover['cursorOverPiston'] == 'pointer', f"Canvas cursor should be pointer, got {res_hover['cursorOverPiston']}"
         assert res_hover['glowAway'], "Glow highlight should clear when mouse moves away"
         assert res_hover['glowAfterStop'], "Glow highlight should clear when picking stops"
+
+        # 11. Executing actions: valves, sink filter and regenerator axis, written
+        # with the keys older versions saved (valveState, direction, 2-way, hot, axis).
+        res_exec = eval_js("""
+            (() => {
+                const E = window.engine;
+                const mv = E.addWall(100, 100, 100, 200, { type: 'manual_valve', isOpen: false });
+                const cv = E.addWall(150, 100, 150, 200, { type: 'check_valve', allowedDirection: 1 });
+                const rv = E.addWall(200, 100, 200, 200, { type: 'relief_valve', reliefMode: 'oneway' });
+                const sk = E.addSink(300, 100, 40, 40, {});
+                const rg = E.addRegeneratorMatrix(400, 100, 80, 40, { orientation: 'horizontal' });
+                E.sequencer.applyStepActions({ actions: [
+                    { targetId: mv.id, type: 'manual_valve', valveState: 'open' },
+                    { targetId: cv.id, type: 'check_valve', direction: -1 },
+                    { targetId: rv.id, type: 'relief_valve', reliefMode: '2-way', hysteresis: 40, triggerPressure: 400 },
+                    { targetId: sk.id, type: 'sink', thermalFilter: 'hot', cutoffTemp: 450 },
+                    { targetId: rg.id, type: 'regenerator', axis: 'vertical' }
+                ] }, E);
+                return {
+                    manualOpen: mv.isOpen, checkDir: cv.allowedDirection,
+                    reliefMode: rv.reliefMode, reliefHyst: rv.pressureHysteresis, reliefTrigger: rv.triggerPressure,
+                    sinkFilter: sk.tempFilterMode, sinkT: sk.filterTemperature, regenAxis: rg.orientation
+                };
+            })()
+        """)
+        print("Action execution test:", res_exec)
+        assert res_exec['manualOpen'] is True, "manual valve action not applied"
+        assert res_exec['checkDir'] == -1, "check valve direction not applied"
+        assert res_exec['reliefMode'] == 'bidirectional' and res_exec['reliefHyst'] == 40 and res_exec['reliefTrigger'] == 400, "relief valve action not applied"
+        assert res_exec['sinkFilter'] == 'above' and res_exec['sinkT'] == 450, "sink filter action not applied"
+        assert res_exec['regenAxis'] == 'vertical', "regenerator axis not applied"
 
         eval_js("window.sequencerUI.actionDialog.close();")
         print("\nAll CDP sequencer modal and UI tests passed successfully!")
