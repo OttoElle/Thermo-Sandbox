@@ -19,7 +19,8 @@ css_files_order = [
     'css/playback.css',
     'css/modals.css',
     'css/splash.css',
-    'css/sequencer.css'
+    'css/sequencer.css',
+    'css/properties.css'
 ]
 
 def build():

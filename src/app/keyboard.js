@@ -3,7 +3,7 @@ import { btnInfoClose, btnPlayPause, btnRotate90, btnStep, btnToolbarClear, btnZ
 import { engine, tempChart } from './core.js';
 import { app, pointer, resetPolygonDraft } from './state.js';
 import { performRedo, performUndo, recordUndoState } from './history.js';
-import { toolConfigs } from './toolPanel.js';
+import { toolConfigs, wallOptions } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
 import { closeAllMenus, closeSaveModal, openSaveModal, openShortcutsModal, saveProject, selectAllElements, toggleVectors } from './menus.js';
 import { closeContextMenu } from './canvasInput.js';
@@ -70,12 +70,7 @@ window.addEventListener('keydown', (e) => {
       const prev = pointer.polygonPoints[pointer.polygonPoints.length - 1];
       if (prev.x !== p0.x || prev.y !== p0.y) {
         recordUndoState();
-        const cfg = toolConfigs.wall;
-        const w = engine.addWall(prev.x, prev.y, p0.x, p0.y, {
-          conductivity: cfg.conductivity,
-          thickness: cfg.thickness,
-          groupId: pointer.polygonGroupId
-        });
+        const w = engine.addWall(prev.x, prev.y, p0.x, p0.y, wallOptions({ groupId: pointer.polygonGroupId }));
         pointer.polygonWalls.push(w);
         app.selectedItems = [...pointer.polygonWalls];
         resetPolygonDraft();

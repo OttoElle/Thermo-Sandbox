@@ -12,13 +12,15 @@ export const undoStack = [];
 export const redoStack = [];
 const MAX_UNDO = 40;
 
-export function recordUndoState() {
+// refreshList = false records without re-rendering the sidebar (used while a
+// property field is being edited, so the field keeps focus).
+export function recordUndoState(refreshList = true) {
   if (app.isSimulating) return;
   const snapshot = engine.exportState(app.currentProjectName);
   undoStack.push(JSON.stringify(snapshot));
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   redoStack.length = 0;
-  updateElementsList();
+  if (refreshList) updateElementsList();
 }
 
 export function performUndo() {

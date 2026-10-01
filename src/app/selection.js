@@ -18,7 +18,7 @@ import { btnFlipH, btnFlipV, btnGroupSelected, btnRotate90 } from './dom.js';
 import { engine, renderer } from './core.js';
 import { app } from './state.js';
 import { recordUndoState } from './history.js';
-import { toolConfigs } from './toolPanel.js';
+import { wallOptions } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
 import { closeContextMenu } from './canvasInput.js';
 import { closePopup } from './popup.js';
@@ -244,7 +244,6 @@ export function findPistonSnap(x, y, width, height, threshold = 22) {
 // Circle Wall Generator
 export function createCircleWall(center, radius) {
   if (radius < 10) return [];
-  const cfg = toolConfigs.wall;
   const numSegments = Math.max(20, Math.min(64, Math.round(radius * 0.45)));
   const angleStep = (Math.PI * 2) / numSegments;
   const createdWalls = [];
@@ -257,12 +256,7 @@ export function createCircleWall(center, radius) {
     const y1 = center.y + radius * Math.sin(a1);
     const x2 = center.x + radius * Math.cos(a2);
     const y2 = center.y + radius * Math.sin(a2);
-    const w = engine.addWall(x1, y1, x2, y2, {
-      conductivity: cfg.conductivity,
-      thickness: cfg.thickness,
-      groupId: gid
-    });
-    createdWalls.push(w);
+    createdWalls.push(engine.addWall(x1, y1, x2, y2, wallOptions({ groupId: gid })));
   }
   app.selectedItems = createdWalls;
   return createdWalls;
@@ -279,7 +273,6 @@ export function createArcWall(center, pStart, pEnd) {
 
   const numSegments = 16;
   const angleStep = (endAngle - startAngle) / numSegments;
-  const cfg = toolConfigs.wall;
   const gid = 'g_arc_' + Math.random().toString(36).substring(2, 9);
   const createdWalls = [];
 
@@ -290,12 +283,7 @@ export function createArcWall(center, pStart, pEnd) {
     const y1 = center.y + radius * Math.sin(a1);
     const x2 = center.x + radius * Math.cos(a2);
     const y2 = center.y + radius * Math.sin(a2);
-    const w = engine.addWall(x1, y1, x2, y2, {
-      conductivity: cfg.conductivity,
-      thickness: cfg.thickness,
-      groupId: gid
-    });
-    createdWalls.push(w);
+    createdWalls.push(engine.addWall(x1, y1, x2, y2, wallOptions({ groupId: gid })));
   }
   app.selectedItems = createdWalls;
   return createdWalls;

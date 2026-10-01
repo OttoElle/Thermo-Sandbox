@@ -153,11 +153,17 @@ def run_pass(page, label):
     before = page.eval(COUNT_JS)
 
     # Draw every element type, spread over a grid in the middle of the canvas
+    missing = []
     for i, (tool, dx, dy) in enumerate(DRAW_TOOLS):
         assert page.click_id(tool), f'missing tool button {tool}'
-        x = 470 + (i % 5) * 110
+        x = 660 + (i % 5) * 76  # right of the floating tool dialog
         y = 300 + (i // 5) * 140
+        n0 = page.eval(COUNT_JS)
         page.drag(x, y, x + dx, y + dy)
+        if page.eval(COUNT_JS) == n0:
+            missing.append(tool)
+    if missing:
+        print(f'tools that created nothing: {missing}')
     # Walls: first variant of the wall tool, dragged segment + a polyline closed by double click
     page.eval('document.querySelector(\'.ribbon-tool-btn[data-tool="wall"]\').click()')
     page.drag(470, 620, 600, 620)
@@ -169,11 +175,11 @@ def run_pass(page, label):
 
     # Select, popup, context menu, duplicate, undo/redo, delete
     page.click_id('toolSelect')
-    page.click(500, 325)
-    page.click(500, 325, clicks=2)
-    page.mouse('mouseMoved', 500, 325, 'none', buttons=0)
-    page.mouse('mousePressed', 500, 325, 'right')
-    page.mouse('mouseReleased', 500, 325, 'right')
+    page.click(690, 325)
+    page.click(690, 325, clicks=2)
+    page.mouse('mouseMoved', 690, 325, 'none', buttons=0)
+    page.mouse('mousePressed', 690, 325, 'right')
+    page.mouse('mouseReleased', 690, 325, 'right')
     page.click_id('ctxDuplicate')
     page.key('z', 'KeyZ', 90, modifiers=2)
     page.key('y', 'KeyY', 89, modifiers=2)

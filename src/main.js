@@ -6,6 +6,7 @@ import { app } from './app/state.js';
 import { pushHistoryFrame } from './app/history.js';
 import { renderToolProperties, selectToolButton } from './app/toolPanel.js';
 import { updateElementsList } from './app/elementTree.js';
+import { refreshInspectorLive } from './app/inspector.js';
 import { updateViewMenuLabels } from './app/menus.js';
 import { customCharts, updateChamberCards, updateSystemStats } from './app/dashboard.js';
 import { renderLiveToolPreviews } from './app/toolPreview.js';
@@ -81,6 +82,7 @@ function animate(now) {
   telemetryTimer += dt;
   if (telemetryTimer >= 0.15) {
     updateChamberCards();
+    refreshInspectorLive();
     telemetryTimer = 0;
   }
 

@@ -16,7 +16,7 @@ import { engine, renderer } from './core.js';
 import { app, pointer, resetPolygonDraft } from './state.js';
 import { recordUndoState } from './history.js';
 import { snapToGrid } from './fields.js';
-import { toolConfigs } from './toolPanel.js';
+import { toolConfigs, wallOptions } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
 import { closeAllMenus } from './menus.js';
 import { updateZoomText } from './playback.js';
@@ -66,12 +66,7 @@ export function placePolylinePoint(pt) {
   const prev = pointer.polygonPoints[pointer.polygonPoints.length - 1];
   if (prev.x === pt.x && prev.y === pt.y) return;
   recordUndoState();
-  const cfg = toolConfigs.wall;
-  const w = engine.addWall(prev.x, prev.y, pt.x, pt.y, {
-    conductivity: cfg.conductivity,
-    thickness: cfg.thickness,
-    groupId: pointer.polygonGroupId
-  });
+  const w = engine.addWall(prev.x, prev.y, pt.x, pt.y, wallOptions({ groupId: pointer.polygonGroupId }));
   pointer.polygonWalls.push(w);
   if (pointer.polygonPoints.length >= 2 && pt.x === p0.x && pt.y === p0.y) {
     app.selectedItems = [...pointer.polygonWalls];
@@ -604,185 +599,80 @@ window.addEventListener('mouseup', (e) => {
   pointer.dragStartWorld = null;
 });
 
-// Creates the element of the active drawing tool from a drag (start s, end c).
+// Creates the element of the active drawing tool from a drag (start s, end c),
+// with all current tool settings (toolConfigs) as its properties.
 export function createFromDrag(s, c) {
   const minX = Math.min(s.x, c.x), minY = Math.min(s.y, c.y);
   const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
+  const tool = app.activeTool;
+  const isBox = w >= 20 && h >= 20;
+  const cfg = { ...toolConfigs[tool] };
+  let created = null;
 
-  // Wall Rectangle
-  if (app.activeTool === 'wall' && toolConfigs.wall.shape === 'rect' && w >= 20 && h >= 20) {
+  if (tool === 'wall' && toolConfigs.wall.shape === 'rect' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.wall;
     const gid = 'g_rect_' + Math.random().toString(36).substring(2, 9);
-    const w1 = engine.addWall(minX, minY, minX + w, minY, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
-    const w2 = engine.addWall(minX + w, minY, minX + w, minY + h, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
-    const w3 = engine.addWall(minX + w, minY + h, minX, minY + h, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
-    const w4 = engine.addWall(minX, minY + h, minX, minY, { conductivity: cfg.conductivity, thickness: cfg.thickness, groupId: gid });
-    app.selectedItems = [w1, w2, w3, w4];
-    updateElementsList();
-
-  // Wall Circle
-  } else if (app.activeTool === 'wall' && toolConfigs.wall.shape === 'circle') {
+    const corners = [[minX, minY], [minX + w, minY], [minX + w, minY + h], [minX, minY + h]];
+    created = corners.map((p, i) => {
+      const q = corners[(i + 1) % 4];
+      return engine.addWall(p[0], p[1], q[0], q[1], wallOptions({ groupId: gid }));
+    });
+  } else if (tool === 'wall' && toolConfigs.wall.shape === 'circle') {
     const radius = Math.hypot(c.x - s.x, c.y - s.y);
-    if (radius >= 12) {
-      recordUndoState();
-      createCircleWall(s, radius);
-      updateElementsList();
-    }
-
-  // Piston
-  } else if (app.activeTool === 'piston' && (w >= 20 || h >= 20)) {
+    if (radius < 12) return;
     recordUndoState();
-    const cfg = toolConfigs.piston;
-    const isVertical = h >= w;
-    const p = engine.addPiston({
-      label: 'P', orientation: isVertical ? 'horizontal' : 'vertical',
-      x: (s.x + c.x) * 0.5, y: (s.y + c.y) * 0.5,
-      width: Math.max(16, w), height: Math.max(16, h),
-      minPos: isVertical ? (s.x + c.x) * 0.5 - 140 : (s.y + c.y) * 0.5 - 140,
-      maxPos: isVertical ? (s.x + c.x) * 0.5 + 140 : (s.y + c.y) * 0.5 + 140,
-      mode: cfg.mode, mass: cfg.mass, springK: cfg.springK,
-      frequency: cfg.frequency, amplitude: cfg.amplitude, phase: cfg.phase,
-      dampingCoeff: cfg.dampingCoeff, conductivity: cfg.conductivity
+    created = createCircleWall(s, radius);
+  } else if (tool === 'piston' && (w >= 20 || h >= 20)) {
+    recordUndoState();
+    // A tall drag makes a piston that moves horizontally and vice versa.
+    const movesHorizontally = h >= w;
+    const cx = (s.x + c.x) * 0.5, cy = (s.y + c.y) * 0.5;
+    const along = movesHorizontally ? cx : cy;
+    created = engine.addPiston({
+      ...cfg, label: 'P', orientation: movesHorizontally ? 'horizontal' : 'vertical',
+      x: cx, y: cy, width: Math.max(16, w), height: Math.max(16, h),
+      minPos: along - 140, maxPos: along + 140
     });
-    app.selectedItems = [p];
-    updateElementsList();
-
-  // Isotherm-Block (Solid Constant-T Reservoir)
-  } else if ((app.activeTool === 'solid_res' || app.activeTool === 'reservoir') && w >= 20 && h >= 20) {
+  } else if (tool === 'solid_res' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.solid_res || toolConfigs.reservoir;
-    const r = engine.addReservoir(minX, minY, w, h, {
-      label: `Isotherm (${Math.round(cfg.temperature)}K)`, temperature: cfg.temperature, conductance: cfg.conductance
-    });
-    app.selectedItems = [r];
-    updateElementsList();
-
-  // Permeable Heat Exchanger (Cross-hatch constant-T)
-  } else if (app.activeTool === 'heat_exchanger' && w >= 20 && h >= 20) {
+    created = engine.addReservoir(minX, minY, w, h, cfg);
+  } else if (tool === 'heat_exchanger' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.heat_exchanger;
-    const hx = engine.addHeatExchanger(minX, minY, w, h, {
-      temperature: cfg.temperature, conductivity: cfg.conductivity
-    });
-    app.selectedItems = [hx];
-    updateElementsList();
-
-  // Permeable Regenerator Matrix (Multi-slice gradient with directional parallel lines)
-  } else if ((app.activeTool === 'regenerator' || app.activeTool === 'matrix') && w >= 20 && h >= 20) {
+    created = engine.addHeatExchanger(minX, minY, w, h, cfg);
+  } else if (tool === 'regenerator' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.regenerator || toolConfigs.matrix;
-    const isHoriz = cfg.orientation ? cfg.orientation === 'horizontal' : (w >= h);
-    const reg = engine.addRegeneratorMatrix(minX, minY, w, h, {
-      orientation: isHoriz ? 'horizontal' : 'vertical',
-      temperature: cfg.temperature, heatCapacity: cfg.heatCapacity,
-      conductivity: cfg.conductivity, sliceCount: 10
-    });
-    app.selectedItems = [reg];
-    updateElementsList();
-
-  // Solid Thermal Storage Block (Finite heat capacity C)
-  } else if ((app.activeTool === 'storage_block' || app.activeTool === 'solidblock') && w >= 20 && h >= 20) {
+    created = engine.addRegeneratorMatrix(minX, minY, w, h, cfg);
+  } else if (tool === 'storage_block' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.storage_block || toolConfigs.solidblock;
-    const sb = engine.addThermalBlock(minX, minY, w, h, {
-      temperature: cfg.temperature, heatCapacity: cfg.heatCapacity, conductivity: cfg.conductivity
-    });
-    app.selectedItems = [sb];
-    updateElementsList();
-
-  // Valve (Manual, Check, or Relief)
-  } else if (app.activeTool === 'valve' && (s.x !== c.x || s.y !== c.y)) {
+    created = engine.addThermalBlock(minX, minY, w, h, cfg);
+  } else if (tool === 'valve' && (s.x !== c.x || s.y !== c.y)) {
     recordUndoState();
-    const cfg = toolConfigs.valve;
-    const v = engine.addWall(s.x, s.y, c.x, c.y, {
-      type: cfg.type,
-      thickness: cfg.thickness || 4,
-      conductivity: cfg.conductivity,
-      allowedDirection: cfg.allowedDirection,
-      triggerPressure: cfg.triggerPressure,
-      pressureHysteresis: cfg.pressureHysteresis,
-      reliefMode: cfg.reliefMode
-    });
-    app.selectedItems = [v];
-    updateElementsList();
-
-  // Throttle Valve (Variable Opening Orifice)
-  } else if (app.activeTool === 'throttle_valve' && (s.x !== c.x || s.y !== c.y)) {
+    created = engine.addWall(s.x, s.y, c.x, c.y, cfg);
+  } else if (tool === 'throttle_valve' && (s.x !== c.x || s.y !== c.y)) {
     recordUndoState();
-    const cfg = toolConfigs.throttle_valve;
-    const tv = engine.addThrottleValve(s.x, s.y, c.x, c.y, {
-      openRatio: cfg.openRatio,
-      thickness: cfg.thickness || 6,
-      conductivity: cfg.conductivity || 0
-    });
-    app.selectedItems = [tv];
-    updateElementsList();
-
-  // Particle Spawner
-  } else if (app.activeTool === 'gas' && w >= 20 && h >= 20) {
+    created = engine.addThrottleValve(s.x, s.y, c.x, c.y, cfg);
+  } else if (tool === 'gas' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.gas;
-    const group = engine.spawnGasRaster(minX, minY, w, h, cfg.count, cfg.mass, cfg.temperature, cfg.velocityMode);
-    app.selectedItems = [group];
-    updateElementsList();
-
-  // Particle Regulator Zone
-  } else if (app.activeTool === 'regulator' && w >= 20 && h >= 20) {
+    created = engine.spawnGasRaster(minX, minY, w, h, cfg.count, cfg.mass, cfg.temperature, cfg.velocityMode);
+  } else if (tool === 'regulator' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.regulator;
-    const reg = engine.addRegulator(minX, minY, w, h, {
-      targetCount: cfg.targetCount,
-      hysteresis: cfg.hysteresis,
-      temperature: cfg.temperature,
-      mass: cfg.mass,
-      rate: cfg.rate
-    });
-    app.selectedItems = [reg];
-    updateElementsList();
-
-  // Emitter (Source)
-  } else if (app.activeTool === 'emitter' && w >= 20 && h >= 20) {
+    created = engine.addRegulator(minX, minY, w, h, cfg);
+  } else if (tool === 'emitter' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.emitter;
-    const em = engine.addEmitter(minX, minY, w, h, {
-      rate: cfg.rate,
-      temperature: cfg.temperature,
-      mass: cfg.mass || 1.0,
-      direction: cfg.direction,
-      maxParticles: cfg.maxParticles
-    });
-    app.selectedItems = [em];
-    updateElementsList();
-
-  // Sink (Absorber)
-  } else if (app.activeTool === 'sink' && w >= 20 && h >= 20) {
+    created = engine.addEmitter(minX, minY, w, h, cfg);
+  } else if (tool === 'sink' && isBox) {
     recordUndoState();
-    const cfg = toolConfigs.sink;
-    const sk = engine.addSink(minX, minY, w, h, {
-      absorptionEfficiency: cfg.absorptionEfficiency,
-      direction: cfg.direction,
-      maxParticles: cfg.maxParticles,
-      tempFilterMode: cfg.tempFilterMode,
-      filterTemperature: cfg.filterTemperature
-    });
-    app.selectedItems = [sk];
-    updateElementsList();
-
-  // Sensor Zone
-  } else if (app.activeTool === 'sensor' && w >= 20 && h >= 20) {
+    created = engine.addSink(minX, minY, w, h, cfg);
+  } else if (tool === 'sensor' && isBox) {
     recordUndoState();
     const letter = String.fromCharCode(65 + engine.sensors.length);
-    const sZone = engine.addSensor({
-      label: `${toolConfigs.sensor.label} ${letter}`,
-      x: minX, y: minY, width: w, height: h,
-      color: toolConfigs.sensor.color || '#38bdf8'
-    });
+    created = engine.addSensor({ x: minX, y: minY, width: w, height: h, color: cfg.color, label: `${cfg.label} ${letter}` });
     const snap = findPistonSnap(minX, minY, w, h);
-    if (snap) {
-      sZone.bindToPiston(snap.piston, snap.edge, true);
-    }
-    app.selectedItems = [sZone];
+    if (snap) created.bindToPiston(snap.piston, snap.edge, true);
+  }
+
+  if (created) {
+    app.selectedItems = Array.isArray(created) ? created : [created];
     updateElementsList();
   }
 }

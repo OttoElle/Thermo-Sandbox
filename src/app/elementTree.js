@@ -16,8 +16,7 @@ import { elementCountBadge, elementsListContainer } from './dom.js';
 import { engine } from './core.js';
 import { app } from './state.js';
 import { recordUndoState } from './history.js';
-import { attachDualInput, makeDualInput } from './fields.js';
-import { renderItemAccordionBody } from './inspector.js';
+import { renderInspector } from './inspector.js';
 import { deleteSelectedItems, getAllGroupItems } from './selection.js';
 
 // ============================================================================
@@ -73,52 +72,13 @@ export function updateElementCardLabel(itemIndex, newLabel) {
   if (labelSpan) labelSpan.textContent = newLabel;
 }
 
-function renderGroupAccordionBody(group, bodyContainer) {
-  if (!bodyContainer || !group) return;
-  const isAllWalls = group.items.every(i => i instanceof Wall);
-  const idPrefix = `grp_${group.id}_`;
-
-  if (isAllWalls) {
-    const firstWall = group.items[0];
-    bodyContainer.innerHTML = `
-      <div class="field-row" style="margin-bottom:6px;">
-        <span style="font-size:10px; color:#38bdf8; font-weight:600;">Batch Group Settings (${group.items.length} Segments)</span>
-      </div>
-      ${makeDualInput('Conductivity κ', `${idPrefix}wKappa`, 0, 1, 0.05, firstWall.conductivity)}
-      ${makeDualInput('Thickness', `${idPrefix}wThick`, 2, 16, 1, firstWall.thickness, 'px')}
-      <div class="field-row" style="margin-top:6px;">
-        <button id="${idPrefix}ungroupBtn" class="sub-toggle-btn" style="width:100%; justify-content:center; padding:5px 0;">Ungroup Segments</button>
-      </div>
-    `;
-    attachDualInput(`${idPrefix}wKappa`, val => {
-      group.items.forEach(w => { w.conductivity = val; });
-    });
-    attachDualInput(`${idPrefix}wThick`, val => {
-      group.items.forEach(w => { w.thickness = val; });
-    });
-    document.getElementById(`${idPrefix}ungroupBtn`)?.addEventListener('click', () => {
-      recordUndoState();
-      group.items.forEach(w => { delete w.groupId; });
-      updateElementsList();
-    });
-  } else {
-    bodyContainer.innerHTML = `
-      <div class="field-row" style="margin-bottom:6px;">
-        <span style="font-size:10px; color:#38bdf8; font-weight:600;">Group Settings (${group.items.length} Elements)</span>
-      </div>
-      <div class="field-row" style="margin-top:6px;">
-        <button id="${idPrefix}ungroupBtn" class="sub-toggle-btn" style="width:100%; justify-content:center; padding:5px 0;">Ungroup Elements</button>
-      </div>
-    `;
-    document.getElementById(`${idPrefix}ungroupBtn`)?.addEventListener('click', () => {
-      recordUndoState();
-      group.items.forEach(i => { delete i.groupId; });
-      updateElementsList();
-    });
-  }
+// Re-renders the element tree and the properties panel.
+export function updateElementsList() {
+  renderElementTree();
+  renderInspector();
 }
 
-export function updateElementsList() {
+export function renderElementTree() {
   if (!elementsListContainer) return;
   const elements = engine.elements || [];
 
@@ -171,7 +131,6 @@ export function updateElementsList() {
               </button>
             </div>
           </div>
-          ${isSel ? `<div class="element-accordion-body" id="accBody_${index}" draggable="false"></div>` : ''}
         </div>
       `;
     } else {
@@ -227,7 +186,6 @@ export function updateElementsList() {
               </button>
             </div>
           </div>
-          ${isGroupSelected ? `<div class="element-accordion-body" id="groupAccBody_${groupId}" draggable="false"></div>` : ''}
           ${childrenHtml}
         </div>
       `;
@@ -235,29 +193,6 @@ export function updateElementsList() {
   });
 
   elementsListContainer.innerHTML = html;
-
-  // Render accordion bodies
-  treeEntries.forEach(entry => {
-    if (entry.type === 'single') {
-      const { item, index } = entry;
-      if (app.selectedItems.includes(item)) {
-        const body = document.getElementById(`accBody_${index}`);
-        if (body) {
-          renderItemAccordionBody(item, body, index);
-        }
-      }
-    } else {
-      const { groupId, items } = entry;
-      const groupItemsList = items.map(x => x.item);
-      const isGroupSelected = groupItemsList.length > 0 && groupItemsList.every(i => app.selectedItems.includes(i));
-      if (isGroupSelected) {
-        const body = document.getElementById(`groupAccBody_${groupId}`);
-        if (body) {
-          renderGroupAccordionBody({ id: groupId, items: groupItemsList }, body);
-        }
-      }
-    }
-  });
 
   // Feature Tree toggle arrow click
   elementsListContainer.querySelectorAll('.tree-toggle-arrow').forEach(btn => {

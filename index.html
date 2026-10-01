@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="css/modals.css">
   <link rel="stylesheet" href="css/splash.css">
   <link rel="stylesheet" href="css/sequencer.css">
+  <link rel="stylesheet" href="css/properties.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -481,6 +482,15 @@
           <p class="empty-cell">No elements on canvas</p>
         </div>
       </div>
+      <!-- Properties of the current selection (inspector.js) -->
+      <section class="properties-panel" id="propertiesPanel" hidden>
+        <div class="properties-head">
+          <span class="properties-tag" id="propertiesTag"></span>
+          <span class="properties-title" id="propertiesTitle"></span>
+        </div>
+        <div class="properties-info" id="propertiesInfo" hidden></div>
+        <div class="properties-body" id="propertiesBody"></div>
+      </section>
     </aside>
 
     <!-- Floating Tool Options Dialog (Onshape CAD Style) -->
