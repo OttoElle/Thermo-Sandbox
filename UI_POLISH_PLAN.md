@@ -23,7 +23,7 @@ Querschnitt für alle Phasen: dieselben Design-Tokens (`css/variables.css`), ein
 - [ ] **Charts** zeigen nur ein rollendes Fenster (`historyTemp.shift()` in `Engine.js`/`SensorZone.js`), der Verlauf geht verloren.
 - [x] **Duplizieren** (Ctrl+D) verliert die Gruppe (dupliziertes Rechteck = lose Wände), kopiert keine Kolben, Texte und Spawner und nur einen Teil der Eigenschaften. Besser generisch über `toJSON()`/`fromJSON()` (Phase 2/3).
 - [ ] Undo von „New Canvas“ stellt die Elemente wieder her, nicht aber den Projektnamen.
-- [ ] **Element-Popup** (`popup.js`) ist toter Code: `openPopup` wird nirgends aufgerufen, und seine Löschen-Buttons würden das Element nicht aus `engine.elements` entfernen. In Phase 3 entfernen oder durch das Schema ersetzen.
+- [x] **Element-Popup** (`popup.js`) ist toter Code: `openPopup` wird nirgends aufgerufen, und seine Löschen-Buttons würden das Element nicht aus `engine.elements` entfernen. In Phase 3 entfernen oder durch das Schema ersetzen.
 - [ ] Ohne WebGPU werden gar keine Partikel gezeichnet (es gibt nur das Fehler-Overlay). Das ist so gewollt, aber im Hinterkopf behalten.
 - [ ] Tippfehler/Begriffe: „Ressavoir“ (Thermal Reservoir), „Sink“ im Thermal-Ribbon vs. „Absorber“ bei den Partikeln (zwei verschiedene Dinge heißen fast gleich).
 
@@ -68,18 +68,18 @@ Querschnitt für alle Phasen: dieselben Design-Tokens (`css/variables.css`), ein
 - [x] **Duplizieren generisch** über `Engine.cloneElement()`/`addElement()`: Gruppen bleiben Gruppen, Kolben, Texte und Spawner (mit Partikeln) werden mitkopiert, und Sensoren binden sich an den kopierten Kolben.
 - [x] Nebenbei: Die Z-Reihenfolge geht bei Undo, Speichern und Laden nicht mehr verloren (`elementOrder` im Zustand).
 
-## Phase 3 — Einheitliche Eigenschaften & linke Sidebar
+## Phase 3 — Einheitliche Eigenschaften & linke Sidebar ✅ (2026-10-01, PROGRESS AH)
 
 Heute gibt es vier getrennte Formular-Implementierungen: `toolPanel.js` (Tool-Dialog), `inspector.js` (Sidebar), `popup.js` (Canvas-Popup) und `SequencerActionFields.js` (Sequencer). Deshalb sind sie inkonsistent.
 
-- [ ] **Ein Eigenschafts-Schema pro Elementtyp** (neues Modul, z. B. `src/app/elementSchema.js`): Key, Label, Einheit, Min/Max/Step, Default (aus `TOOL_CATALOG.md`), Widget-Typ, „sequenzierbar ja/nein“, Gruppe (Geometrie/Thermik/Antrieb …).
-- [ ] Alle vier Oberflächen rendern aus diesem Schema, mit einem gemeinsamen Satz Feld-Controls (die `SequencerFieldControls` sind die ausgereiftesten und werden die Basis). `SequencerCatalogDefaults` wird daraus abgeleitet statt parallel gepflegt. Das löst auch den offenen Punkt „toolPanel/inspector datengetrieben zerlegen“ aus PROGRESS.
-- [ ] **Element-Baum**:
+- [x] **Ein Eigenschafts-Schema pro Elementtyp** (neues Modul, z. B. `src/app/elementSchema.js`): Key, Label, Einheit, Min/Max/Step, Default (aus `TOOL_CATALOG.md`), Widget-Typ, „sequenzierbar ja/nein“, Gruppe (Geometrie/Thermik/Antrieb …).
+- [x] Alle vier Oberflächen rendern aus diesem Schema, mit einem gemeinsamen Satz Feld-Controls (die `SequencerFieldControls` sind die ausgereiftesten und werden die Basis). `SequencerCatalogDefaults` wird daraus abgeleitet statt parallel gepflegt. Das löst auch den offenen Punkt „toolPanel/inspector datengetrieben zerlegen“ aus PROGRESS.
+- [x] **Element-Baum** (ohne Sichtbarkeit/Sperren; das bräuchte eigene Physik-Semantik):
   - Hierarchie: Gruppe/Form → aufklappbar → Einzelteile (Segmente); „Ungroup/Break Shape“ direkt am Eintrag.
   - Sinnvolle Namen („Rectangle 1“, „Cylinder wall“), umbenennbar per Doppelklick; die Namen tauchen dann auch im Sequencer auf.
   - Typ-Icons wie im Ribbon statt Text-Tags, Sichtbarkeit/Sperren (Auge/Schloss) pro Eintrag, Filter/Suche.
   - Auswahl synchron Canvas ↔ Baum, Hover im Baum hebt das Element im Canvas hervor.
-- [ ] Inspector unter dem Baum statt Accordion-im-Baum (**Entscheidung**; Empfehlung: Baum oben, Eigenschaften der Auswahl unten, CAD-typisch).
+- [x] Inspector unter dem Baum statt Accordion-im-Baum (**Entscheidung**; Empfehlung: Baum oben, Eigenschaften der Auswahl unten, CAD-typisch).
 
 ## Phase 4 — Auswertung / Charts (rechte Sidebar)
 

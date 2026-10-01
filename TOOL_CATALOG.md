@@ -20,11 +20,14 @@
 
 ## 1. Übersicht & Globale UI-Konventionen
 
-Jedes Werkzeug besitzt zwei Repräsentationen in der Benutzeroberfläche:
-1. **Werkzeug-Einstellungsmenü (Tool Options Panel):**  
-   Befindet sich in der linken Seitenleiste (`renderToolProperties()` in `src/app/toolPanel.js`) und ist aktiv, wenn das Werkzeug in der Ribbon-Leiste ausgewählt ist. Hier eingestellte Werte gelten als Vorlage für neu gezeichnete Elemente und synchronisieren sich automatisch mit selektierten Elementen desselben Typs.
-2. **Element-Akkordeon (Item Accordion):**  
-   Befindet sich in der linken Elements-Outline (`renderItemAccordionBody()` in `src/app/inspector.js`), wenn ein bereits auf dem Canvas platziertes Element selektiert wird.
+> **Exakte Bereiche, Schritte und Defaults stehen seit UI-Polish Phase 3 im Schema `src/model/elementSchema.js`.** Die Tabellen unten beschreiben Bedeutung und Aufbau; bei Abweichungen gilt das Schema.
+
+Alle Einstellungen werden aus demselben Schema gerendert (`src/app/propertyForm.js`) und sehen deshalb überall gleich aus:
+1. **Werkzeug-Dialog** (`renderToolProperties()` in `src/app/toolPanel.js`): Vorgaben für das nächste gezeichnete Element. Ändert keine bereits gezeichneten Elemente.
+2. **Eigenschaften-Panel** (`src/app/inspector.js`, unter dem Element-Baum): Eigenschaften der Auswahl. Bei mehreren Elementen gleichen Typs (z. B. alle Segmente eines Rechtecks) wirkt eine Änderung auf alle. Dazu Geometrie (X/Y/B/H bzw. Länge/Winkel).
+3. **Sequencer-Aktion** (`SequencerActionFields.js`): dieselben Felder, soweit sie im Ablauf sinnvoll sind, plus Kolben-Befehle.
+
+Jedes Feld zeigt den Default als Markierung am Slider; geänderte Felder sind blau markiert und lassen sich mit ↺ zurücksetzen.
 
 ### UI-Komponenten
 - **Dual-Input (`makeDualInput`):** Gekoppeltes Paar aus Schieberegler (Slider) und Zahlenfeld (Number Input) mit Live-Einheitenanzeige.
@@ -153,7 +156,7 @@ Jedes Werkzeug besitzt zwei Repräsentationen in der Benutzeroberfläche:
 
 - **Ribbon-Gruppe:** `THERMAL` (Row 2)
 
-### 5.1 Thermisches Reservoir / Wärmesenke (`solid_res`)
+### 5.1 Wärmebad / Heat Bath (`solid_res`, früher „Sink“)
 - **Ribbon-ID:** `#toolReservoir` | **Tool-Key:** `'solid_res'`
 - **Funktion:** Unendliche Wärmekapazität ($C = \infty$), konstante Temperaturzone (z. B. Kühlkörper oder Brenner).
 - **Menü-Aufbau:**
@@ -188,7 +191,7 @@ Jedes Werkzeug besitzt zwei Repräsentationen in der Benutzeroberfläche:
 
 ---
 
-### 5.4 Fester Thermoblock / Ressavoir (`storage_block`)
+### 5.4 Thermische Masse / Thermal Mass (`storage_block`, früher „Ressavoir“)
 - **Ribbon-ID:** `#toolStorageBlock` | **Tool-Key:** `'storage_block'`
 - **Funktion:** Undurchlässiges festes Hindernis mit endlicher Wärmekapazität ($C = m \cdot c_p$), das sich durch Partikelstöße dynamisch erwärmt/abkühlt.
 - **Menü-Aufbau:**

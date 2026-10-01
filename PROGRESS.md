@@ -481,10 +481,32 @@
   - Zoom to Fit bei noch nicht ausgelegtem Canvas.
 - [x] **Tests**: Der UI-Smoke-Test prüft Ecken-Drag (Form bleibt geschlossen), Rahmen-Resize, Rotation, den Spawner auf einer Ecke und Klick-Klick mit getippter Größe.
 
+### AH. UI-Polish Phase 3: Eigenschafts-Schema, Eigenschaften-Panel, Element-Baum (Claude Code)
+- [x] **`src/model/elementSchema.js`**: eine Definition pro Elementtyp (Label, Einheit, Bereich, Default, bedingte Sichtbarkeit, Setter, Kontext Tool / Panel / Sequencer). Bereiche vereinheitlicht: Temperaturen in 10-K-Schritten, Raten bis 60/s.
+- [x] **`src/app/propertyForm.js`** rendert das Schema überall gleich: Slider + Zahl, Segment-Buttons, Richtungen, Schalter, Default-Markierung, Markierung für geänderte Felder, ↺-Reset.
+- [x] **Eigenschaften-Panel** unter dem Baum (ersetzt die Akkordeons):
+  - Mehrfachauswahl gleichen Typs wird gemeinsam bearbeitet (z. B. alle Segmente einer Form).
+  - Geometriefelder (X/Y/B/H bzw. Länge/Winkel), Live-Info, Kolben-Bindung von Sensoren, Aktionen.
+  - Änderungen sind per Undo rückgängig machbar (`recordUndoState(false)` beim Bearbeitungsbeginn, ohne das Panel neu zu bauen).
+- [x] **Tool-Dialog** aus demselben Schema. `toolConfigs` wird aus den Schema-Defaults abgeleitet. Der Dialog ändert nur die Vorgaben, nicht mehr die Auswahl. `createFromDrag` übergibt alle Tool-Werte.
+- [x] **Sequencer** (`SequencerActions.js`): Formular, Defaults und Ausführung kommen aus dem Schema; `normalizeAction` übersetzt alte gespeicherte Aktionen. Kolben: Befehl (TDC/BDC/Halten/Freigeben) plus Modus. Behobene Fehler, die schon vorher bestanden:
+  - Ventil-Aktionen wurden nie ausgeführt.
+  - Rückschlag-Richtung, PRV-Hysterese und 1-/2-Wege-Modus gingen auf falsche Schlüssel.
+  - Der Absorber-Filter `hot`/`cold` wurde ignoriert.
+  - Die Regenerator-Achse landete in `axis`.
+  - `SequencerFieldControls.js` und `SequencerCatalogDefaults.js` entfernt.
+- [x] **Element-Baum**:
+  - Formen und Gruppen aufklappbar, Icons aus dem Ribbon, Namen (Doppelklick zum Umbenennen, gespeichert als `elementNames`/`groupNames`), Live-Werte.
+  - Filter, Hover hebt das Element im Canvas hervor, Shift/Ctrl-Mehrfachauswahl, Ebenen per Drag & Drop.
+  - Namen erscheinen auch im Panel, am Auswahlrahmen und im Sequencer.
+- [x] **Begriffe**: „Heat Bath“ (konstantes T, vorher „Sink“), „Thermal Mass“ (endliches C, vorher „Ressavoir“).
+- [x] **Toter Code entfernt**: Element-Popup (`popup.js`, HTML, CSS).
+- [x] **Tests**: Der Sequencer-Test prüft das neue Formular und die Ausführung alter Aktionen. Der UI-Smoke-Test prüft Umbenennen im Baum sowie Bearbeiten und Undo im Panel.
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)
-- [ ] **UI-Polish Phase 3** (einheitliches Eigenschafts-Schema für Tool-Dialog, Sidebar, Sequencer; Element-Baum) laut `UI_POLISH_PLAN.md`.
+- [ ] **UI-Polish Phase 4** (Charts: kompletter Verlauf, vergrößerte Ansicht, Export) laut `UI_POLISH_PLAN.md`.
 - [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren.
 - [ ] **Weitere Performance**: Pair-Suche dominiert weiterhin (Kernel-Profil siehe Abschnitt AC); Telemetrie-/Upload-Overhead pro Frame (`getGPUWalls()` allokiert jedes Frame).
 - [ ] **Große App-Module weiter zerlegen**: `canvasInput.js` (~850 Zeilen, ein großer mousedown/mouseup-Handler pro Werkzeug), `toolPanel.js` und `inspector.js` (je ~650, pro Elementtyp duplizierte Formulare) könnten pro Elementtyp datengetrieben werden.
