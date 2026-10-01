@@ -1,3 +1,4 @@
+import { appendHistory, lastHistoryTime, resetHistory, HISTORY_INTERVAL } from './HistoryBuffer.js';
 import { Vector2 } from './Vector2.js';
 import { KB, idealGasPressure } from './Constants.js';
 
@@ -26,14 +27,8 @@ export class SensorZone {
     this.displayDriftSpeed = 0;
     this.driftAngle = 0;
 
-    // Continuous Time History for Line Charts
-    this.historyTime = [];
-    this.historyTemp = [];
-    this.historyPressure = [];
-    this.historyVolume = [];
-    this.historyCount = [];
-    this.historyKineticEnergy = [];
-    this.historyDrift = [];
+    // Continuous time history for the charts (see HistoryBuffer.js)
+    resetHistory(this);
 
     // Piston Binding for Dynamic Chamber Expansion / Compression
     if (options.pistonBinding) {
@@ -116,35 +111,17 @@ export class SensorZone {
       this.displayDriftSpeed = 0;
     }
 
-    if (this.historyTime.length === 0 || currentTime - this.historyTime[this.historyTime.length - 1] >= 0.045) {
-      this.historyTime.push(currentTime);
-      this.historyTemp.push(this.temperature);
-      this.historyPressure.push(this.pressure);
-      this.historyVolume.push(this.volume);
-      this.historyCount.push(this.particleCount);
-      this.historyKineticEnergy.push(this.kineticEnergy);
-      this.historyDrift.push(this.displayDriftSpeed);
-
-      if (this.historyTime.length > 600) {
-        this.historyTime.shift();
-        this.historyTemp.shift();
-        this.historyPressure.shift();
-        this.historyVolume.shift();
-        this.historyCount.shift();
-        this.historyKineticEnergy.shift();
-        this.historyDrift.shift();
-      }
+    const last = lastHistoryTime(this);
+    if (last === null || currentTime - last >= HISTORY_INTERVAL) {
+      appendHistory(this, {
+        t: currentTime, temp: this.temperature, pressure: this.pressure, volume: this.volume,
+        count: this.particleCount, kinetic: this.kineticEnergy, drift: this.displayDriftSpeed
+      });
     }
   }
 
   clearHistory() {
-    this.historyTime = [];
-    this.historyTemp = [];
-    this.historyPressure = [];
-    this.historyVolume = [];
-    this.historyCount = [];
-    this.historyKineticEnergy = [];
-    this.historyDrift = [];
+    resetHistory(this);
     this.driftVx = 0;
     this.driftVy = 0;
     this.driftSpeed = 0;

@@ -20,7 +20,8 @@ css_files_order = [
     'css/modals.css',
     'css/splash.css',
     'css/sequencer.css',
-    'css/properties.css'
+    'css/properties.css',
+    'css/charts.css'
 ]
 
 def build():

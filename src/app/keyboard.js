@@ -112,10 +112,10 @@ window.addEventListener('click', (e) => {
 tabTemp.addEventListener('click', () => {
   tabTemp.classList.add('active');
   tabPV.classList.remove('active');
-  tempChart.setMode('temp');
+  tempChart.setSpec({ metric: 'temp' });
 });
 tabPV.addEventListener('click', () => {
   tabPV.classList.add('active');
   tabTemp.classList.remove('active');
-  tempChart.setMode('pv');
+  tempChart.setSpec({ metric: 'pv' });
 });

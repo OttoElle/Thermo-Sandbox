@@ -503,10 +503,22 @@
 - [x] **Toter Code entfernt**: Element-Popup (`popup.js`, HTML, CSS).
 - [x] **Tests**: Der Sequencer-Test prüft das neue Formular und die Ausführung alter Aktionen. Der UI-Smoke-Test prüft Umbenennen im Baum sowie Bearbeiten und Undo im Panel.
 
+### AI. UI-Polish Phase 4: Charts (Claude Code)
+- [x] **`HistoryBuffer.js`**: kompletter Verlauf statt rollendem 600-Sample-Fenster (~27 s). Die letzten 900 Samples bleiben in voller Auflösung; ältere werden in gleichmäßige, sich verdoppelnde Zeit-Buckets zusammengefasst. Jedes Sample trägt `historyCycle`. Keine Aufzeichnung vor dem ersten Schritt: Vorher landete nach einem Reset ein Nullsample (T = 0, N = 0) im Verlauf und staucht die Achse.
+- [x] **`ChartView.js`**: eine Komponente für alle Charts:
+  - Zeitreihen, P-V/P-T/T-s und Histogramm.
+  - Achsen mit Einheiten, Legende, Hover-Tooltip, Min/Max-Dezimierung, HiDPI.
+  - P-V-Zyklen farblich abgestuft, mit Arbeit pro Zyklus (W = ∮P dV / PRESSURE_SCALE).
+  - Ersetzt `TempTimeChart.js`, `VelHistChart.js` und `ChamberChart.js`. `DashboardChart.js` bleibt als dünne Hülle für `window.DashboardChart`.
+- [x] **`chartViewer.js`**: großer Chart-Dialog mit Metrik/Quelle, Bereichen, Zoom/Pan, PNG/CSV. Vergrößern-Knöpfe an allen Sidebar-Charts.
+- [x] **Datenexport**: File → Export Data (CSV, Long-Format; JSON).
+- [x] **Farben**: Palette mit dem Dataviz-Validator geprüft (dunkle Fläche #12141a: Helligkeitsband, CVD ΔE ≥ 8,4, Kontrast ≥ 3:1). Neue Sensoren bekommen der Reihe nach eigene Farben statt alle Hellblau.
+- [x] **Tests**: Der UI-Smoke-Test öffnet den Dialog mit allen 10 Metriken, zoomt, wechselt den Bereich und fügt einen Custom Chart hinzu.
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)
-- [ ] **UI-Polish Phase 4** (Charts: kompletter Verlauf, vergrößerte Ansicht, Export) laut `UI_POLISH_PLAN.md`.
+- [ ] **UI-Polish Phase 5** (Sequencer an echten Kreisprozessen erproben) laut `UI_POLISH_PLAN.md`, inkl. Druck an der Kolbenfläche als Messgröße.
 - [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren.
 - [ ] **Weitere Performance**: Pair-Suche dominiert weiterhin (Kernel-Profil siehe Abschnitt AC); Telemetrie-/Upload-Overhead pro Frame (`getGPUWalls()` allokiert jedes Frame).
 - [ ] **Große App-Module weiter zerlegen**: `canvasInput.js` (~850 Zeilen, ein großer mousedown/mouseup-Handler pro Werkzeug), `toolPanel.js` und `inspector.js` (je ~650, pro Elementtyp duplizierte Formulare) könnten pro Elementtyp datengetrieben werden.

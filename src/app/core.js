@@ -1,9 +1,8 @@
 // Engine, renderer, charts and sequencer instances; canvas sizing and WebGPU start-up.
 import { Engine } from '../physics/Engine.js';
 import { Renderer } from '../render/Renderer.js';
-import { TempTimeChart } from '../analytics/TempTimeChart.js';
-import { VelHistChart } from '../analytics/VelHistChart.js';
-import { ChamberChart, DashboardChart } from '../analytics/ChamberChart.js';
+import { ChartView } from '../analytics/ChartView.js';
+import { DashboardChart } from '../analytics/DashboardChart.js';
 import { Presets } from '../presets/index.js';
 import { SequencerUI } from '../control/SequencerUI.js';
 import { ParticleGPUCompute } from '../physics/ParticleGPUCompute.js';
@@ -35,7 +34,6 @@ export const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;
 window.Presets = Presets;
-window.ChamberChart = ChamberChart;
 window.DashboardChart = DashboardChart;
 
 // Asynchronously initialize WebGPU & GPU Compute
@@ -56,8 +54,9 @@ if (gpuCanvas) {
   });
 }
 
-export const tempChart = new TempTimeChart(tempChartCanvas);
-export const velChart = new VelHistChart(velChartCanvas);
+// Sidebar charts: system history (all sensors, or the system without sensors) and velocity distribution
+export const tempChart = new ChartView(tempChartCanvas, { target: 'sensors', metric: 'temp' });
+export const velChart = new ChartView(velChartCanvas, { target: 'global', metric: 'hist' });
 export const sequencerUI = new SequencerUI(engine, renderer);
 window.sequencerUI = sequencerUI;
 

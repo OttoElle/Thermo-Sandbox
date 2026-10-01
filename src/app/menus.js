@@ -1,6 +1,8 @@
 // Menu bar (File/Edit/View/Simulation/Help), scene loading/saving and the Save As dialog.
 import { bgCanvas, btnPlayPause, btnSaveCancel, btnSaveClose, btnSaveDownload, btnStep, btnStepBack, btnStopReset, btnToggleColor, btnToggleGravity, btnToggleGrid, btnToggleSnap, btnToggleVectors, btnToolbarClear, btnToolbarReset, btnZoomIn, btnZoomOut, canvas, ctxDuplicate, fileImportInput, gpuCanvas, headerProjectTitle, infoModal, modelToggleBtns, playIcon, saveFilenamePreview, saveModal, saveProjectNameInput, selectGridSize, timeVal } from './dom.js';
 import { engine, renderer, sequencerUI } from './core.js';
+import { historyCSV } from '../analytics/chartData.js';
+import { HISTORY_KEYS } from '../physics/HistoryBuffer.js';
 import { app, pointer, resetPolygonDraft } from './state.js';
 import { clearHistoryBuffer, performRedo, performUndo, recordUndoState, redoStack, undoStack } from './history.js';
 import { renderToolProperties } from './toolPanel.js';
@@ -197,7 +199,7 @@ function getSaveState(name) {
   return state;
 }
 
-function downloadBlob(blob, fileName) {
+export function downloadBlob(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -206,7 +208,7 @@ function downloadBlob(blob, fileName) {
   URL.revokeObjectURL(url);
 }
 
-const safeFileName = (name) => name.replace(/[^a-zA-Z0-9_-]/g, '_');
+export const safeFileName = (name) => name.replace(/[^a-zA-Z0-9_-]/g, '_');
 
 export function saveProject(name = app.currentProjectName) {
   setProjectName(name);
@@ -243,6 +245,19 @@ onMenu('menuEntryWelcome', () => showSplashScreen({ isReturning: true }));
 onMenu('menuEntrySave', () => saveProject());
 onMenu('menuEntrySaveAs', openSaveModal);
 onMenu('menuEntryExportPNG', exportCanvasPNG);
+onMenu('menuEntryExportCSV', () => {
+  downloadBlob(new Blob([historyCSV(engine)], { type: 'text/csv' }), `${safeFileName(app.currentProjectName)}_data.csv`);
+});
+onMenu('menuEntryExportJSON', () => {
+  const pick = (h) => Object.fromEntries(HISTORY_KEYS.map(k => [k.replace('history', '').toLowerCase(), h[k] || []]));
+  const data = {
+    project: app.currentProjectName,
+    units: { time: 's', temp: 'K', pressure: 'Pa', volume: 'px²', count: 'particles', kineticenergy: 'J', drift: 'px/s' },
+    system: pick(engine),
+    sensors: engine.sensors.map(s => ({ name: s.label, id: s.id, ...pick(s) }))
+  };
+  downloadBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), `${safeFileName(app.currentProjectName)}_data.json`);
+});
 onMenu('menuEntryReset', revertToSaved);
 
 btnToolbarReset.addEventListener('click', revertToSaved);

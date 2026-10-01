@@ -81,13 +81,20 @@ Heute gibt es vier getrennte Formular-Implementierungen: `toolPanel.js` (Tool-Di
   - Auswahl synchron Canvas ↔ Baum, Hover im Baum hebt das Element im Canvas hervor.
 - [x] Inspector unter dem Baum statt Accordion-im-Baum (**Entscheidung**; Empfehlung: Baum oben, Eigenschaften der Auswahl unten, CAD-typisch).
 
-## Phase 4 — Auswertung / Charts (rechte Sidebar)
+## Phase 4 — Auswertung / Charts ✅ (2026-10-01, PROGRESS AI)
 
-- [ ] **Vollständiger Verlauf**: Zeitreihen nicht mehr per `shift()` verwerfen, sondern in einem wachsenden Puffer mit Dezimierung speichern (z. B. min/max-Buckets, damit auch Stunden Simulation in Speicher passen). Chart-Ansicht: „Follow“ (letzte N s) oder „All“, Zoom/Pan per Mausrad/Drag.
-- [ ] **Vergrößerte Ansicht**: Chart per Klick in ein großes Modal/Panel (Achsen mit Einheiten, Legende, Crosshair mit Werten).
-- [ ] **Export**: PNG pro Chart, CSV/JSON aller Zeitreihen (steht auch schon in PROGRESS „Next Steps“).
-- [ ] P-V-Diagramm: Zyklen farblich trennen, Fläche = Arbeit schraffieren, W_net pro Zyklus anzeigen (Anbindung an den Sequencer-Zykluszähler).
-- [ ] Chamber-Karten und Custom Charts optisch vereinheitlichen, gleiche Kennzahlen-Formatierung (`dataviz`-Regeln: Farben, Einheiten, Tausendertrennung).
+- [x] **Vollständiger Verlauf** (`src/physics/HistoryBuffer.js`): Nichts wird mehr verworfen. Die letzten ~40 s bleiben in voller Auflösung, ältere Samples liegen in gleichmäßigen Zeit-Buckets (1 h ≈ 3000 Samples). Jedes Sample trägt den Sequencer-Zyklus.
+- [x] **Einheitliche Chart-Komponente** (`src/analytics/ChartView.js`):
+  - Gilt für Systemverlauf, Kammerkarten, Custom Charts und den großen Dialog.
+  - Achsen mit „schönen“ Werten und Einheiten, Legende ab zwei Reihen, Fadenkreuz und Tooltip.
+  - Min/Max je Pixelspalte (Spitzen bleiben sichtbar), scharf auf HiDPI.
+  - Validierte Farbpalette; neue Sensoren bekommen der Reihe nach eigene Farben.
+- [x] **Vergrößerte Ansicht** (`src/app/chartViewer.js`): Metrik und Quelle wählbar, Bereich All / letzte 60 s / 10 s, Zoom per Mausrad, Pan per Ziehen, Doppelklick zeigt alles.
+- [x] **Export**:
+  - PNG und CSV pro Chart.
+  - File → Export Data als CSV (Long-Format) oder JSON mit allen Zeitreihen.
+- [x] **P-V-Diagramm**: Der laufende Zyklus ist kräftig, frühere sind blass. Arbeit pro Zyklus W = ∮P dV / 100 in denselben Einheiten wie E_kin (vorher Faktor 1e-4, also um ×100 daneben). Vorher war der P-V-Tab des Systemverlaufs nur ein Platzhalter.
+- [ ] Erkenntnis für Phase 5: Der Sensor misst den mittleren Gleichgewichtsdruck. Bei Kolbengeschwindigkeiten nahe der thermischen Geschwindigkeit fehlt deshalb die Stoßarbeit an der Kolbenfläche im P-V-Diagramm (gemessen: ΔE_kin ≈ +2,7 MJ pro Zyklus bei W_Sensor ≈ +2,7 MJ). Abhilfe: eine Kurve „Druck an der Kolbenfläche“ aus dem Kolbenimpuls.
 
 ## Phase 5 — Sequencer an echten Kreisprozessen erproben
 

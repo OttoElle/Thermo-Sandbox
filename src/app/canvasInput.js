@@ -17,6 +17,8 @@ import { app, pointer, resetPolygonDraft } from './state.js';
 import { recordUndoState } from './history.js';
 import { snapToGrid } from './fields.js';
 import { toolConfigs, wallOptions } from './toolPanel.js';
+import { defaultValues } from '../model/elementSchema.js';
+import { sensorColor } from '../analytics/chartData.js';
 import { updateElementsList } from './elementTree.js';
 import { closeAllMenus } from './menus.js';
 import { updateZoomText } from './playback.js';
@@ -658,7 +660,9 @@ export function createFromDrag(s, c) {
   } else if (tool === 'sensor' && isBox) {
     recordUndoState();
     const letter = String.fromCharCode(65 + engine.sensors.length);
-    created = engine.addSensor({ x: minX, y: minY, width: w, height: h, color: cfg.color, label: `${cfg.label} ${letter}` });
+    // Untouched default color: next color of the chart palette, so every sensor gets its own.
+    const color = cfg.color === defaultValues('sensor', 'tool').color ? sensorColor(engine.sensors.length) : cfg.color;
+    created = engine.addSensor({ x: minX, y: minY, width: w, height: h, color, label: `${cfg.label} ${letter}` });
     const snap = findPistonSnap(minX, minY, w, h);
     if (snap) created.bindToPiston(snap.piston, snap.edge, true);
   }

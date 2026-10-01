@@ -4763,6 +4763,143 @@ body.seq-picking-active #simCanvas {
   color: var(--text-dim);
 }
 
+
+/* --- css/charts.css --- */
+/* Thermo Sandbox - Charts: expand buttons and the large chart dialog (chartViewer.js) */
+
+.chart-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background-color: var(--bg-input);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.chart-expand-btn:hover {
+  color: var(--text-main);
+  border-color: var(--accent-blue);
+}
+
+.chart-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.custom-chart-actions,
+.chamber-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chart-card canvas,
+.custom-chart-canvas,
+.chamber-chart-canvas {
+  display: block;
+  border-radius: 6px;
+}
+
+/* Large chart dialog */
+.chart-viewer {
+  align-items: center;
+  justify-content: center;
+}
+
+.chart-viewer-card {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 92vw);
+  height: min(760px, 86vh);
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+  padding: 14px 16px 10px;
+  gap: 10px;
+}
+
+.chart-viewer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chart-viewer-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.chart-viewer-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chart-viewer-tools .prop-select {
+  width: auto;
+  min-width: 150px;
+}
+
+.chart-viewer-tools .prop-segmented {
+  width: auto;
+}
+
+.chart-viewer-tools .prop-seg:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.chart-viewer-tools .prop-seg.active:disabled {
+  opacity: 1;
+}
+
+.chart-viewer-tools .prop-action {
+  flex: 0 0 auto;
+}
+
+.chart-viewer-spacer {
+  flex: 1;
+}
+
+.chart-viewer-canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border-radius: 8px;
+  cursor: crosshair;
+}
+
+.chart-viewer-hint {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .chart-viewer-card {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+  }
+}
+
   </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -4868,6 +5005,8 @@ body.seq-picking-active #simCanvas {
                 <div class="menu-entry" id="menuEntrySave"><span>Save</span><span class="menu-shortcut">Ctrl+S</span></div>
                 <div class="menu-entry" id="menuEntrySaveAs"><span>Save As…</span><span class="menu-shortcut">Ctrl+Shift+S</span></div>
                 <div class="menu-entry" id="menuEntryExportPNG"><span>Export Image (PNG)</span></div>
+                <div class="menu-entry" id="menuEntryExportCSV"><span>Export Data (CSV)</span></div>
+                <div class="menu-entry" id="menuEntryExportJSON"><span>Export Data (JSON)</span></div>
                 <div class="menu-divider"></div>
                 <div class="menu-entry" id="menuEntryReset"><span>Revert to Saved</span></div>
               </div>
@@ -5280,7 +5419,8 @@ body.seq-picking-active #simCanvas {
       <!-- Chart 1: Global Velocity Distribution -->
       <div class="chart-card">
         <div class="chart-header">
-          <span class="chart-title">Velocity Distribution (Maxwell-Boltzmann)</span>
+          <span class="chart-title">Velocity Distribution</span>
+          <button class="chart-expand-btn" id="btnExpandVelChart" title="Open large chart"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
         </div>
         <canvas id="velChartCanvas" width="310" height="95"></canvas>
       </div>
@@ -5302,6 +5442,7 @@ body.seq-picking-active #simCanvas {
           <div class="chart-tabs">
             <button class="tab-btn active" id="tabTemp">T(t)</button>
             <button class="tab-btn" id="tabPV">P-V</button>
+            <button class="chart-expand-btn" id="btnExpandHistoryChart" title="Open large chart"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
           </div>
         </div>
         <canvas id="tempChartCanvas" width="310" height="105"></canvas>
@@ -5505,6 +5646,31 @@ body.seq-picking-active #simCanvas {
             <button id="btnChartConfirm" class="btn-pill btn-primary-action">Add to Dashboard</button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Large chart dialog (chartViewer.js) -->
+    <div id="chartViewer" class="modal-overlay chart-viewer" style="display: none;">
+      <div class="chart-viewer-card">
+        <div class="chart-viewer-head">
+          <span class="chart-viewer-title" id="chartViewerTitle">Chart</span>
+          <button id="chartViewerClose" class="modal-close-btn" title="Close (Esc)">&times;</button>
+        </div>
+        <div class="chart-viewer-tools">
+          <select id="chartViewerMetric" class="prop-select"></select>
+          <select id="chartViewerTarget" class="prop-select"></select>
+          <div class="prop-segmented" id="chartViewerRange">
+            <button type="button" class="prop-seg" data-range="all">All</button>
+            <button type="button" class="prop-seg" data-range="60">Last 60 s</button>
+            <button type="button" class="prop-seg" data-range="10">Last 10 s</button>
+            <button type="button" class="prop-seg" data-range="range" disabled>Zoomed</button>
+          </div>
+          <span class="chart-viewer-spacer"></span>
+          <button type="button" class="prop-action" id="chartViewerPNG">Export PNG</button>
+          <button type="button" class="prop-action" id="chartViewerCSV">Export CSV</button>
+        </div>
+        <canvas id="chartViewerCanvas" class="chart-viewer-canvas"></canvas>
+        <div class="chart-viewer-hint">Scroll to zoom the time axis · drag to pan · double-click to show the whole run</div>
       </div>
     </div>
 
@@ -6725,6 +6891,80 @@ class Reservoir {
 }
 
 
+// --- src/physics/HistoryBuffer.js ---
+// Time series of the global system and of sensor zones. Samples are kept for
+// the whole run: the most recent HISTORY_FULL_RES samples at full resolution,
+// older ones merged pairwise whenever the buffer exceeds HISTORY_MAX, so memory
+// stays bounded while the complete history remains plottable.
+
+const HISTORY_KEYS = [
+  'historyTime', 'historyTemp', 'historyPressure', 'historyVolume',
+  'historyCount', 'historyKineticEnergy', 'historyDrift', 'historyCycle'
+];
+
+const HISTORY_INTERVAL = 0.045; // s of simulation time between samples
+const HISTORY_FULL_RES = 900;           // ~40 s at full resolution
+const HISTORY_MAX = 4000;
+
+// Shared sample context: the engine sets the current sequencer cycle each
+// step so global and sensor samples carry the same cycle index (P-V loops).
+const historyClock = { cycle: 0 };
+
+function resetHistory(target) {
+  for (const k of HISTORY_KEYS) target[k] = [];
+  target._historyBucket = 0;
+}
+
+// Appends one sample { t, temp, pressure, volume, count, kinetic, drift }.
+function appendHistory(target, s) {
+  if (!target.historyCycle) target.historyCycle = [];
+  target.historyTime.push(s.t);
+  target.historyTemp.push(s.temp);
+  target.historyPressure.push(s.pressure);
+  target.historyVolume.push(s.volume);
+  target.historyCount.push(s.count);
+  target.historyKineticEnergy.push(s.kinetic);
+  target.historyDrift.push(s.drift);
+  target.historyCycle.push(historyClock.cycle);
+  if (target.historyTime.length > HISTORY_MAX) compactHistory(target);
+}
+
+// Re-samples everything but the most recent samples into uniform time buckets
+// (bucket width doubles as the run grows), so the older history keeps an even
+// resolution. Values are averaged; a bucket keeps its last cycle index.
+function compactHistory(target) {
+  const n = target.historyTime.length;
+  const old = n - HISTORY_FULL_RES;
+  const t = target.historyTime;
+  const t0 = t[0], span = t[old - 1] - t0;
+  let bucket = target._historyBucket || HISTORY_INTERVAL;
+  while (span / bucket > (HISTORY_MAX - HISTORY_FULL_RES) / 2) bucket *= 2;
+  target._historyBucket = bucket;
+
+  const out = Object.fromEntries(HISTORY_KEYS.map(k => [k, []]));
+  let i = 0;
+  while (i < old) {
+    const b = Math.floor((t[i] - t0) / bucket);
+    let j = i;
+    while (j < old && Math.floor((t[j] - t0) / bucket) === b) j++;
+    for (const k of HISTORY_KEYS) {
+      const a = target[k];
+      if (k === 'historyCycle') { out[k].push(a[j - 1]); continue; }
+      let sum = 0;
+      for (let m = i; m < j; m++) sum += a[m];
+      out[k].push(sum / (j - i));
+    }
+    i = j;
+  }
+  for (const k of HISTORY_KEYS) target[k] = out[k].concat(target[k].slice(old));
+}
+
+function lastHistoryTime(target) {
+  const t = target.historyTime;
+  return t && t.length > 0 ? t[t.length - 1] : null;
+}
+
+
 // --- src/physics/SensorZone.js ---
 
 class SensorZone {
@@ -6752,14 +6992,8 @@ class SensorZone {
     this.displayDriftSpeed = 0;
     this.driftAngle = 0;
 
-    // Continuous Time History for Line Charts
-    this.historyTime = [];
-    this.historyTemp = [];
-    this.historyPressure = [];
-    this.historyVolume = [];
-    this.historyCount = [];
-    this.historyKineticEnergy = [];
-    this.historyDrift = [];
+    // Continuous time history for the charts (see HistoryBuffer.js)
+    resetHistory(this);
 
     // Piston Binding for Dynamic Chamber Expansion / Compression
     if (options.pistonBinding) {
@@ -6842,35 +7076,17 @@ class SensorZone {
       this.displayDriftSpeed = 0;
     }
 
-    if (this.historyTime.length === 0 || currentTime - this.historyTime[this.historyTime.length - 1] >= 0.045) {
-      this.historyTime.push(currentTime);
-      this.historyTemp.push(this.temperature);
-      this.historyPressure.push(this.pressure);
-      this.historyVolume.push(this.volume);
-      this.historyCount.push(this.particleCount);
-      this.historyKineticEnergy.push(this.kineticEnergy);
-      this.historyDrift.push(this.displayDriftSpeed);
-
-      if (this.historyTime.length > 600) {
-        this.historyTime.shift();
-        this.historyTemp.shift();
-        this.historyPressure.shift();
-        this.historyVolume.shift();
-        this.historyCount.shift();
-        this.historyKineticEnergy.shift();
-        this.historyDrift.shift();
-      }
+    const last = lastHistoryTime(this);
+    if (last === null || currentTime - last >= HISTORY_INTERVAL) {
+      appendHistory(this, {
+        t: currentTime, temp: this.temperature, pressure: this.pressure, volume: this.volume,
+        count: this.particleCount, kinetic: this.kineticEnergy, drift: this.displayDriftSpeed
+      });
     }
   }
 
   clearHistory() {
-    this.historyTime = [];
-    this.historyTemp = [];
-    this.historyPressure = [];
-    this.historyVolume = [];
-    this.historyCount = [];
-    this.historyKineticEnergy = [];
-    this.historyDrift = [];
+    resetHistory(this);
     this.driftVx = 0;
     this.driftVy = 0;
     this.driftSpeed = 0;
@@ -8152,7 +8368,7 @@ const ELEMENT_TYPES = {
     label: 'Sensor', tag: 'SENSOR', tool: 'sensor', sequenceable: false,
     fields: [
       { key: 'label', label: 'Name', kind: 'text', def: 'Chamber', set: (it, v) => { it.label = v.trim() || 'Chamber'; } },
-      { key: 'color', label: 'Color', kind: 'color', def: '#38bdf8' }
+      { key: 'color', label: 'Color', kind: 'color', def: '#3987e5' }
     ],
     info: it => (it.displayDriftSpeed > 0
       ? `Drift ${it.displayDriftSpeed.toFixed(1)} px/s (${Math.round(it.driftAngle * 180 / Math.PI)}°)`
@@ -10758,13 +10974,7 @@ class Engine {
     };
 
     // System Telemetry History
-    this.historyTime = [];
-    this.historyTemp = [];
-    this.historyPressure = [];
-    this.historyVolume = [];
-    this.historyCount = [];
-    this.historyKineticEnergy = [];
-    this.historyDrift = [];
+    resetHistory(this);
     this.latestSpeedSamples = [];
   }
 
@@ -10792,13 +11002,7 @@ class Engine {
     this.syncWallsToGPU();
     this.syncSinksToGPU();
     this.totalTime = 0;
-    this.historyTime = [];
-    this.historyTemp = [];
-    this.historyPressure = [];
-    this.historyVolume = [];
-    this.historyCount = [];
-    this.historyKineticEnergy = [];
-    this.historyDrift = [];
+    resetHistory(this);
     this.latestSpeedSamples = [];
     if (this.sequencer) {
       this.sequencer.reset();
@@ -11320,6 +11524,7 @@ class Engine {
     if (this.sequencer && this.sequencer.isEnabled) {
       this.sequencer.step(effectiveDt, this);
     }
+    historyClock.cycle = (this.sequencer && this.sequencer.isEnabled) ? this.sequencer.currentCycleCount : 0;
 
     // 1. Particle Emitters & Regulators & Throttle Valves (Active in both GPU and CPU modes)
     const gpuMode = this.isGPUSimulating();
@@ -12072,26 +12277,14 @@ class Engine {
   _recordHistory(count, temperature, kineticEnergy, drift) {
     this.stats.volume = this.width * this.height;
     this.stats.pressure = idealGasPressure(count, this.stats.volume, temperature);
-    if (!this.historyTime) return;
-    const last = this.historyTime.length > 0 ? this.historyTime[this.historyTime.length - 1] : null;
-    if (last !== null && this.totalTime - last < 0.045) return;
-    this.historyTime.push(this.totalTime);
-    this.historyTemp.push(temperature);
-    this.historyPressure.push(this.stats.pressure);
-    this.historyVolume.push(this.stats.volume);
-    this.historyCount.push(count);
-    this.historyKineticEnergy.push(kineticEnergy);
-    this.historyDrift.push(drift);
-
-    if (this.historyTime.length > 600) {
-      this.historyTime.shift();
-      this.historyTemp.shift();
-      this.historyPressure.shift();
-      this.historyVolume.shift();
-      this.historyCount.shift();
-      this.historyKineticEnergy.shift();
-      this.historyDrift.shift();
-    }
+    // Nothing to record before the first step (after a reset the GPU stats are still empty).
+    if (!this.historyTime || this.totalTime <= 0) return;
+    const last = lastHistoryTime(this);
+    if (last !== null && this.totalTime - last < HISTORY_INTERVAL) return;
+    appendHistory(this, {
+      t: this.totalTime, temp: temperature, pressure: this.stats.pressure, volume: this.stats.volume,
+      count, kinetic: kineticEnergy, drift
+    });
   }
 
   exportState(profileName = 'Standardprofil') {
@@ -14674,662 +14867,687 @@ class Renderer {
 }
 
 
-// --- src/analytics/TempTimeChart.js ---
-class TempTimeChart {
-  constructor(canvas) {
+// --- src/analytics/chartData.js ---
+// Series for the charts: which history array a metric reads, its label/unit,
+// and the series of a target ('global', a sensor zone, or 'sensors' = every
+// sensor zone, falling back to the global system when there is none).
+
+// Categorical series colors for the dark chart surface, in fixed order
+// (validated: lightness band, CVD separation >= 8.4, contrast >= 3:1 on #12141a).
+const CHART_PALETTE = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
+
+// Default color of the n-th sensor zone (color follows the entity).
+function sensorColor(index) {
+  return CHART_PALETTE[index % CHART_PALETTE.length];
+}
+
+const TIME_METRICS = {
+  temp: { label: 'Temperature', symbol: 'T', unit: 'K', key: 'historyTemp', color: CHART_PALETTE[0] },
+  pressure: { label: 'Pressure', symbol: 'P', unit: 'Pa', key: 'historyPressure', color: CHART_PALETTE[1] },
+  volume: { label: 'Volume', symbol: 'V', unit: 'px²', key: 'historyVolume', color: CHART_PALETTE[2] },
+  count: { label: 'Particles', symbol: 'N', unit: '', key: 'historyCount', color: CHART_PALETTE[6] },
+  kinetic: { label: 'Kinetic Energy', symbol: 'E_kin', unit: 'J', key: 'historyKineticEnergy', color: CHART_PALETTE[4] },
+  drift: { label: 'Drift Speed', symbol: '|v_drift|', unit: 'px/s', key: 'historyDrift', color: CHART_PALETTE[3] }
+};
+
+// State diagrams: x / y metric; 'entropy' is s = ln T + ln(V/N) per particle (2D ideal gas, in k_B).
+const XY_METRICS = {
+  pv: { label: 'P-V Diagram', x: 'volume', y: 'pressure' },
+  pt: { label: 'P-T Diagram', x: 'temp', y: 'pressure' },
+  ts: { label: 'T-s Diagram', x: 'entropy', y: 'temp' }
+};
+
+const AXIS = {
+  ...TIME_METRICS,
+  entropy: { label: 'Entropy', symbol: 's', unit: 'k_B' },
+  time: { label: 'Time', symbol: 't', unit: 's' },
+  speed: { label: 'Speed', symbol: 'v', unit: 'px/s' }
+};
+
+function metricKind(metric) {
+  if (metric === 'hist') return 'hist';
+  return XY_METRICS[metric] ? 'xy' : 'time';
+}
+
+function metricTitle(metric) {
+  if (metric === 'hist') return 'Velocity Distribution';
+  if (XY_METRICS[metric]) return XY_METRICS[metric].label;
+  const m = TIME_METRICS[metric];
+  return m ? `${m.label} ${m.symbol}(t)` : metric;
+}
+
+function targetsOf(engine, target) {
+  if (target === 'sensors') return engine.sensors.length > 0 ? engine.sensors : ['global'];
+  if (target === 'global' || !target) return ['global'];
+  return engine.sensors.includes(target) ? [target] : [];
+}
+
+function sourceName(src) {
+  return src === 'global' ? 'System' : (src.label || 'Sensor');
+}
+
+function sourceColor(src, metric) {
+  return src === 'global' ? (TIME_METRICS[metric]?.color || CHART_PALETTE[0]) : (src.color || CHART_PALETTE[0]);
+}
+
+function seriesArray(src, engine, metric) {
+  const h = src === 'global' ? engine : src;
+  if (metric === 'entropy') {
+    const T = h.historyTemp || [], V = h.historyVolume || [], N = h.historyCount || [];
+    return T.map((t, i) => Math.log(Math.max(1e-6, t)) + Math.log(Math.max(1e-6, (V[i] || 1) / Math.max(1, N[i] || 1))));
+  }
+  return h[TIME_METRICS[metric].key] || [];
+}
+
+// Time series: [{ name, color, t, y, cycle }]
+function timeSeries(engine, target, metric) {
+  return targetsOf(engine, target).map(src => {
+    const h = src === 'global' ? engine : src;
+    return { name: sourceName(src), color: sourceColor(src, metric), t: h.historyTime || [], y: seriesArray(src, engine, metric), cycle: h.historyCycle || [] };
+  });
+}
+
+// State diagram series: [{ name, color, t, x, y, cycle }]
+function xySeries(engine, target, metric) {
+  const def = XY_METRICS[metric];
+  // The whole world has constant volume: a global P-V or T-s diagram is degenerate.
+  const usable = targetsOf(engine, target).filter(src => src !== 'global' || def.x !== 'volume');
+  return usable.map(src => {
+    const h = src === 'global' ? engine : src;
+    return {
+      name: sourceName(src), color: sourceColor(src, def.y),
+      t: h.historyTime || [], x: seriesArray(src, engine, def.x), y: seriesArray(src, engine, def.y), cycle: h.historyCycle || []
+    };
+  });
+}
+
+// Speed samples for the velocity histogram.
+function speedSamples(engine, target) {
+  const src = targetsOf(engine, target)[0];
+  if (src === 'global' || !src) {
+    if (engine.latestSpeedSamples?.length) return engine.latestSpeedSamples;
+    return (engine.particles || []).slice(0, 1000).map(p => p.getSpeed());
+  }
+  return src.speedSamples || [];
+}
+
+// Work done by the gas, W = ∮P dV / PRESSURE_SCALE (same energy units as E_kin),
+// per sequencer cycle. Returns [{ cycle, work, complete }].
+function cycleWork(series) {
+  const out = [];
+  let cur = null;
+  for (let i = 1; i < series.x.length; i++) {
+    const c = series.cycle[i] || 0;
+    if (!cur || cur.cycle !== c) {
+      if (cur) cur.complete = true;
+      cur = { cycle: c, work: 0, complete: false };
+      out.push(cur);
+    }
+    cur.work += 0.5 * (series.y[i] + series.y[i - 1]) * (series.x[i] - series.x[i - 1]) / PRESSURE_SCALE;
+  }
+  return out;
+}
+
+function formatValue(v, unit = '') {
+  if (!Number.isFinite(v)) return '–';
+  const a = Math.abs(v);
+  let s;
+  if (a >= 1e6) s = `${(v / 1e6).toFixed(2)}M`;
+  else if (a >= 1e4) s = `${(v / 1e3).toFixed(1)}k`;
+  else if (a >= 100) s = `${Math.round(v)}`;
+  else if (a >= 10) s = v.toFixed(1);
+  else s = v.toFixed(2);
+  return unit ? `${s} ${unit}` : s;
+}
+
+// Long-format CSV of every recorded series (one row per sample and source).
+function historyCSV(engine) {
+  const rows = ['source,time_s,temperature_K,pressure_Pa,volume_px2,particles,kinetic_energy_J,drift_px_s,cycle'];
+  const add = (name, h) => {
+    const n = (h.historyTime || []).length;
+    for (let i = 0; i < n; i++) {
+      rows.push([
+        `"${name.replace(/"/g, '""')}"`, h.historyTime[i].toFixed(4), h.historyTemp[i], h.historyPressure[i],
+        h.historyVolume[i], h.historyCount[i], h.historyKineticEnergy[i], h.historyDrift[i], (h.historyCycle || [])[i] ?? 0
+      ].join(','));
+    }
+  };
+  add('System', engine);
+  engine.sensors.forEach(s => add(s.label || 'Sensor', s));
+  return rows.join('\n');
+}
+
+
+// --- src/analytics/ChartView.js ---
+// One chart: time series, state diagram (P-V, P-T, T-s) or velocity histogram
+// of a target ('global', a sensor zone, or 'sensors'). Draws crisp on HiDPI,
+// with nice-number axes and units, a legend from two series on, a crosshair +
+// tooltip on hover, and P-V loops coloured per sequencer cycle (current cycle
+// bright, earlier ones faded) with the work per cycle.
+
+const THEME = {
+  surface: '#12141a', grid: '#1f232c', axis: '#2d3342',
+  text: '#9ca3af', textDim: '#64748b', textMain: '#e5e7eb', tooltip: 'rgba(12, 14, 19, 0.96)'
+};
+const FONT = "'JetBrains Mono', monospace";
+
+function niceStep(range, count) {
+  const raw = range / Math.max(1, count);
+  const mag = 10 ** Math.floor(Math.log10(raw || 1));
+  const n = raw / mag;
+  return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
+}
+
+function niceTicks(min, max, count) {
+  const step = niceStep(max - min, count);
+  const out = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-6; v += step) out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  return out;
+}
+
+// First index with arr[i] >= v (arr ascending).
+function lowerBound(arr, v) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] < v) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function paddedRange(min, max) {
+  if (!Number.isFinite(min)) return [0, 1];
+  if (max - min < 1e-9) {
+    const d = Math.abs(min) * 0.05 || 1;
+    return [min - d, max + d];
+  }
+  const pad = (max - min) * 0.06;
+  return [min - pad, max + pad];
+}
+
+const axisTitle = (key) => {
+  const a = AXIS[key];
+  return a ? `${a.symbol}${a.unit ? ` [${a.unit}]` : ''}` : key;
+};
+
+class ChartView {
+  constructor(canvas, spec = {}, { large = false } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.mode = 'temp'; // 'temp' or 'pv'
+    this.spec = { target: 'global', metric: 'temp', ...spec };
+    this.large = large;
+    this.view = { mode: 'all' }; // 'all' | { mode: 'last', span } | { mode: 'range', t0, t1 }
+    this.hover = null;
+    this.engine = null;
+    this.cssH = parseFloat(canvas.getAttribute('height')) || 100;
+    if (!large) {
+      canvas.style.width = '100%';
+      canvas.style.height = `${this.cssH}px`;
+    }
+    canvas.addEventListener('mousemove', (e) => {
+      const r = canvas.getBoundingClientRect();
+      this.hover = { x: e.clientX - r.left, y: e.clientY - r.top };
+      this.render(this.engine);
+    });
+    canvas.addEventListener('mouseleave', () => {
+      this.hover = null;
+      this.render(this.engine);
+    });
   }
 
-  setMode(mode) {
-    this.mode = mode;
+  setSpec(spec) {
+    this.spec = { ...this.spec, ...spec };
+    this.render(this.engine);
+  }
+
+  title() {
+    const t = this.spec.target;
+    const who = t === 'global' ? 'System' : t === 'sensors' ? 'Sensors' : (t?.label || 'Sensor');
+    return `${metricTitle(this.spec.metric)} · ${who}`;
+  }
+
+  _size() {
+    const c = this.canvas;
+    const w = c.clientWidth || parseFloat(c.getAttribute('width')) || 300;
+    const h = this.large ? (c.clientHeight || 400) : this.cssH;
+    const dpr = window.devicePixelRatio || 1;
+    const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+    if (c.width !== pw || c.height !== ph) {
+      c.width = pw;
+      c.height = ph;
+    }
+    return { w, h, dpr };
   }
 
   render(engine) {
+    if (!engine) return;
+    this.engine = engine;
+    if (this.canvas.isConnected && this.canvas.clientWidth === 0) return; // collapsed / hidden
+    const { w, h, dpr } = this._size();
     const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#12141a';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = THEME.surface;
     ctx.fillRect(0, 0, w, h);
+    const kind = metricKind(this.spec.metric);
+    if (kind === 'time') this._renderTime(ctx, w, h, engine);
+    else if (kind === 'xy') this._renderXY(ctx, w, h, engine);
+    else this._renderHist(ctx, w, h, engine);
+  }
 
-    if (this.mode === 'pv') {
-      ctx.fillStyle = '#64748b';
-      ctx.font = '11px Inter, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('P-V Diagram Active', w / 2, h / 2);
-      return;
-    }
+  // -------------------------------------------------------------------------
+  // Shared drawing helpers
+  // -------------------------------------------------------------------------
+  _layout(w, h, legend) {
+    const L = this.large ? 64 : 42;
+    const top = (legend ? (this.large ? 26 : 16) : 0) + (this.large ? 12 : 7);
+    const bottom = this.large ? 40 : 17;
+    return { x0: L, x1: w - (this.large ? 20 : 8), y0: top, y1: h - bottom };
+  }
 
-    const padL = 36;
-    const padR = 12;
-    const padT = 12;
-    const padB = 20;
-    const chartW = w - padL - padR;
-    const chartH = h - padT - padB;
+  _message(ctx, w, h, text) {
+    ctx.fillStyle = THEME.textDim;
+    ctx.font = `${this.large ? 13 : 10}px Inter, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, w / 2, h / 2);
+  }
 
-    // Grid lines
-    ctx.strokeStyle = '#242935';
+  _axes(ctx, plot, xr, yr, xKey, yKey, xFmt) {
+    const fs = this.large ? 11 : 9;
+    ctx.font = `${fs}px ${FONT}`;
     ctx.lineWidth = 1;
-    for (let y = padB; y <= h - padT; y += 22) {
-      ctx.beginPath();
-      ctx.moveTo(padL, h - y);
-      ctx.lineTo(w - padR, h - y);
-      ctx.stroke();
-    }
-
-    // Determine data source: Sensors if present, otherwise Global System Telemetry
-    const sensors = engine.sensors;
-    const hasSensorData = sensors.length > 0 && sensors.some(s => s.historyTemp && s.historyTemp.length >= 2);
-    const hasGlobalData = engine.historyTemp && engine.historyTemp.length >= 2;
-
-    if (!hasSensorData && !hasGlobalData) {
-      ctx.fillStyle = '#64748b';
-      ctx.font = '10px Inter, sans-serif';
+    const yTicks = niceTicks(yr[0], yr[1], this.large ? 6 : 3);
+    const sy = (v) => plot.y1 - (v - yr[0]) / (yr[1] - yr[0]) * (plot.y1 - plot.y0);
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    yTicks.forEach((v, i) => {
+      const y = Math.round(sy(v)) + 0.5;
+      ctx.strokeStyle = THEME.grid;
+      ctx.beginPath(); ctx.moveTo(plot.x0, y); ctx.lineTo(plot.x1, y); ctx.stroke();
+      ctx.fillStyle = THEME.text;
+      const unit = !this.large && i === yTicks.length - 1 ? AXIS[yKey]?.unit : '';
+      ctx.fillText(formatValue(v, unit), plot.x0 - 5, y);
+    });
+    const xTicks = niceTicks(xr[0], xr[1], this.large ? 8 : 4);
+    const sx = (v) => plot.x0 + (v - xr[0]) / (xr[1] - xr[0]) * (plot.x1 - plot.x0);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    xTicks.forEach(v => {
+      const x = sx(v);
+      if (x < plot.x0 - 1 || x > plot.x1 + 1) return;
+      if (this.large) {
+        ctx.strokeStyle = THEME.grid;
+        ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, plot.y0); ctx.lineTo(Math.round(x) + 0.5, plot.y1); ctx.stroke();
+      }
+      ctx.fillStyle = THEME.text;
+      ctx.fillText(xFmt(v), x, plot.y1 + 4);
+    });
+    ctx.strokeStyle = THEME.axis;
+    ctx.beginPath(); ctx.moveTo(plot.x0, plot.y1 + 0.5); ctx.lineTo(plot.x1, plot.y1 + 0.5); ctx.stroke();
+    if (this.large) {
+      ctx.fillStyle = THEME.textDim;
+      ctx.font = `11px Inter, sans-serif`;
       ctx.textAlign = 'center';
-      ctx.fillText('Waiting for telemetry...', w / 2, h / 2);
-      return;
+      ctx.fillText(axisTitle(xKey), (plot.x0 + plot.x1) / 2, plot.y1 + 22);
+      ctx.save();
+      ctx.translate(14, (plot.y0 + plot.y1) / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textBaseline = 'middle';
+      ctx.fillText(axisTitle(yKey), 0, 0);
+      ctx.restore();
     }
+    return { sx, sy };
+  }
 
-    // Dynamic scale computation
-    let minVal = Infinity;
-    let maxVal = -Infinity;
-    let minTime = Infinity;
-    let maxTime = -Infinity;
+  _legend(ctx, series, plot) {
+    if (series.length < 2) return;
+    ctx.font = `${this.large ? 12 : 9.5}px Inter, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    let x = plot.x0;
+    const y = this.large ? 12 : 7;
+    for (const s of series) {
+      ctx.fillStyle = s.color;
+      ctx.fillRect(x, y - 1.5, 12, 3);
+      ctx.fillStyle = THEME.text;
+      ctx.fillText(s.name, x + 16, y);
+      x += 16 + ctx.measureText(s.name).width + 14;
+    }
+  }
 
-    if (hasSensorData) {
-      sensors.forEach(s => {
-        if (!s.historyTemp || s.historyTemp.length === 0) return;
-        s.historyTemp.forEach(v => {
-          if (v < minVal) minVal = v;
-          if (v > maxVal) maxVal = v;
-        });
-        if (s.historyTime && s.historyTime.length > 0) {
-          if (s.historyTime[0] < minTime) minTime = s.historyTime[0];
-          if (s.historyTime[s.historyTime.length - 1] > maxTime) maxTime = s.historyTime[s.historyTime.length - 1];
-        }
+  _dot(ctx, x, y, color, r) {
+    ctx.beginPath();
+    ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+    ctx.fillStyle = THEME.surface;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  _tooltip(ctx, w, h, x, y, lines) {
+    const fs = this.large ? 12 : 10;
+    ctx.font = `${fs}px ${FONT}`;
+    const lh = fs + 5;
+    const width = Math.max(...lines.map(l => ctx.measureText(l.text).width + (l.color ? 14 : 0))) + 16;
+    const height = lines.length * lh + 10;
+    let bx = x + 12, by = Math.max(4, Math.min(h - height - 4, y - height / 2));
+    if (bx + width > w - 4) bx = x - width - 12;
+    ctx.fillStyle = THEME.tooltip;
+    ctx.strokeStyle = THEME.axis;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, width, height, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    lines.forEach((l, i) => {
+      const ly = by + 5 + lh * (i + 0.5);
+      let tx = bx + 8;
+      if (l.color) {
+        ctx.fillStyle = l.color;
+        ctx.fillRect(tx, ly - 4, 8, 8);
+        tx += 14;
+      }
+      ctx.fillStyle = i === 0 ? THEME.textDim : THEME.textMain;
+      ctx.fillText(l.text, tx, ly);
+    });
+  }
+
+  // Visible time window [t0, t1] for the current view.
+  _timeWindow(tMin, tMax) {
+    let t0 = tMin, t1 = tMax;
+    if (this.view.mode === 'last') t0 = Math.max(tMin, tMax - this.view.span);
+    else if (this.view.mode === 'range') { t0 = this.view.t0; t1 = this.view.t1; }
+    if (t1 - t0 < 1) t1 = t0 + 1;
+    return [t0, t1];
+  }
+
+  _dataExtent(series) {
+    let tMin = Infinity, tMax = -Infinity;
+    for (const s of series) {
+      if (s.t.length === 0) continue;
+      tMin = Math.min(tMin, s.t[0]);
+      tMax = Math.max(tMax, s.t[s.t.length - 1]);
+    }
+    return Number.isFinite(tMin) ? [tMin, tMax] : null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Time series
+  // -------------------------------------------------------------------------
+  _renderTime(ctx, w, h, engine) {
+    const metric = TIME_METRICS[this.spec.metric];
+    const series = timeSeries(engine, this.spec.target, this.spec.metric).filter(s => s.t.length > 0);
+    const extent = this._dataExtent(series);
+    if (!extent || series.every(s => s.t.length < 2)) return this._message(ctx, w, h, 'Start the simulation to record data');
+    const [t0, t1] = this._timeWindow(extent[0], extent[1]);
+
+    let yMin = Infinity, yMax = -Infinity;
+    const ranges = series.map(s => {
+      const a = Math.max(0, lowerBound(s.t, t0) - 1), b = Math.min(s.t.length, lowerBound(s.t, t1) + 1);
+      for (let i = a; i < b; i++) { if (s.y[i] < yMin) yMin = s.y[i]; if (s.y[i] > yMax) yMax = s.y[i]; }
+      return [a, b];
+    });
+    const plot = this._layout(w, h, series.length > 1);
+    this.lastWindow = [t0, t1];
+    this.lastPlot = plot;
+    const yr = paddedRange(yMin, yMax);
+    const { sx, sy } = this._axes(ctx, plot, [t0, t1], yr, 'time', this.spec.metric, v => `${formatValue(v)} s`);
+    this._legend(ctx, series, plot);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.x0, plot.y0 - 2, plot.x1 - plot.x0, plot.y1 - plot.y0 + 4);
+    ctx.clip();
+    ctx.lineWidth = this.large ? 2 : 1.6;
+    ctx.lineJoin = 'round';
+    series.forEach((s, k) => {
+      const [a, b] = ranges[k];
+      ctx.strokeStyle = s.color;
+      ctx.beginPath();
+      // Min/max per pixel column keeps peaks when there are more points than pixels.
+      let col = null, cMin = 0, cMax = 0, started = false;
+      const flush = () => {
+        if (col === null) return;
+        if (!started) { ctx.moveTo(col, sy(cMin)); started = true; }
+        ctx.lineTo(col, sy(cMin));
+        if (cMax !== cMin) ctx.lineTo(col, sy(cMax));
+      };
+      for (let i = a; i < b; i++) {
+        const x = Math.round(sx(s.t[i]));
+        if (x !== col) { flush(); col = x; cMin = cMax = s.y[i]; }
+        else { cMin = Math.min(cMin, s.y[i]); cMax = Math.max(cMax, s.y[i]); }
+      }
+      flush();
+      ctx.stroke();
+    });
+    ctx.restore();
+
+    // Current value marker at the end of each series (when it's in view)
+    series.forEach(s => {
+      const i = s.t.length - 1;
+      if (s.t[i] >= t0 && s.t[i] <= t1) this._dot(ctx, sx(s.t[i]), sy(s.y[i]), s.color, this.large ? 3.5 : 2.5);
+    });
+
+    if (this.hover && this.hover.x >= plot.x0 && this.hover.x <= plot.x1) {
+      const t = t0 + (this.hover.x - plot.x0) / (plot.x1 - plot.x0) * (t1 - t0);
+      ctx.strokeStyle = THEME.textDim;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(Math.round(this.hover.x) + 0.5, plot.y0); ctx.lineTo(Math.round(this.hover.x) + 0.5, plot.y1); ctx.stroke();
+      const lines = [{ text: `t = ${t.toFixed(2)} s` }];
+      series.forEach(s => {
+        let i = Math.min(s.t.length - 1, lowerBound(s.t, t));
+        if (i > 0 && Math.abs(s.t[i - 1] - t) < Math.abs(s.t[i] - t)) i--;
+        this._dot(ctx, sx(s.t[i]), sy(s.y[i]), s.color, this.large ? 3.5 : 2.5);
+        lines.push({ color: s.color, text: `${series.length > 1 ? s.name + ': ' : ''}${formatValue(s.y[i], metric.unit)}` });
       });
-    } else if (hasGlobalData) {
-      engine.historyTemp.forEach(v => {
-        if (v < minVal) minVal = v;
-        if (v > maxVal) maxVal = v;
-      });
-      minTime = engine.historyTime[0];
-      maxTime = engine.historyTime[engine.historyTime.length - 1];
+      this._tooltip(ctx, w, h, this.hover.x, this.hover.y, lines);
     }
+  }
 
-    if (minVal === maxVal || minVal === Infinity) {
-      minVal = 250;
-      maxVal = 350;
-    } else {
-      minVal = Math.max(0, Math.floor(minVal - 10));
-      maxVal = Math.ceil(maxVal + 10);
+  // -------------------------------------------------------------------------
+  // State diagrams
+  // -------------------------------------------------------------------------
+  _renderXY(ctx, w, h, engine) {
+    const def = XY_METRICS[this.spec.metric];
+    const series = xySeries(engine, this.spec.target, this.spec.metric).filter(s => s.x.length > 1);
+    if (series.length === 0) {
+      return this._message(ctx, w, h, def.x === 'volume' && engine.sensors.length === 0
+        ? 'Place a sensor zone to plot its P-V loop' : 'Start the simulation to record data');
     }
-    const rangeVal = maxVal - minVal || 1;
-    const duration = Math.max(1.0, maxTime - minTime);
+    const extent = this._dataExtent(series);
+    const [t0, t1] = this._timeWindow(extent[0], extent[1]);
+    const vis = series.map(s => [Math.max(0, lowerBound(s.t, t0)), Math.min(s.t.length, lowerBound(s.t, t1) + 1)]);
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    series.forEach((s, k) => {
+      for (let i = vis[k][0]; i < vis[k][1]; i++) {
+        xMin = Math.min(xMin, s.x[i]); xMax = Math.max(xMax, s.x[i]);
+        yMin = Math.min(yMin, s.y[i]); yMax = Math.max(yMax, s.y[i]);
+      }
+    });
+    const plot = this._layout(w, h, series.length > 1);
+    this.lastWindow = [t0, t1];
+    this.lastPlot = plot;
+    const xr = paddedRange(xMin, xMax), yr = paddedRange(yMin, yMax);
+    const { sx, sy } = this._axes(ctx, plot, xr, yr, def.x, def.y, v => formatValue(v));
+    this._legend(ctx, series, plot);
 
-    const chamberColors = ['#38bdf8', '#ef4444', '#22c55e', '#f59e0b', '#a855f7'];
-
-    // Draw sensor traces
-    if (hasSensorData) {
-      sensors.forEach((sensor, sIdx) => {
-        const histT = sensor.historyTemp;
-        const histTime = sensor.historyTime;
-        if (!histT || histT.length < 2) return;
-
-        ctx.strokeStyle = sensor.color || chamberColors[sIdx % chamberColors.length];
-        ctx.lineWidth = 1.8;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.x0, plot.y0, plot.x1 - plot.x0, plot.y1 - plot.y0);
+    ctx.clip();
+    ctx.lineJoin = 'round';
+    series.forEach((s, k) => {
+      const [a, b] = vis[k];
+      const current = s.cycle[b - 1] || 0;
+      // Earlier cycles faded, the running cycle bright
+      for (const pass of ['old', 'current']) {
+        ctx.globalAlpha = pass === 'old' ? 0.28 : 1;
+        ctx.lineWidth = pass === 'old' ? 1.2 : (this.large ? 2 : 1.6);
+        ctx.strokeStyle = s.color;
         ctx.beginPath();
-
-        for (let i = 0; i < histT.length; i++) {
-          const tFrac = Math.max(0, Math.min(1, (histTime[i] - minTime) / duration));
-          const valFrac = Math.max(0, Math.min(1, (histT[i] - minVal) / rangeVal));
-          const x = padL + tFrac * chartW;
-          const y = h - padB - valFrac * chartH;
-
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+        let pen = false;
+        for (let i = a; i < b; i++) {
+          const isCurrent = (s.cycle[i] || 0) === current;
+          if ((pass === 'current') !== isCurrent) { pen = false; continue; }
+          const x = sx(s.x[i]), y = sy(s.y[i]);
+          if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
         }
         ctx.stroke();
-      });
-    } else if (hasGlobalData) {
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-
-      for (let i = 0; i < engine.historyTemp.length; i++) {
-        const tFrac = Math.max(0, Math.min(1, (engine.historyTime[i] - minTime) / duration));
-        const valFrac = Math.max(0, Math.min(1, (engine.historyTemp[i] - minVal) / rangeVal));
-        const x = padL + tFrac * chartW;
-        const y = h - padB - valFrac * chartH;
-
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
       }
-      ctx.stroke();
-    }
+      ctx.globalAlpha = 1;
+    });
+    ctx.restore();
+    series.forEach((s, k) => {
+      const i = vis[k][1] - 1;
+      this._dot(ctx, sx(s.x[i]), sy(s.y[i]), s.color, this.large ? 4 : 3);
+    });
 
-    // Axes
-    ctx.strokeStyle = '#334155';
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
-    ctx.stroke();
+    if (this.spec.metric === 'pv') this._workLabel(ctx, plot, series, vis);
 
-    // Scale labels
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '8.5px JetBrains Mono, monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(`${Math.round(maxVal)}K`, padL - 4, padT + 8);
-    ctx.fillText(`${Math.round((minVal + maxVal) * 0.5)}K`, padL - 4, padT + chartH * 0.5 + 3);
-    ctx.fillText(`${Math.round(minVal)}K`, padL - 4, h - padB);
-    ctx.textAlign = 'right';
-    ctx.fillText(`${maxTime.toFixed(1)}s`, w - padR, h - padB + 12);
-  }
-}
-
-
-// --- src/analytics/VelHistChart.js ---
-class VelHistChart {
-  constructor(canvas) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
-    this.binRanges = [
-      { label: '0-100', min: 0, max: 100 },
-      { label: '100-200', min: 100, max: 200 },
-      { label: '200-300', min: 200, max: 300 },
-      { label: '300-400', min: 300, max: 400 },
-      { label: '400-500', min: 400, max: 500 },
-      { label: '500-600', min: 500, max: 9999 }
-    ];
-  }
-
-  render(engine, target = 'global') {
-    const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#181a1f';
-    ctx.fillRect(0, 0, w, h);
-
-    const padLeft = 24;
-    const padRight = 10;
-    const padTop = 10;
-    const padBottom = 20;
-    const chartW = w - padLeft - padRight;
-    const chartH = h - padTop - padBottom;
-
-    // Grid lines
-    ctx.strokeStyle = '#22262e';
-    ctx.lineWidth = 1;
-    for (let y = padBottom; y <= h - padTop; y += 22) {
-      ctx.beginPath();
-      ctx.moveTo(padLeft, h - y);
-      ctx.lineTo(w - padRight, h - y);
-      ctx.stroke();
-    }
-
-    let speeds = null;
-    if (target && target !== 'global' && target.speedSamples && target.speedSamples.length > 0) {
-      speeds = target.speedSamples;
-    } else if (engine.latestSpeedSamples && engine.latestSpeedSamples.length > 0) {
-      speeds = engine.latestSpeedSamples;
-    } else if (engine.particles && engine.particles.length > 0) {
-      speeds = [];
-      const pts = engine.particles;
-      const step = pts.length > 1000 ? Math.max(1, Math.floor(pts.length / 1000)) : 1;
-      for (let i = 0; i < pts.length; i += step) {
-        const p = pts[i];
-        if (p) speeds.push(typeof p.getSpeed === 'function' ? p.getSpeed() : Math.hypot(p.vel ? p.vel.x : 0, p.vel ? p.vel.y : 0));
-      }
-    }
-
-    if (!speeds || speeds.length === 0) {
-      ctx.fillStyle = '#64748b';
-      ctx.font = '10px Inter, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Keine Teilchen', w / 2, h / 2);
-      return;
-    }
-
-    const counts = new Array(this.binRanges.length).fill(0);
-    const N = speeds.length;
-    for (let i = 0; i < N; i++) {
-      const spd = speeds[i];
-      for (let b = 0; b < this.binRanges.length; b++) {
-        if (spd >= this.binRanges[b].min && spd < this.binRanges[b].max) {
-          counts[b]++;
-          break;
+    if (this.hover && this.hover.x >= plot.x0 && this.hover.x <= plot.x1 && this.hover.y >= plot.y0 && this.hover.y <= plot.y1) {
+      let best = null;
+      series.forEach((s, k) => {
+        for (let i = vis[k][0]; i < vis[k][1]; i++) {
+          const d = Math.hypot(sx(s.x[i]) - this.hover.x, sy(s.y[i]) - this.hover.y);
+          if (!best || d < best.d) best = { d, s, i };
         }
+      });
+      if (best && best.d < 40) {
+        const { s, i } = best;
+        this._dot(ctx, sx(s.x[i]), sy(s.y[i]), s.color, this.large ? 4 : 3);
+        this._tooltip(ctx, w, h, sx(s.x[i]), sy(s.y[i]), [
+          { text: `t = ${s.t[i].toFixed(2)} s${s.cycle[i] ? ` · cycle ${s.cycle[i]}` : ''}` },
+          { color: s.color, text: `${AXIS[def.x].symbol} = ${formatValue(s.x[i], AXIS[def.x].unit)}` },
+          { color: s.color, text: `${AXIS[def.y].symbol} = ${formatValue(s.y[i], AXIS[def.y].unit)}` }
+        ]);
       }
     }
-
-    const maxCount = Math.max(1, ...counts);
-    const barW = chartW / this.binRanges.length;
-
-    // Draw green bars matching screenshot
-    for (let b = 0; b < this.binRanges.length; b++) {
-      const c = counts[b];
-      const barH = (c / maxCount) * chartH;
-      const bx = padLeft + b * barW;
-      const by = h - padBottom - barH;
-
-      ctx.fillStyle = '#22c55e'; // Crisp vibrant green
-      ctx.fillRect(bx + 2, by, barW - 4, barH);
-    }
-
-    // Axes
-    ctx.strokeStyle = '#334155';
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(padLeft, padTop);
-    ctx.lineTo(padLeft, h - padBottom);
-    ctx.lineTo(w - padRight, h - padBottom);
-    ctx.stroke();
-
-    // Axis labels
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '8px JetBrains Mono, monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(`${maxCount}`, padLeft - 3, padTop + 8);
-    ctx.fillText('0', padLeft - 3, h - padBottom);
-
-    ctx.textAlign = 'center';
-    for (let b = 0; b < this.binRanges.length; b++) {
-      const bx = padLeft + b * barW + barW * 0.5;
-      ctx.fillText(this.binRanges[b].label, bx, h - 6);
-    }
   }
-}
 
-
-// --- src/analytics/ChamberChart.js ---
-class ChamberChart {
-  static render(canvas, sensor, metric = 'temp') {
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width;
-    const h = canvas.height;
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#101216';
-    ctx.fillRect(0, 0, w, h);
-
-    let data = metric === 'temp' ? sensor.historyTemp : sensor.historyPressure;
-    let time = sensor.historyTime;
-
-    if (!data || data.length === 0) {
-      const currentVal = metric === 'temp' ? sensor.temperature : sensor.pressure;
-      if (typeof currentVal === 'number' && !isNaN(currentVal)) {
-        data = [currentVal, currentVal];
-        time = [0, 1.0];
-      } else {
-        ctx.fillStyle = '#64748b';
-        ctx.font = '10px Inter, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Collecting data...', w / 2, h / 2 + 3);
+  // Work done by the gas per sequencer cycle (W = ∮P dV); without cycles the path integral.
+  _workLabel(ctx, plot, series, vis) {
+    const lines = [];
+    series.forEach((s, k) => {
+      const part = { t: s.t.slice(vis[k][0], vis[k][1]), x: s.x.slice(vis[k][0], vis[k][1]), y: s.y.slice(vis[k][0], vis[k][1]), cycle: s.cycle.slice(vis[k][0], vis[k][1]) };
+      const cycles = cycleWork(part);
+      const prefix = series.length > 1 ? `${s.name}: ` : '';
+      const hasCycles = cycles.some(c => c.cycle > 0);
+      if (!hasCycles) {
+        const total = cycles.reduce((sum, c) => sum + c.work, 0);
+        lines.push(`${prefix}W = ${formatValue(total, 'J')}`);
         return;
       }
-    } else if (data.length === 1) {
-      data = [data[0], data[0]];
-      time = [time[0] || 0, (time[0] || 0) + 1.0];
-    }
-
-    const padL = 34, padR = 10, padT = 8, padB = 16;
-    const chartW = w - padL - padR, chartH = h - padT - padB;
-
-    let minVal = Math.min(...data);
-    let maxVal = Math.max(...data);
-    if (minVal === maxVal) {
-      minVal -= 5;
-      maxVal += 5;
-    }
-    const range = maxVal - minVal || 1;
-    const minTime = time[0] || 0;
-    const maxTime = Math.max(minTime + 1.0, time[time.length - 1] || 1);
-    const duration = maxTime - minTime || 1;
-
-    // Grid lines
-    ctx.strokeStyle = '#242935';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
-    ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB);
-    ctx.stroke();
-
-    // Data Line
-    const strokeColor = metric === 'temp' ? (sensor.color || '#38bdf8') : '#f59e0b';
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-
-    for (let i = 0; i < data.length; i++) {
-      const timeFrac = Math.max(0, Math.min(1, ((time[i] || minTime) - minTime) / duration));
-      const valFrac = Math.max(0, Math.min(1, (data[i] - minVal) / range));
-      const x = padL + timeFrac * chartW;
-      const y = h - padB - valFrac * chartH;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Labels
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '8px JetBrains Mono, monospace';
+      const done = cycles.filter(c => c.complete);
+      const shown = this.large ? done.slice(-5) : done.slice(-1);
+      shown.forEach(c => lines.push(`${prefix}W(cycle ${c.cycle}) = ${formatValue(c.work, 'J')}`));
+      if (shown.length === 0) lines.push(`${prefix}cycle ${cycles[cycles.length - 1].cycle} running`);
+    });
+    if (this.large) lines.push('W > 0: work done by the gas');
+    const fs = this.large ? 11.5 : 9;
+    ctx.font = `${fs}px ${FONT}`;
     ctx.textAlign = 'right';
-    ctx.fillText(`${Math.round(maxVal)}`, padL - 3, padT + 8);
-    ctx.fillText(`${Math.round(minVal)}`, padL - 3, h - padB);
+    ctx.textBaseline = 'top';
+    lines.forEach((l, i) => {
+      ctx.fillStyle = i === lines.length - 1 && this.large ? THEME.textDim : THEME.textMain;
+      ctx.fillText(l, plot.x1 - 4, plot.y0 + 3 + i * (fs + 4));
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Velocity histogram
+  // -------------------------------------------------------------------------
+  _histBins(engine) {
+    const speeds = speedSamples(engine, this.spec.target);
+    if (!speeds.length) return null;
+    const vMax = Math.max(400, ...speeds);
+    const width = niceStep(vMax, this.large ? 24 : 12);
+    const counts = new Array(Math.ceil(vMax / width) + 1).fill(0);
+    speeds.forEach(v => { counts[Math.min(counts.length - 1, Math.floor(v / width))]++; });
+    return { width, counts, total: speeds.length };
+  }
+
+  _renderHist(ctx, w, h, engine) {
+    const bins = this._histBins(engine);
+    if (!bins) return this._message(ctx, w, h, 'No particles');
+    const plot = this._layout(w, h, false);
+    const xMax = bins.counts.length * bins.width;
+    const yMax = Math.max(...bins.counts);
+    const { sx, sy } = this._axes(ctx, plot, [0, xMax], [0, yMax * 1.08 || 1], 'speed', 'count', v => formatValue(v));
+    const barW = sx(bins.width) - sx(0);
+    let hovered = -1;
+    if (this.hover && this.hover.x >= plot.x0 && this.hover.x <= plot.x1) hovered = Math.floor((this.hover.x - plot.x0) / barW);
+    bins.counts.forEach((c, i) => {
+      if (c === 0) return;
+      const x = sx(i * bins.width) + 1, y = sy(c);
+      ctx.fillStyle = CHART_PALETTE[0];
+      ctx.globalAlpha = hovered === -1 || hovered === i ? 1 : 0.55;
+      ctx.beginPath();
+      ctx.roundRect(x, y, Math.max(1, barW - 2), plot.y1 - y, [Math.min(4, barW / 3), Math.min(4, barW / 3), 0, 0]);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    if (hovered >= 0 && hovered < bins.counts.length) {
+      const lo = hovered * bins.width;
+      this._tooltip(ctx, w, h, this.hover.x, this.hover.y, [
+        { text: `${formatValue(lo)}–${formatValue(lo + bins.width)} px/s` },
+        { color: CHART_PALETTE[0], text: `${bins.counts[hovered]} of ${bins.total} particles` }
+      ]);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Export
+  // -------------------------------------------------------------------------
+  toCSV(engine = this.engine) {
+    const kind = metricKind(this.spec.metric);
+    if (kind === 'hist') {
+      const bins = this._histBins(engine);
+      return ['speed_from_px_s,speed_to_px_s,count', ...(bins ? bins.counts.map((c, i) => `${i * bins.width},${(i + 1) * bins.width},${c}`) : [])].join('\n');
+    }
+    if (kind === 'xy') {
+      const def = XY_METRICS[this.spec.metric];
+      const rows = [`series,time_s,${def.x},${def.y},cycle`];
+      xySeries(engine, this.spec.target, this.spec.metric).forEach(s => {
+        for (let i = 0; i < s.x.length; i++) rows.push(`"${s.name}",${s.t[i]},${s.x[i]},${s.y[i]},${s.cycle[i] || 0}`);
+      });
+      return rows.join('\n');
+    }
+    const rows = [`series,time_s,${this.spec.metric},cycle`];
+    timeSeries(engine, this.spec.target, this.spec.metric).forEach(s => {
+      for (let i = 0; i < s.t.length; i++) rows.push(`"${s.name}",${s.t[i]},${s.y[i]},${s.cycle[i] || 0}`);
+    });
+    return rows.join('\n');
   }
 }
+
+
+// --- src/analytics/DashboardChart.js ---
+// Custom dashboard chart (right sidebar): a ChartView for a target + metric.
+// Kept as a class with (id, target, metric, canvas) / render(engine) because
+// tests construct it via window.DashboardChart.
 
 class DashboardChart {
   constructor(id, target, metric, canvas = null) {
     this.id = id;
-    this.target = target; // 'global' or sensor instance
-    this.metric = metric; // 'temp', 'pressure', 'volume', 'count', 'kinetic', 'drift', 'pv'
-    this.canvas = canvas;
-    this.ctx = canvas ? canvas.getContext('2d') : null;
+    this.target = target;
+    this.metric = metric;
+    this.view = canvas ? new ChartView(canvas, { target, metric }) : null;
+  }
+
+  attach(canvas) {
+    this.view = new ChartView(canvas, { target: this.target, metric: this.metric });
   }
 
   getTitle() {
-    const targetName = this.target === 'global' ? 'Global System' : (this.target.label || 'Chamber');
-    const metricLabels = {
-      temp: 'Temperature T(t) [K]',
-      pressure: 'Pressure P(t) [Pa]',
-      volume: 'Volume V(t) [px²]',
-      count: 'Particles N(t)',
-      kinetic: 'Kinetic Energy E_kin(t) [J]',
-      drift: 'Drift Velocity |v_drift|(t) [px/s]',
-      pv: 'P-V Indicator Diagram',
-      pt: 'P-T State Diagram',
-      ts: 'T-s State Diagram',
-      hist: 'Velocity Distribution f(v)'
-    };
-    return `${metricLabels[this.metric] || this.metric} · ${targetName}`;
+    return this.view ? this.view.title() : new ChartView(document.createElement('canvas'), { target: this.target, metric: this.metric }).title();
   }
 
   render(engine) {
-    if (!this.canvas) return;
-    if (!this.ctx) this.ctx = this.canvas.getContext('2d');
-    const ctx = this.ctx;
-    if (!ctx) return;
-
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#101216';
-    ctx.fillRect(0, 0, w, h);
-
-    const padL = 36;
-    const padR = 10;
-    const padT = 8;
-    const padB = 16;
-    const chartW = w - padL - padR;
-    const chartH = h - padT - padB;
-
-    // 1. Histogram Metric
-    if (this.metric === 'hist') {
-      const binRanges = [
-        { min: 0, max: 100 },
-        { min: 100, max: 200 },
-        { min: 200, max: 300 },
-        { min: 300, max: 400 },
-        { min: 400, max: 500 },
-        { min: 500, max: 99999 }
-      ];
-      const speeds = [...((this.target === 'global' ? engine.latestSpeedSamples : this.target.speedSamples) || [])];
-      if (speeds.length === 0 && this.target === 'global' && engine.particles && engine.particles.length > 0) {
-        const sampleCount = Math.min(500, engine.particles.length);
-        for (let i = 0; i < sampleCount; i++) {
-          speeds.push(engine.particles[i].getSpeed());
-        }
-      }
-      if (speeds.length === 0) {
-        ctx.fillStyle = '#64748b';
-        ctx.font = '10px Inter, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Collecting velocity data...', w / 2, h / 2);
-        return;
-      }
-      const counts = new Array(binRanges.length).fill(0);
-      for (let i = 0; i < speeds.length; i++) {
-        const s = speeds[i];
-        for (let b = 0; b < binRanges.length; b++) {
-          if (s >= binRanges[b].min && s < binRanges[b].max) {
-            counts[b]++;
-            break;
-          }
-        }
-      }
-      const maxCount = Math.max(1, ...counts);
-      const barW = chartW / binRanges.length;
-      for (let b = 0; b < binRanges.length; b++) {
-        const barH = (counts[b] / maxCount) * chartH;
-        ctx.fillStyle = '#22c55e';
-        ctx.fillRect(padL + b * barW + 2, h - padB - barH, barW - 4, barH);
-      }
-      ctx.strokeStyle = '#242935';
-      ctx.beginPath();
-      ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
-      ctx.stroke();
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '8px JetBrains Mono, monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(`${maxCount}`, padL - 3, padT + 8);
-      ctx.fillText('0', padL - 3, h - padB);
-      return;
-    }
-
-    // 2. State & Indicator Diagrams (P-V, P-T, T-s)
-    if (this.metric === 'pv' || this.metric === 'pt' || this.metric === 'ts') {
-      const isGlobal = this.target === 'global';
-      const pArr = isGlobal ? engine.historyPressure : this.target.historyPressure;
-      const tArr = isGlobal ? engine.historyTemp : this.target.historyTemp;
-      const vArr = isGlobal ? engine.historyVolume : this.target.historyVolume;
-
-      let xArr = [], yArr = [];
-      let strokeCol = '#f59e0b';
-      if (this.metric === 'pv') {
-        xArr = vArr || []; yArr = pArr || []; strokeCol = '#f59e0b';
-      } else if (this.metric === 'pt') {
-        xArr = tArr || []; yArr = pArr || []; strokeCol = '#ec4899';
-      } else if (this.metric === 'ts') {
-        xArr = (vArr && tArr) ? tArr.map((t, idx) => Math.log(Math.max(1, t)) + 0.6 * Math.log(Math.max(1, vArr[idx] || 1))) : [];
-        yArr = tArr || [];
-        strokeCol = '#38bdf8';
-      }
-
-      if (!xArr || xArr.length === 0 || !yArr || yArr.length === 0) {
-        const curP = isGlobal ? engine.stats.pressure : this.target.pressure;
-        const curT = isGlobal ? engine.stats.systemTemperature : this.target.temperature;
-        const curV = isGlobal ? engine.stats.volume : this.target.volume;
-        if (this.metric === 'pv') { xArr = [curV, curV]; yArr = [curP, curP]; }
-        else if (this.metric === 'pt') { xArr = [curT, curT]; yArr = [curP, curP]; }
-        else if (this.metric === 'ts') {
-          const curS = Math.log(Math.max(1, curT)) + 0.6 * Math.log(Math.max(1, curV));
-          xArr = [curS, curS]; yArr = [curT, curT];
-        }
-      } else if (xArr.length === 1 && yArr.length === 1) {
-        xArr = [xArr[0], xArr[0]];
-        yArr = [yArr[0], yArr[0]];
-      }
-
-      if (!xArr || xArr.length < 2 || !yArr || yArr.length < 2) {
-        ctx.fillStyle = '#64748b';
-        ctx.font = '10px Inter, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Collecting state points...', w / 2, h / 2);
-        return;
-      }
-
-      let minX = Math.min(...xArr), maxX = Math.max(...xArr);
-      let minY = Math.min(...yArr), maxY = Math.max(...yArr);
-      if (minX === maxX) { minX -= 10; maxX += 10; }
-      if (minY === maxY) { minY -= 10; maxY += 10; }
-
-      ctx.strokeStyle = '#242935';
-      ctx.beginPath();
-      ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
-      ctx.stroke();
-
-      ctx.strokeStyle = strokeCol;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      const len = Math.min(xArr.length, yArr.length);
-      let workIntegral = 0;
-      for (let i = 0; i < len; i++) {
-        const x = padL + ((xArr[i] - minX) / (maxX - minX || 1)) * chartW;
-        const y = h - padB - ((yArr[i] - minY) / (maxY - minY || 1)) * chartH;
-        if (i === 0) ctx.moveTo(x, y);
-        else {
-          ctx.lineTo(x, y);
-          const avgP = (yArr[i] + yArr[i - 1]) * 0.5;
-          const dV = xArr[i] - xArr[i - 1];
-          workIntegral -= avgP * dV;
-        }
-      }
-      ctx.stroke();
-
-      // Live state marker on latest coordinate
-      if (len > 0) {
-        const lastX = padL + ((xArr[len - 1] - minX) / (maxX - minX || 1)) * chartW;
-        const lastY = h - padB - ((yArr[len - 1] - minY) / (maxY - minY || 1)) * chartH;
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = strokeCol;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-
-      // Work badge for thermodynamic cycle
-      if (this.metric === 'pv') {
-        const workJ = workIntegral * 1e-4;
-        let workStr = `${workJ.toFixed(1)} J`;
-        if (Math.abs(workJ) >= 1000) workStr = `${(workJ / 1000).toFixed(2)} kJ`;
-        else if (Math.abs(workJ) < 0.1 && Math.abs(workJ) > 0.0001) workStr = `${(workJ * 1000).toFixed(0)} mJ`;
-        
-        ctx.font = 'bold 9px JetBrains Mono, monospace';
-        ctx.textAlign = 'right';
-        ctx.fillStyle = workJ >= 0 ? '#22c55e' : '#38bdf8';
-        ctx.fillText(`W = ${workJ > 0 ? '+' : ''}${workStr}`, w - padR, padT + 8);
-      }
-
-      // Axis labels
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '8px JetBrains Mono, monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(`${Math.round(maxY)}`, padL - 3, padT + 8);
-      ctx.fillText(`${Math.round(minY)}`, padL - 3, h - padB);
-
-      ctx.textAlign = 'left';
-      ctx.fillText(`V:${Math.round(minX)}`, padL + 2, h - 4);
-      ctx.textAlign = 'right';
-      ctx.fillText(`${Math.round(maxX)}`, w - padR, h - 4);
-      return;
-    }
-
-    // 3. Time Series Curves
-    let timeArr = [];
-    let dataArr = [];
-    let strokeColor = '#38bdf8';
-
-    if (this.target === 'global') {
-      timeArr = (engine.historyTime && engine.historyTime.length > 0) ? [...engine.historyTime] : [];
-      if (this.metric === 'temp') { dataArr = [...(engine.historyTemp || [])]; strokeColor = '#38bdf8'; }
-      else if (this.metric === 'pressure') { dataArr = [...(engine.historyPressure || [])]; strokeColor = '#f59e0b'; }
-      else if (this.metric === 'volume') { dataArr = [...(engine.historyVolume || [])]; strokeColor = '#22c55e'; }
-      else if (this.metric === 'count') { dataArr = [...(engine.historyCount || [])]; strokeColor = '#a855f7'; }
-      else if (this.metric === 'kinetic') { dataArr = [...(engine.historyKineticEnergy || [])]; strokeColor = '#ec4899'; }
-      else if (this.metric === 'drift') { dataArr = [...(engine.historyDrift || [])]; strokeColor = '#22c55e'; }
-    } else {
-      const s = this.target;
-      timeArr = (s.historyTime && s.historyTime.length > 0) ? [...s.historyTime] : [];
-      if (this.metric === 'temp') { dataArr = [...(s.historyTemp || [])]; strokeColor = s.color || '#38bdf8'; }
-      else if (this.metric === 'pressure') { dataArr = [...(s.historyPressure || [])]; strokeColor = '#f59e0b'; }
-      else if (this.metric === 'volume') { dataArr = [...(s.historyVolume || [])]; strokeColor = '#22c55e'; }
-      else if (this.metric === 'count') { dataArr = [...(s.historyCount || [])]; strokeColor = '#a855f7'; }
-      else if (this.metric === 'kinetic') { dataArr = [...(s.historyKineticEnergy || [])]; strokeColor = '#ec4899'; }
-      else if (this.metric === 'drift') { dataArr = [...(s.historyDrift || [])]; strokeColor = '#22c55e'; }
-    }
-
-    if (!dataArr || dataArr.length === 0) {
-      let curVal = 0;
-      if (this.target === 'global') {
-        if (this.metric === 'temp') curVal = engine.stats.systemTemperature;
-        else if (this.metric === 'pressure') curVal = engine.stats.pressure;
-        else if (this.metric === 'volume') curVal = engine.stats.volume;
-        else if (this.metric === 'count') curVal = engine.stats.particleCount;
-        else if (this.metric === 'kinetic') curVal = engine.stats.totalKineticEnergy;
-        else if (this.metric === 'drift') curVal = (engine.historyDrift && engine.historyDrift.length > 0) ? engine.historyDrift[0] : 0;
-      } else {
-        const s = this.target;
-        if (this.metric === 'temp') curVal = s.temperature;
-        else if (this.metric === 'pressure') curVal = s.pressure;
-        else if (this.metric === 'volume') curVal = s.volume;
-        else if (this.metric === 'count') curVal = s.particleCount;
-        else if (this.metric === 'kinetic') curVal = s.kineticEnergy;
-        else if (this.metric === 'drift') curVal = s.displayDriftSpeed || 0;
-      }
-      dataArr = [curVal, curVal];
-      timeArr = [engine.totalTime || 0, (engine.totalTime || 0) + 1.0];
-    } else if (dataArr.length === 1) {
-      dataArr = [dataArr[0], dataArr[0]];
-      timeArr = [timeArr[0] || 0, (timeArr[0] || 0) + 1.0];
-    }
-
-    if (!dataArr || dataArr.length < 2) {
-      ctx.fillStyle = '#64748b';
-      ctx.font = '10px Inter, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Collecting data...', w / 2, h / 2);
-      return;
-    }
-
-    let minVal = Math.min(...dataArr);
-    let maxVal = Math.max(...dataArr);
-    if (minVal === maxVal) {
-      minVal -= 5;
-      maxVal += 5;
-    }
-    const range = maxVal - minVal || 1;
-    const minTime = timeArr[0] || 0;
-    const maxTime = Math.max(minTime + 1.0, timeArr[timeArr.length - 1] || 1);
-    const duration = maxTime - minTime || 1;
-
-    // Grid lines
-    ctx.strokeStyle = '#242935';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.lineTo(w - padR, h - padB);
-    ctx.stroke();
-
-    // Line curve
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-
-    for (let i = 0; i < dataArr.length; i++) {
-      const timeFrac = Math.max(0, Math.min(1, ((timeArr[i] || minTime) - minTime) / duration));
-      const valFrac = Math.max(0, Math.min(1, (dataArr[i] - minVal) / range));
-      const x = padL + timeFrac * chartW;
-      const y = h - padB - valFrac * chartH;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Scale labels
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '8px JetBrains Mono, monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(`${Math.round(maxVal)}`, padL - 3, padT + 7);
-    ctx.fillText(`${Math.round(minVal)}`, padL - 3, h - padB);
-    ctx.fillText(`${maxTime.toFixed(1)}s`, w - padR, h - padB + 11);
+    this.view?.render(engine);
   }
 }
 
@@ -17500,7 +17718,6 @@ const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;
 window.Presets = Presets;
-window.ChamberChart = ChamberChart;
 window.DashboardChart = DashboardChart;
 
 // Asynchronously initialize WebGPU & GPU Compute
@@ -17521,8 +17738,9 @@ if (gpuCanvas) {
   });
 }
 
-const tempChart = new TempTimeChart(tempChartCanvas);
-const velChart = new VelHistChart(velChartCanvas);
+// Sidebar charts: system history (all sensors, or the system without sensors) and velocity distribution
+const tempChart = new ChartView(tempChartCanvas, { target: 'sensors', metric: 'temp' });
+const velChart = new ChartView(velChartCanvas, { target: 'global', metric: 'hist' });
 const sequencerUI = new SequencerUI(engine, renderer);
 window.sequencerUI = sequencerUI;
 
@@ -19983,6 +20201,19 @@ onMenu('menuEntryWelcome', () => showSplashScreen({ isReturning: true }));
 onMenu('menuEntrySave', () => saveProject());
 onMenu('menuEntrySaveAs', openSaveModal);
 onMenu('menuEntryExportPNG', exportCanvasPNG);
+onMenu('menuEntryExportCSV', () => {
+  downloadBlob(new Blob([historyCSV(engine)], { type: 'text/csv' }), `${safeFileName(app.currentProjectName)}_data.csv`);
+});
+onMenu('menuEntryExportJSON', () => {
+  const pick = (h) => Object.fromEntries(HISTORY_KEYS.map(k => [k.replace('history', '').toLowerCase(), h[k] || []]));
+  const data = {
+    project: app.currentProjectName,
+    units: { time: 's', temp: 'K', pressure: 'Pa', volume: 'px²', count: 'particles', kineticenergy: 'J', drift: 'px/s' },
+    system: pick(engine),
+    sensors: engine.sensors.map(s => ({ name: s.label, id: s.id, ...pick(s) }))
+  };
+  downloadBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), `${safeFileName(app.currentProjectName)}_data.json`);
+});
 onMenu('menuEntryReset', revertToSaved);
 
 btnToolbarReset.addEventListener('click', revertToSaved);
@@ -20757,7 +20988,9 @@ function createFromDrag(s, c) {
   } else if (tool === 'sensor' && isBox) {
     recordUndoState();
     const letter = String.fromCharCode(65 + engine.sensors.length);
-    created = engine.addSensor({ x: minX, y: minY, width: w, height: h, color: cfg.color, label: `${cfg.label} ${letter}` });
+    // Untouched default color: next color of the chart palette, so every sensor gets its own.
+    const color = cfg.color === defaultValues('sensor', 'tool').color ? sensorColor(engine.sensors.length) : cfg.color;
+    created = engine.addSensor({ x: minX, y: minY, width: w, height: h, color, label: `${cfg.label} ${letter}` });
     const snap = findPistonSnap(minX, minY, w, h);
     if (snap) created.bindToPiston(snap.piston, snap.edge, true);
   }
@@ -21037,12 +21270,150 @@ function popHistoryFrame() {
 }
 
 
+// --- src/app/chartViewer.js ---
+// Large chart dialog: any metric of any target, time range (all / last N s /
+// zoomed), wheel zoom and drag pan on the time axis, PNG and CSV export.
+
+const overlay = document.getElementById('chartViewer');
+const viewerCanvas = document.getElementById('chartViewerCanvas');
+const viewerTitleEl = document.getElementById('chartViewerTitle');
+const metricSel = document.getElementById('chartViewerMetric');
+const targetSel = document.getElementById('chartViewerTarget');
+const rangeGroup = document.getElementById('chartViewerRange');
+
+const METRICS = ['temp', 'pressure', 'volume', 'count', 'kinetic', 'drift', 'pv', 'pt', 'ts', 'hist'];
+const viewerChart = viewerCanvas ? new ChartView(viewerCanvas, {}, { large: true }) : null;
+let drag = null; // { x, window } while panning
+
+function isChartViewerOpen() {
+  return overlay && overlay.style.display !== 'none';
+}
+
+function targetValue(target) {
+  return typeof target === 'string' ? target : target.id;
+}
+
+function resolveTarget(value) {
+  if (value === 'global' || value === 'sensors') return value;
+  return engine.sensors.find(s => s.id === value) || 'global';
+}
+
+function fillSelectors() {
+  metricSel.innerHTML = METRICS.map(m => `<option value="${m}">${metricTitle(m)}</option>`).join('');
+  targetSel.innerHTML = [
+    '<option value="global">System</option>',
+    engine.sensors.length > 1 ? '<option value="sensors">All sensors</option>' : '',
+    ...engine.sensors.map(s => `<option value="${s.id}">${s.label}</option>`)
+  ].join('');
+}
+
+function syncControls() {
+  metricSel.value = viewerChart.spec.metric;
+  targetSel.value = targetValue(viewerChart.spec.target);
+  if (![...targetSel.options].some(o => o.value === targetSel.value)) targetSel.value = 'global';
+  const mode = viewerChart.view.mode === 'last' ? String(viewerChart.view.span) : viewerChart.view.mode;
+  rangeGroup.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === mode));
+  rangeGroup.style.visibility = metricKind(viewerChart.spec.metric) === 'hist' ? 'hidden' : 'visible';
+  viewerTitleEl.textContent = viewerChart.title();
+}
+
+function openChartViewer(spec) {
+  if (!viewerChart) return;
+  fillSelectors();
+  viewerChart.spec = { target: 'global', metric: 'temp', ...spec };
+  viewerChart.view = { mode: 'all' };
+  overlay.style.display = 'flex';
+  syncControls();
+  viewerChart.render(engine);
+}
+
+function closeChartViewer() {
+  if (overlay) overlay.style.display = 'none';
+}
+
+function renderChartViewer() {
+  if (isChartViewerOpen() && !drag) viewerChart.render(engine);
+}
+
+if (viewerChart) {
+  metricSel.addEventListener('change', () => { viewerChart.spec.metric = metricSel.value; syncControls(); viewerChart.render(engine); });
+  targetSel.addEventListener('change', () => { viewerChart.spec.target = resolveTarget(targetSel.value); syncControls(); viewerChart.render(engine); });
+  rangeGroup.querySelectorAll('[data-range]').forEach(btn => btn.addEventListener('click', () => {
+    viewerChart.view = btn.dataset.range === 'all' ? { mode: 'all' } : { mode: 'last', span: parseFloat(btn.dataset.range) };
+    syncControls();
+    viewerChart.render(engine);
+  }));
+  document.getElementById('chartViewerClose').addEventListener('click', closeChartViewer);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeChartViewer(); });
+
+  document.getElementById('chartViewerCSV').addEventListener('click', () => {
+    downloadBlob(new Blob([viewerChart.toCSV(engine)], { type: 'text/csv' }), `${safeFileName(app.currentProjectName)}_${viewerChart.spec.metric}.csv`);
+  });
+  document.getElementById('chartViewerPNG').addEventListener('click', () => {
+    // Chart plus its title strip
+    const dpr = window.devicePixelRatio || 1;
+    const head = Math.round(32 * dpr);
+    const out = document.createElement('viewerCanvas');
+    out.width = viewerCanvas.width;
+    out.height = viewerCanvas.height + head;
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#12141a';
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = `600 ${14 * dpr}px Inter, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${viewerChart.title()} — ${app.currentProjectName}`, 16 * dpr, head / 2 + 2 * dpr);
+    ctx.drawImage(viewerCanvas, 0, head);
+    out.toBlob(b => { if (b) downloadBlob(b, `${safeFileName(app.currentProjectName)}_${viewerChart.spec.metric}.png`); });
+  });
+
+  // Zoom (wheel) and pan (drag) on the time window; double-click shows everything.
+  viewerCanvas.addEventListener('wheel', (e) => {
+    if (!viewerChart.lastWindow || metricKind(viewerChart.spec.metric) === 'hist') return;
+    e.preventDefault();
+    const [t0, t1] = viewerChart.lastWindow;
+    const p = viewerChart.lastPlot;
+    const r = viewerCanvas.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - r.left - p.x0) / (p.x1 - p.x0)));
+    const anchor = t0 + frac * (t1 - t0);
+    const span = Math.max(0.5, (t1 - t0) * (e.deltaY < 0 ? 0.8 : 1.25));
+    viewerChart.view = { mode: 'range', t0: anchor - frac * span, t1: anchor + (1 - frac) * span };
+    syncControls();
+    viewerChart.render(engine);
+  }, { passive: false });
+  viewerCanvas.addEventListener('mousedown', (e) => {
+    if (!viewerChart.lastWindow || metricKind(viewerChart.spec.metric) === 'hist') return;
+    drag = { x: e.clientX, window: [...viewerChart.lastWindow] };
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    const p = viewerChart.lastPlot;
+    const [t0, t1] = drag.window;
+    const dt = (e.clientX - drag.x) / (p.x1 - p.x0) * (t1 - t0);
+    viewerChart.view = { mode: 'range', t0: t0 - dt, t1: t1 - dt };
+    syncControls();
+    viewerChart.render(engine);
+  });
+  window.addEventListener('mouseup', () => { drag = null; });
+  viewerCanvas.addEventListener('dblclick', () => { viewerChart.view = { mode: 'all' }; syncControls(); viewerChart.render(engine); });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isChartViewerOpen()) closeChartViewer(); });
+}
+
+
+
 // --- src/app/dashboard.js ---
 // Right sidebar: system stats, chamber cards and custom charts.
 
 const customCharts = [];
 // Open chamber cards in right sidebar
 const openChamberCardIds = new Set();
+const chamberCharts = new Map(); // sensor id -> ChartView
+
+const EXPAND_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
+
+// Expand buttons of the fixed sidebar charts
+document.getElementById('btnExpandVelChart')?.addEventListener('click', () => openChartViewer(velChart.spec));
+document.getElementById('btnExpandHistoryChart')?.addEventListener('click', () => openChartViewer(tempChart.spec));
 
 // System Stats
 const gpuStatusBadge = document.getElementById('gpuStatusBadge');
@@ -21100,6 +21471,7 @@ function updateChamberCards() {
             </div>
             <div class="chamber-header-actions">
               <button class="btn-chamber-add-chart" data-addchart="${s.id}" title="Add Custom Graph for this Chamber">+ Chart</button>
+              <button class="chart-expand-btn" data-expand="${s.id}" title="Open large chart">${EXPAND_ICON}</button>
               <span class="chamber-badge" id="badge_${s.id}">-</span>
             </div>
           </div>
@@ -21110,7 +21482,7 @@ function updateChamberCards() {
               <span>N: <b class="val-n">-</b></span>
             </div>
             <div class="chamber-drift-row" id="drift_row_${s.id}">
-              <div class="drift-compass-wrap" title="Driftrichtung & Geschwindigkeit">
+              <div class="drift-compass-wrap" title="Drift direction and speed">
                 <svg class="drift-compass-svg" width="32" height="32" viewBox="0 0 32 32">
                   <circle cx="16" cy="16" r="14" fill="#14171d" stroke="#2a303c" stroke-width="1.2"/>
                   <line x1="16" y1="3" x2="16" y2="5" stroke="#475569" stroke-width="1"/>
@@ -21124,11 +21496,11 @@ function updateChamberCards() {
                 </svg>
               </div>
               <div class="drift-info-wrap">
-                <span class="drift-caption">Drift-Vektor:</span>
-                <span class="drift-speed-text val-drift">0.0 px/s (Gleichgewicht)</span>
+                <span class="drift-caption">Drift:</span>
+                <span class="drift-speed-text val-drift">0.0 px/s (equilibrium)</span>
               </div>
             </div>
-            <canvas class="chamber-chart-canvas" id="chart_${s.id}" width="320" height="60"></canvas>
+            <canvas class="chamber-chart-canvas" id="chart_${s.id}" width="320" height="70"></canvas>
           </div>
         </div>
       `;
@@ -21143,6 +21515,20 @@ function updateChamberCards() {
         const card = document.getElementById(`card_${id}`);
         if (card) card.classList.toggle('open', openChamberCardIds.has(id));
       });
+    });
+
+    chamberCardsContainer.querySelectorAll('[data-expand]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sensor = engine.sensors.find(x => x.id === btn.dataset.expand);
+        if (sensor) openChartViewer({ target: sensor, metric: 'temp' });
+      });
+    });
+
+    chamberCharts.clear();
+    sensors.forEach(sensor => {
+      const c = document.getElementById(`chart_${sensor.id}`);
+      if (c) chamberCharts.set(sensor.id, new ChartView(c, { target: sensor, metric: 'temp' }));
     });
 
     chamberCardsContainer.querySelectorAll('[data-addchart]').forEach(btn => {
@@ -21163,7 +21549,7 @@ function updateChamberCards() {
     const hasDrift = s.displayDriftSpeed && s.displayDriftSpeed > 0;
     const driftAngleDeg = hasDrift ? Math.round((s.driftAngle * 180) / Math.PI) + 90 : 0;
     const rawCompassDeg = (driftAngleDeg - 90 + 360) % 360;
-    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${rawCompassDeg}°)` : '0.0 px/s (Gleichgewicht)';
+    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${rawCompassDeg}°)` : '0.0 px/s (equilibrium)';
 
     const badge = document.getElementById(`badge_${s.id}`);
     if (badge) badge.textContent = `${Math.round(s.temperature)} K | ${s.particleCount} N`;
@@ -21198,16 +21584,13 @@ function updateChamberCards() {
         if (eqDot) eqDot.style.display = 'block';
         if (arrowGroup) arrowGroup.style.display = 'none';
         if (speedText) {
-          speedText.textContent = '0.0 px/s (Gleichgewicht)';
+          speedText.textContent = '0.0 px/s (equilibrium)';
           speedText.style.color = 'var(--text-dim)';
         }
       }
     }
 
-    if (openChamberCardIds.has(s.id)) {
-      const cCanvas = document.getElementById(`chart_${s.id}`);
-      if (cCanvas) ChamberChart.render(cCanvas, s, 'temp');
-    }
+    if (openChamberCardIds.has(s.id)) chamberCharts.get(s.id)?.render(engine);
   }
 }
 
@@ -21245,22 +21628,20 @@ function addCustomChart(targetVal, metricVal) {
 
   card.innerHTML = `
     <div class="custom-chart-header">
-      <div class="custom-chart-title">
-        <span class="custom-chart-icon">📈</span>
-        <span>${chartObj.getTitle()}</span>
+      <div class="custom-chart-title"><span>${chartObj.getTitle()}</span></div>
+      <div class="custom-chart-actions">
+        <button class="chart-expand-btn" data-expand="${chartId}" title="Open large chart">${EXPAND_ICON}</button>
+        <button class="custom-chart-close-btn" data-remove="${chartId}" title="Remove Chart">✕</button>
       </div>
-      <button class="custom-chart-close-btn" data-remove="${chartId}" title="Remove Chart">✕</button>
     </div>
-    <canvas class="custom-chart-canvas" id="canvas_${chartId}" width="310" height="95"></canvas>
+    <canvas class="custom-chart-canvas" id="canvas_${chartId}" width="310" height="110"></canvas>
   `;
 
   customChartsContainer.appendChild(card);
-  const chartCanvas = document.getElementById(`canvas_${chartId}`);
-  chartObj.canvas = chartCanvas;
-  chartObj.ctx = chartCanvas.getContext('2d');
-
+  chartObj.attach(document.getElementById(`canvas_${chartId}`));
   customCharts.push(chartObj);
 
+  card.querySelector(`[data-expand="${chartId}"]`)?.addEventListener('click', () => openChartViewer(chartObj.view.spec));
   card.querySelector(`[data-remove="${chartId}"]`)?.addEventListener('click', () => {
     const idx = customCharts.findIndex(c => c.id === chartId);
     if (idx !== -1) customCharts.splice(idx, 1);
@@ -21478,12 +21859,12 @@ window.addEventListener('click', (e) => {
 tabTemp.addEventListener('click', () => {
   tabTemp.classList.add('active');
   tabPV.classList.remove('active');
-  tempChart.setMode('temp');
+  tempChart.setSpec({ metric: 'temp' });
 });
 tabPV.addEventListener('click', () => {
   tabPV.classList.add('active');
   tabTemp.classList.remove('active');
-  tempChart.setMode('pv');
+  tempChart.setSpec({ metric: 'pv' });
 });
 
 
@@ -21574,6 +21955,7 @@ function animate(now) {
     for (let i = 0; i < customCharts.length; i++) {
       customCharts[i].render(engine);
     }
+    renderChartViewer();
     chartTimer = 0;
   }
 

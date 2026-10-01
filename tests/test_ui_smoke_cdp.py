@@ -225,6 +225,32 @@ def run_pass(page, label):
     time.sleep(0.3)
     page.eval('1')  # drain pending events
 
+    # Charts: large chart dialog with every metric, zoom/pan, custom dashboard chart
+    charts = page.eval("""(() => {
+        document.getElementById('btnExpandHistoryChart').click();
+        const dlg = document.getElementById('chartViewer');
+        const open = dlg.style.display === 'flex';
+        const metric = document.getElementById('chartViewerMetric');
+        const canvas = document.getElementById('chartViewerCanvas');
+        const metrics = [...metric.options].map(o => o.value);
+        for (const m of metrics) {
+            metric.value = m;
+            metric.dispatchEvent(new Event('change'));
+            const r = canvas.getBoundingClientRect();
+            canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+            canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, cancelable: true }));
+            canvas.dispatchEvent(new MouseEvent('dblclick'));
+        }
+        document.querySelector('#chartViewerRange [data-range="10"]').click();
+        const ranged = document.querySelector('#chartViewerRange [data-range="10"]').classList.contains('active');
+        document.getElementById('chartViewerClose').click();
+        document.getElementById('btnAddCustomChart').click();
+        document.getElementById('selectChartMetric').value = 'kinetic';
+        document.getElementById('btnChartConfirm').click();
+        const custom = document.querySelectorAll('.custom-chart-card canvas').length;
+        return { open, metrics: metrics.length, ranged, closed: dlg.style.display === 'none', custom };
+    })()""")
+
     # History group: New Canvas and Revert are undoable
     n_before_clear = page.eval('window.engine.elements.length')
     page.click_id('btnToolbarClear')
@@ -305,6 +331,8 @@ def run_pass(page, label):
     assert after_delete < after_box, 'Delete key did not delete the selection'
     assert after_undo == after_box, 'Ctrl+Z did not restore the deleted elements'
     assert state['sim'] and state['t'] > 0, 'simulation did not run'
+    assert charts['open'] and charts['closed'] and charts['ranged'] and charts['metrics'] == 10, f'chart dialog failed: {charts}'
+    assert charts['custom'] >= 1, 'custom dashboard chart was not added'
     assert all_selected == all_elements, 'Ctrl+A did not select all elements'
     assert grouped and ungrouped, 'Ctrl+G / Ctrl+Shift+G did not group / ungroup'
     assert view_ok, 'view menu state is wrong (vectors, grid size, zoom)'

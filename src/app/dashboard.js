@@ -1,11 +1,20 @@
 // Right sidebar: system stats, chamber cards and custom charts.
-import { ChamberChart, DashboardChart } from '../analytics/ChamberChart.js';
+import { ChartView } from '../analytics/ChartView.js';
+import { DashboardChart } from '../analytics/DashboardChart.js';
+import { openChartViewer } from './chartViewer.js';
 import { btnAddCustomChart, btnChartCancel, btnChartConfirm, btnChartModalClose, chamberCardsContainer, chartModal, customChartsContainer, selectChartMetric, selectChartTarget, statE, statN, statT, statV } from './dom.js';
-import { engine } from './core.js';
+import { engine, tempChart, velChart } from './core.js';
 
 export const customCharts = [];
 // Open chamber cards in right sidebar
 const openChamberCardIds = new Set();
+const chamberCharts = new Map(); // sensor id -> ChartView
+
+const EXPAND_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
+
+// Expand buttons of the fixed sidebar charts
+document.getElementById('btnExpandVelChart')?.addEventListener('click', () => openChartViewer(velChart.spec));
+document.getElementById('btnExpandHistoryChart')?.addEventListener('click', () => openChartViewer(tempChart.spec));
 
 // System Stats
 const gpuStatusBadge = document.getElementById('gpuStatusBadge');
@@ -63,6 +72,7 @@ export function updateChamberCards() {
             </div>
             <div class="chamber-header-actions">
               <button class="btn-chamber-add-chart" data-addchart="${s.id}" title="Add Custom Graph for this Chamber">+ Chart</button>
+              <button class="chart-expand-btn" data-expand="${s.id}" title="Open large chart">${EXPAND_ICON}</button>
               <span class="chamber-badge" id="badge_${s.id}">-</span>
             </div>
           </div>
@@ -73,7 +83,7 @@ export function updateChamberCards() {
               <span>N: <b class="val-n">-</b></span>
             </div>
             <div class="chamber-drift-row" id="drift_row_${s.id}">
-              <div class="drift-compass-wrap" title="Driftrichtung & Geschwindigkeit">
+              <div class="drift-compass-wrap" title="Drift direction and speed">
                 <svg class="drift-compass-svg" width="32" height="32" viewBox="0 0 32 32">
                   <circle cx="16" cy="16" r="14" fill="#14171d" stroke="#2a303c" stroke-width="1.2"/>
                   <line x1="16" y1="3" x2="16" y2="5" stroke="#475569" stroke-width="1"/>
@@ -87,11 +97,11 @@ export function updateChamberCards() {
                 </svg>
               </div>
               <div class="drift-info-wrap">
-                <span class="drift-caption">Drift-Vektor:</span>
-                <span class="drift-speed-text val-drift">0.0 px/s (Gleichgewicht)</span>
+                <span class="drift-caption">Drift:</span>
+                <span class="drift-speed-text val-drift">0.0 px/s (equilibrium)</span>
               </div>
             </div>
-            <canvas class="chamber-chart-canvas" id="chart_${s.id}" width="320" height="60"></canvas>
+            <canvas class="chamber-chart-canvas" id="chart_${s.id}" width="320" height="70"></canvas>
           </div>
         </div>
       `;
@@ -106,6 +116,20 @@ export function updateChamberCards() {
         const card = document.getElementById(`card_${id}`);
         if (card) card.classList.toggle('open', openChamberCardIds.has(id));
       });
+    });
+
+    chamberCardsContainer.querySelectorAll('[data-expand]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sensor = engine.sensors.find(x => x.id === btn.dataset.expand);
+        if (sensor) openChartViewer({ target: sensor, metric: 'temp' });
+      });
+    });
+
+    chamberCharts.clear();
+    sensors.forEach(sensor => {
+      const c = document.getElementById(`chart_${sensor.id}`);
+      if (c) chamberCharts.set(sensor.id, new ChartView(c, { target: sensor, metric: 'temp' }));
     });
 
     chamberCardsContainer.querySelectorAll('[data-addchart]').forEach(btn => {
@@ -126,7 +150,7 @@ export function updateChamberCards() {
     const hasDrift = s.displayDriftSpeed && s.displayDriftSpeed > 0;
     const driftAngleDeg = hasDrift ? Math.round((s.driftAngle * 180) / Math.PI) + 90 : 0;
     const rawCompassDeg = (driftAngleDeg - 90 + 360) % 360;
-    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${rawCompassDeg}°)` : '0.0 px/s (Gleichgewicht)';
+    const driftText = hasDrift ? `${s.displayDriftSpeed.toFixed(1)} px/s (${rawCompassDeg}°)` : '0.0 px/s (equilibrium)';
 
     const badge = document.getElementById(`badge_${s.id}`);
     if (badge) badge.textContent = `${Math.round(s.temperature)} K | ${s.particleCount} N`;
@@ -161,16 +185,13 @@ export function updateChamberCards() {
         if (eqDot) eqDot.style.display = 'block';
         if (arrowGroup) arrowGroup.style.display = 'none';
         if (speedText) {
-          speedText.textContent = '0.0 px/s (Gleichgewicht)';
+          speedText.textContent = '0.0 px/s (equilibrium)';
           speedText.style.color = 'var(--text-dim)';
         }
       }
     }
 
-    if (openChamberCardIds.has(s.id)) {
-      const cCanvas = document.getElementById(`chart_${s.id}`);
-      if (cCanvas) ChamberChart.render(cCanvas, s, 'temp');
-    }
+    if (openChamberCardIds.has(s.id)) chamberCharts.get(s.id)?.render(engine);
   }
 }
 
@@ -208,22 +229,20 @@ function addCustomChart(targetVal, metricVal) {
 
   card.innerHTML = `
     <div class="custom-chart-header">
-      <div class="custom-chart-title">
-        <span class="custom-chart-icon">📈</span>
-        <span>${chartObj.getTitle()}</span>
+      <div class="custom-chart-title"><span>${chartObj.getTitle()}</span></div>
+      <div class="custom-chart-actions">
+        <button class="chart-expand-btn" data-expand="${chartId}" title="Open large chart">${EXPAND_ICON}</button>
+        <button class="custom-chart-close-btn" data-remove="${chartId}" title="Remove Chart">✕</button>
       </div>
-      <button class="custom-chart-close-btn" data-remove="${chartId}" title="Remove Chart">✕</button>
     </div>
-    <canvas class="custom-chart-canvas" id="canvas_${chartId}" width="310" height="95"></canvas>
+    <canvas class="custom-chart-canvas" id="canvas_${chartId}" width="310" height="110"></canvas>
   `;
 
   customChartsContainer.appendChild(card);
-  const chartCanvas = document.getElementById(`canvas_${chartId}`);
-  chartObj.canvas = chartCanvas;
-  chartObj.ctx = chartCanvas.getContext('2d');
-
+  chartObj.attach(document.getElementById(`canvas_${chartId}`));
   customCharts.push(chartObj);
 
+  card.querySelector(`[data-expand="${chartId}"]`)?.addEventListener('click', () => openChartViewer(chartObj.view.spec));
   card.querySelector(`[data-remove="${chartId}"]`)?.addEventListener('click', () => {
     const idx = customCharts.findIndex(c => c.id === chartId);
     if (idx !== -1) customCharts.splice(idx, 1);

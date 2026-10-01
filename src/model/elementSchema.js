@@ -211,7 +211,7 @@ export const ELEMENT_TYPES = {
     label: 'Sensor', tag: 'SENSOR', tool: 'sensor', sequenceable: false,
     fields: [
       { key: 'label', label: 'Name', kind: 'text', def: 'Chamber', set: (it, v) => { it.label = v.trim() || 'Chamber'; } },
-      { key: 'color', label: 'Color', kind: 'color', def: '#38bdf8' }
+      { key: 'color', label: 'Color', kind: 'color', def: '#3987e5' }
     ],
     info: it => (it.displayDriftSpeed > 0
       ? `Drift ${it.displayDriftSpeed.toFixed(1)} px/s (${Math.round(it.driftAngle * 180 / Math.PI)}°)`

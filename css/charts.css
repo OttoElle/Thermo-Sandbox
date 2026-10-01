@@ -1,0 +1,134 @@
+/* Thermo Sandbox - Charts: expand buttons and the large chart dialog (chartViewer.js) */
+
+.chart-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background-color: var(--bg-input);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.chart-expand-btn:hover {
+  color: var(--text-main);
+  border-color: var(--accent-blue);
+}
+
+.chart-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.custom-chart-actions,
+.chamber-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chart-card canvas,
+.custom-chart-canvas,
+.chamber-chart-canvas {
+  display: block;
+  border-radius: 6px;
+}
+
+/* Large chart dialog */
+.chart-viewer {
+  align-items: center;
+  justify-content: center;
+}
+
+.chart-viewer-card {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 92vw);
+  height: min(760px, 86vh);
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+  padding: 14px 16px 10px;
+  gap: 10px;
+}
+
+.chart-viewer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chart-viewer-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.chart-viewer-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chart-viewer-tools .prop-select {
+  width: auto;
+  min-width: 150px;
+}
+
+.chart-viewer-tools .prop-segmented {
+  width: auto;
+}
+
+.chart-viewer-tools .prop-seg:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.chart-viewer-tools .prop-seg.active:disabled {
+  opacity: 1;
+}
+
+.chart-viewer-tools .prop-action {
+  flex: 0 0 auto;
+}
+
+.chart-viewer-spacer {
+  flex: 1;
+}
+
+.chart-viewer-canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border-radius: 8px;
+  cursor: crosshair;
+}
+
+.chart-viewer-hint {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .chart-viewer-card {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+  }
+}

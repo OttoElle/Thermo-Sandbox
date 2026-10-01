@@ -42,6 +42,7 @@
 - **index.js**: Library of built-in thermodynamic experiments (Split-Stirling Cryocooler, Venturi Nozzle, Dual-Chamber Partition, Joule-Thomson, Adiabatic Cylinder, Brownian Motion).
 
 ## src/physics/ (Physics Engine & Geometry)
+- **HistoryBuffer.js**: Time series of the system and sensor zones: full run kept (recent samples at full resolution, older ones in uniform time buckets), sequencer cycle per sample.
 - **Constants.js**: Shared simulation units: `KB` (Boltzmann constant, also templated into the WGSL), `WORLD_SIZE`, `idealGasPressure()` used by sensors and global stats.
 - **Vector2.js**: 2D vector mathematics utility (dot, cross, norm, rot, dist).
 - **Particle.js**: Hard-sphere and Lennard-Jones particle model with position, velocity, mass, radius, and thermal coloring.
@@ -69,9 +70,9 @@
 - **Renderer.js**: Dual-layer canvas coordinator orchestrating WebGPU hardware-accelerated particle passes on `#gpuCanvas` and interactive CAD geometry/UI overlay on 2D `#simCanvas`.
 
 ## src/analytics/ (Telemetry & Charts)
-- **ChamberChart.js**: Multi-metric chamber telemetry renderer, dynamic DashboardChart graph engine, and thermodynamic cycle work integration (W = -∫ P dV).
-- **TempTimeChart.js**: Global system continuous temperature history curve.
-- **VelHistChart.js**: Real-time velocity distribution histogram with theoretical Maxwell-Boltzmann curve.
+- **ChartView.js**: Chart component for time series, state diagrams (P-V/P-T/T-s with per-cycle work) and the velocity histogram: axes with units, legend, hover tooltip, HiDPI, CSV export.
+- **chartData.js**: Metric definitions, validated chart palette, series extraction for global/sensor targets, cycle work, long-format CSV.
+- **DashboardChart.js**: Custom dashboard chart (thin ChartView wrapper, also `window.DashboardChart`).
 
 ## src/
 - **main.js**: App entry point: imports the `src/app` modules, starts the ambient splash scene and runs the `requestAnimationFrame` loop.
@@ -93,6 +94,7 @@
 - **menus.js**: Menu bar (File/Edit/View/Simulation/Help) with enabled/checked state, scene lifecycle (`openScene` for presets/recent/files, New Canvas, Revert to Saved, Save/Save As, PNG export), view toggles.
 - **transform.js**: Selection transform frame (resize/rotate handles, hit-testing, cursors), linked vertices of wall shapes, exact size setters.
 - **dimensions.js**: Live dimension labels while drawing, typed dimension input (drawing and selection size labels).
+- **chartViewer.js**: Large chart dialog (metric/target, time range, wheel zoom, drag pan, PNG/CSV export).
 - **ribbonLayout.js**: Responsive ribbon (icon-only tool buttons when a row would overflow, wheel scrolls horizontally).
 - **playback.js**: Play/pause/step/step-back/stop, physics model and gravity toggles, zoom controls, `fitViewToScene()` (zoom to fit into the area not covered by panels).
 - **canvasInput.js**: Canvas mouse interaction: coordinates and magnetic snapping, context menu, drawing (`createFromDrag`, click-move-click, polyline), dragging, panning.

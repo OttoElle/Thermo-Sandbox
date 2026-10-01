@@ -10,6 +10,7 @@ import { refreshInspectorLive } from './app/inspector.js';
 import { updateViewMenuLabels } from './app/menus.js';
 import { customCharts, updateChamberCards, updateSystemStats } from './app/dashboard.js';
 import { renderLiveToolPreviews } from './app/toolPreview.js';
+import { renderChartViewer } from './app/chartViewer.js';
 import { getSelectionHud, getTransformFrame } from './app/transform.js';
 import { setupAmbientScene, showSplashScreen } from './app/splash.js';
 import './app/keyboard.js';
@@ -73,6 +74,7 @@ function animate(now) {
     for (let i = 0; i < customCharts.length; i++) {
       customCharts[i].render(engine);
     }
+    renderChartViewer();
     chartTimer = 0;
   }
 

@@ -18,6 +18,7 @@ import { CycleSequencer } from '../control/CycleSequencer.js';
 import { GPU_LAYOUT } from './ParticleGPUComputeShader.js';
 import { ParticleGPUCompute } from './ParticleGPUCompute.js';
 import { KB, WORLD_SIZE, idealGasPressure } from './Constants.js';
+import { appendHistory, historyClock, lastHistoryTime, resetHistory, HISTORY_INTERVAL } from './HistoryBuffer.js';
 
 // Element class -> Engine list holding its instances (serialization key too).
 const ELEMENT_LISTS = [
@@ -98,13 +99,7 @@ export class Engine {
     };
 
     // System Telemetry History
-    this.historyTime = [];
-    this.historyTemp = [];
-    this.historyPressure = [];
-    this.historyVolume = [];
-    this.historyCount = [];
-    this.historyKineticEnergy = [];
-    this.historyDrift = [];
+    resetHistory(this);
     this.latestSpeedSamples = [];
   }
 
@@ -132,13 +127,7 @@ export class Engine {
     this.syncWallsToGPU();
     this.syncSinksToGPU();
     this.totalTime = 0;
-    this.historyTime = [];
-    this.historyTemp = [];
-    this.historyPressure = [];
-    this.historyVolume = [];
-    this.historyCount = [];
-    this.historyKineticEnergy = [];
-    this.historyDrift = [];
+    resetHistory(this);
     this.latestSpeedSamples = [];
     if (this.sequencer) {
       this.sequencer.reset();
@@ -660,6 +649,7 @@ export class Engine {
     if (this.sequencer && this.sequencer.isEnabled) {
       this.sequencer.step(effectiveDt, this);
     }
+    historyClock.cycle = (this.sequencer && this.sequencer.isEnabled) ? this.sequencer.currentCycleCount : 0;
 
     // 1. Particle Emitters & Regulators & Throttle Valves (Active in both GPU and CPU modes)
     const gpuMode = this.isGPUSimulating();
@@ -1412,26 +1402,14 @@ export class Engine {
   _recordHistory(count, temperature, kineticEnergy, drift) {
     this.stats.volume = this.width * this.height;
     this.stats.pressure = idealGasPressure(count, this.stats.volume, temperature);
-    if (!this.historyTime) return;
-    const last = this.historyTime.length > 0 ? this.historyTime[this.historyTime.length - 1] : null;
-    if (last !== null && this.totalTime - last < 0.045) return;
-    this.historyTime.push(this.totalTime);
-    this.historyTemp.push(temperature);
-    this.historyPressure.push(this.stats.pressure);
-    this.historyVolume.push(this.stats.volume);
-    this.historyCount.push(count);
-    this.historyKineticEnergy.push(kineticEnergy);
-    this.historyDrift.push(drift);
-
-    if (this.historyTime.length > 600) {
-      this.historyTime.shift();
-      this.historyTemp.shift();
-      this.historyPressure.shift();
-      this.historyVolume.shift();
-      this.historyCount.shift();
-      this.historyKineticEnergy.shift();
-      this.historyDrift.shift();
-    }
+    // Nothing to record before the first step (after a reset the GPU stats are still empty).
+    if (!this.historyTime || this.totalTime <= 0) return;
+    const last = lastHistoryTime(this);
+    if (last !== null && this.totalTime - last < HISTORY_INTERVAL) return;
+    appendHistory(this, {
+      t: this.totalTime, temp: temperature, pressure: this.stats.pressure, volume: this.stats.volume,
+      count, kinetic: kineticEnergy, drift
+    });
   }
 
   exportState(profileName = 'Standardprofil') {
