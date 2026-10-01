@@ -13,6 +13,7 @@ import { engine, renderer } from './core.js';
 import { app, pointer } from './state.js';
 import { snapToGrid } from './fields.js';
 import { formatLengthAngle } from './dimensions.js';
+import { groupName } from '../model/elementNames.js';
 
 const FRAME_PAD_PX = 8;       // frame drawn this far outside the content
 const HANDLE_HIT_PX = 7;
@@ -170,8 +171,7 @@ export function getSelectionHud() {
 }
 
 function shapeBadge(gid, n) {
-  const names = { rect: 'Rectangle', circle: 'Circle', arc: 'Arc', poly: 'Polygon', group: 'Group' };
-  return `${names[shapeKind(gid)]} (${n})`;
+  return `${groupName(gid, engine)} (${n})`;
 }
 
 function formatAngle(rad) {

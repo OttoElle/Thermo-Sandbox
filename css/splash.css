@@ -12,7 +12,6 @@ body.splash-mode .unified-bottom-dock,
 body.splash-mode #unifiedBottomDock,
 body.splash-mode .floating-zoom-panel,
 body.splash-mode #toolDialogPanel,
-body.splash-mode #elementPopup,
 body.splash-mode #contextMenu,
 body.splash-mode #cycleSequencerDrawer,
 body.splash-mode .modal-overlay:not(#splashOverlay) {

@@ -8,7 +8,6 @@ import { updateElementsList } from './elementTree.js';
 import { fitViewToScene, getVisibleCanvasRect, updateGravityUI, updateModelToggleUI } from './playback.js';
 import { closeContextMenu } from './canvasInput.js';
 import { canGroupSelection, canUngroupSelection, deleteSelectedItems, groupSelection, ungroupSelection } from './selection.js';
-import { closePopup } from './popup.js';
 import { addRecentProfile, hideSplashScreen, showSplashScreen } from './splash.js';
 
 // ============================================================================
@@ -113,7 +112,6 @@ function setProjectName(name) {
 }
 
 function refreshSceneUI() {
-  closePopup();
   closeContextMenu();
   updateElementsList();
   renderToolProperties(app.activeTool);
@@ -141,7 +139,6 @@ export function stopAndResetSimulationForNewScene() {
   app.selectedItems = [];
   resetPolygonDraft();
   pointer.arcSteps = [];
-  closePopup();
   closeContextMenu();
 }
 
@@ -255,7 +252,6 @@ btnToolbarClear.addEventListener('click', newCanvas);
 export function selectAllElements() {
   if (app.isSimulating) return;
   app.selectedItems = [...engine.elements];
-  closePopup();
   updateElementsList();
 }
 

@@ -8,7 +8,6 @@ import { updateElementsList } from './elementTree.js';
 import { closeAllMenus, closeSaveModal, openSaveModal, openShortcutsModal, saveProject, selectAllElements, toggleVectors } from './menus.js';
 import { closeContextMenu } from './canvasInput.js';
 import { deleteSelectedItems, groupSelection, ungroupSelection } from './selection.js';
-import { closePopup } from './popup.js';
 import { hideSplashScreen } from './splash.js';
 import { fitViewToScene } from './playback.js';
 import { hasActiveDraft, openDimensionInput } from './dimensions.js';
@@ -92,7 +91,6 @@ window.addEventListener('keydown', (e) => {
     }
     resetPolygonDraft();
     pointer.arcSteps = [];
-    closePopup();
     closeContextMenu();
     closeAllMenus();
     closeSaveModal();

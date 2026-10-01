@@ -11,6 +11,7 @@ import { recordUndoState } from './history.js';
 import { renderPropertyForm } from './propertyForm.js';
 import { renderElementTree, updateElementsList } from './elementTree.js';
 import { canGroupSelection, canUngroupSelection, deleteSelectedItems, duplicateSelection, groupSelection, moveSelectedItems, ungroupSelection } from './selection.js';
+import { elementName, groupName } from '../model/elementNames.js';
 import { getContentBounds, getSingleSegment, setSegmentGeometry, setSelectionSize, shapeKind } from './transform.js';
 
 const panel = document.getElementById('propertiesPanel');
@@ -47,14 +48,14 @@ function commonType(items) {
 function headerFor(items, type) {
   const gids = new Set(items.map(i => i.groupId || null));
   const gid = gids.size === 1 ? [...gids][0] : null;
-  if (gid && items.length > 1) {
+  if (gid && items.length > 1 && engine.elements.filter(e => e.groupId === gid).length === items.length) {
     const kind = shapeKind(gid);
     const what = type === 'wall' ? 'segments' : 'elements';
-    return { tag: kind === 'group' ? 'GROUP' : 'SHAPE', title: `${SHAPE_NAMES[kind]} (${items.length} ${what})` };
+    return { tag: kind === 'group' ? 'GROUP' : SHAPE_NAMES[kind].toUpperCase(), title: `${groupName(gid, engine)} · ${items.length} ${what}` };
   }
   if (type) {
     const def = ELEMENT_TYPES[type];
-    return { tag: def.tag, title: items.length > 1 ? `${items.length} × ${def.label}` : def.label };
+    return { tag: def.tag, title: items.length > 1 ? `${items.length} × ${def.label}` : elementName(items[0], engine) };
   }
   return { tag: 'MIXED', title: `${items.length} elements` };
 }

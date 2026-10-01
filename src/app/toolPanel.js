@@ -4,7 +4,6 @@ import { btnToolDialogClose, helpArrowIcon, toolDialogBadge, toolDialogHeader, t
 import { renderer } from './core.js';
 import { app, pointer, resetPolygonDraft } from './state.js';
 import { closeContextMenu } from './canvasInput.js';
-import { closePopup } from './popup.js';
 import { renderPropertyForm } from './propertyForm.js';
 
 // Tool defaults for new elements: the schema defaults plus the sub-mode chosen in the ribbon.
@@ -54,7 +53,6 @@ export function selectToolButton(btn) {
   resetPolygonDraft();
   pointer.arcSteps = [];
   renderer.draftInfo = null;
-  closePopup();
   closeContextMenu();
   renderToolProperties(tool);
 }

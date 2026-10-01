@@ -6,7 +6,6 @@ import { clearHistoryBuffer, popHistoryFrame, pushHistoryFrame } from './history
 import { renderToolProperties, ribbonToolBtns } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
 import { closeContextMenu } from './canvasInput.js';
-import { closePopup, updatePopupPosition } from './popup.js';
 
 // ============================================================================
 // Playback Controls & Physics Model Toggle
@@ -58,7 +57,6 @@ btnPlayPause.addEventListener('click', () => {
     app.selectedItems = [];
     resetPolygonDraft();
     pointer.arcSteps = [];
-    closePopup();
     closeContextMenu();
   }
 
@@ -84,7 +82,6 @@ btnStep.addEventListener('click', () => {
     ribbonToolBtns.forEach(b => b.classList.remove('active'));
     document.getElementById('toolSelect')?.classList.add('active');
     if (toolDialogPanel) toolDialogPanel.style.display = 'none';
-    closePopup();
     closeContextMenu();
   }
   pushHistoryFrame();
@@ -113,7 +110,6 @@ btnStopReset.addEventListener('click', () => {
   playIcon.classList.add('is-play');
   playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
   
-  closePopup();
   closeContextMenu();
   updateElementsList();
   renderToolProperties(app.activeTool);
@@ -138,12 +134,10 @@ export function updateZoomText() {
 btnZoomIn.addEventListener('click', () => {
   renderer.zoomAt(canvas.width * 0.5, canvas.height * 0.5, 1.2);
   updateZoomText();
-  updatePopupPosition();
 });
 btnZoomOut.addEventListener('click', () => {
   renderer.zoomAt(canvas.width * 0.5, canvas.height * 0.5, 0.83);
   updateZoomText();
-  updatePopupPosition();
 });
 btnResetView.addEventListener('click', fitViewToScene);
 
@@ -214,5 +208,4 @@ export function fitViewToScene() {
     renderer.setViewport(cx - (bounds.minX + bounds.maxX) * 0.5 * z, cy - (bounds.minY + bounds.maxY) * 0.5 * z, z);
   }
   updateZoomText();
-  updatePopupPosition();
 }

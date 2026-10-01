@@ -278,59 +278,6 @@ body.sequencer-expanded .floating-vel-legend {
 }
 
 /* ==========================================================================
-   4. Positioned Floating Context Popup on Canvas
-   ========================================================================== */
-.element-popup {
-  position: absolute;
-  background-color: #1e222d;
-  border: 1px solid var(--border-card);
-  border-radius: 10px;
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);
-  width: 240px;
-  z-index: 50;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  transform: translate(-50%, -110%);
-  pointer-events: auto;
-}
-
-.popup-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 6px;
-}
-
-.popup-title {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent-blue);
-  text-transform: uppercase;
-}
-
-.popup-close {
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  font-size: 16px;
-  cursor: pointer;
-  line-height: 1;
-}
-
-.popup-close:hover {
-  color: #ffffff;
-}
-
-.popup-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* ==========================================================================
    7. Modern WebGPU Requirement Modal
    ========================================================================== */
 .webgpu-error-overlay {
@@ -2667,7 +2614,6 @@ body.splash-mode .unified-bottom-dock,
 body.splash-mode #unifiedBottomDock,
 body.splash-mode .floating-zoom-panel,
 body.splash-mode #toolDialogPanel,
-body.splash-mode #elementPopup,
 body.splash-mode #contextMenu,
 body.splash-mode #cycleSequencerDrawer,
 body.splash-mode .modal-overlay:not(#splashOverlay) {
@@ -4660,6 +4606,163 @@ body.seq-picking-active #simCanvas {
   gap: 3px;
 }
 
+/* ---------------------------------------------------------------------------
+   Element tree (elementTree.js)
+   --------------------------------------------------------------------------- */
+.tree-filter {
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background-color: var(--bg-input);
+  color: var(--text-main);
+  font-size: 11px;
+  outline: none;
+  user-select: text;
+}
+
+.tree-filter:focus {
+  border-color: var(--accent-green);
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 2px 4px 2px 2px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.tree-row:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-main);
+}
+
+.tree-row.selected {
+  background-color: var(--accent-blue-dim);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: var(--text-main);
+}
+
+.tree-row.tree-child {
+  padding-left: 18px;
+  min-height: 22px;
+  font-size: 11px;
+}
+
+.tree-row.dragging {
+  opacity: 0.4;
+}
+
+.tree-row.drag-over {
+  border-top: 2px solid var(--accent-green);
+}
+
+.tree-caret,
+.tree-caret-spacer {
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.tree-caret {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.tree-icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent-blue);
+  flex-shrink: 0;
+}
+
+.tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.tree-meta {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  color: var(--text-dim);
+}
+
+.tree-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.tree-row:hover .tree-actions {
+  display: flex;
+}
+
+.tree-row:hover .tree-meta {
+  display: none;
+}
+
+.tree-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tree-btn:hover {
+  background-color: var(--bg-input);
+  color: var(--text-main);
+}
+
+.tree-btn.tree-del:hover {
+  color: #f87171;
+}
+
+.tree-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--accent-green);
+  border-radius: 4px;
+  background-color: var(--bg-input);
+  color: var(--text-main);
+  font-size: 11.5px;
+  outline: none;
+  user-select: text;
+}
+
+.tree-empty {
+  padding: 10px 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
   </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -4701,17 +4804,6 @@ body.seq-picking-active #simCanvas {
       <span class="legend-tag">high</span>
       <div class="legend-gradient-bar"></div>
       <span class="legend-tag">low</span>
-    </div>
-
-    <!-- Positioned Floating Context Popup for Canvas Elements -->
-    <div id="elementPopup" class="element-popup" style="display: none;">
-      <div class="popup-header">
-        <span id="popupTitle" class="popup-title">Element</span>
-        <button id="btnPopupClose" class="popup-close">&times;</button>
-      </div>
-      <div id="popupBody" class="popup-body">
-        <!-- Dynamically populated per element -->
-      </div>
     </div>
 
     <!-- Right-Click Context Menu -->
@@ -5669,10 +5761,6 @@ const elementsListContainer = document.getElementById('elementsListContainer');
 const elementCountBadge = document.getElementById('elementCountBadge');
 
 // Context Popup & Menu
-const elementPopup = document.getElementById('elementPopup');
-const popupTitle = document.getElementById('popupTitle');
-const popupBody = document.getElementById('popupBody');
-const btnPopupClose = document.getElementById('btnPopupClose');
 
 const contextMenu = document.getElementById('contextMenu');
 const ctxDuplicate = document.getElementById('ctxDuplicate');
@@ -12924,6 +13012,7 @@ class Renderer {
     this.showItemHandles = true;
     this.hudLabel = null;
     this.hoverItem = null;
+    this.hoverItems = null;
     this.colorByVelocity = true;
     this.snapCursor = null; // { x, y } in world coordinates
 
@@ -13145,8 +13234,12 @@ class Renderer {
     // 9.5 Sequencer Action Selection Glow (Subtle Cyan Outline, No Handles)
     if (this.highlightedSequencerItem) {
       this.drawSequencerHighlight(this.highlightedSequencerItem);
-    } else if (this.hoverItem && !(Array.isArray(selectedItems) && selectedItems.includes(this.hoverItem))) {
-      this.drawSequencerHighlight(this.hoverItem, 0.45);
+    } else {
+      // Hover from the canvas (one element) or the element tree (a whole group)
+      const hovered = this.hoverItems || (this.hoverItem ? [this.hoverItem] : []);
+      for (const item of hovered) {
+        if (!(Array.isArray(selectedItems) && selectedItems.includes(item))) this.drawSequencerHighlight(item, 0.45);
+      }
     }
 
     // 10. Draft Previews (Valves, Walls, Rectangles, Marquee Selection)
@@ -17449,7 +17542,6 @@ const app = {
   hasActiveSession: false,
   activeTool: 'select',
   selectedItems: [],
-  popupTargetItem: null,
 };
 window.app = app; // for tests and console debugging
 
@@ -17520,150 +17612,6 @@ function attachDualInput(id, onChange) {
       onChange(val);
     }
   });
-}
-
-
-// --- src/app/popup.js ---
-// Element popup (quick inspector next to the canvas item).
-
-// Element Popup Logic
-function openPopup(item) {
-  app.popupTargetItem = item;
-  renderPopupContent(item);
-  updatePopupPosition();
-  elementPopup.style.display = 'flex';
-}
-
-function closePopup() {
-  app.popupTargetItem = null;
-  elementPopup.style.display = 'none';
-}
-
-btnPopupClose.addEventListener('click', closePopup);
-
-function updatePopupPosition() {
-  if (!app.popupTargetItem || elementPopup.style.display === 'none') return;
-  let wx = 0, wy = 0;
-  if (app.popupTargetItem instanceof Wall) {
-    wx = (app.popupTargetItem.p1.x + app.popupTargetItem.p2.x) * 0.5;
-    wy = (app.popupTargetItem.p1.y + app.popupTargetItem.p2.y) * 0.5;
-  } else if (app.popupTargetItem instanceof Piston) {
-    wx = app.popupTargetItem.x;
-    wy = app.popupTargetItem.y - app.popupTargetItem.height * 0.5;
-  } else if (app.popupTargetItem.x !== undefined && app.popupTargetItem.y !== undefined) {
-    wx = app.popupTargetItem.x + (app.popupTargetItem.width || 0) * 0.5;
-    wy = app.popupTargetItem.y;
-  }
-  const screen = renderer.worldToScreen(wx, wy);
-  elementPopup.style.left = `${Math.max(300, Math.min(window.innerWidth - 400, screen.x))}px`;
-  elementPopup.style.top = `${Math.max(100, Math.min(window.innerHeight - 100, screen.y))}px`;
-}
-
-function renderPopupContent(item) {
-  if (item instanceof Piston) {
-    popupTitle.textContent = `Piston [${item.label}]`;
-    popupBody.innerHTML = `
-      <div class="field-row">
-        <div class="field-label"><span>Mass m</span> <span id="popPMassVal" class="field-num">${item.mass}</span></div>
-        <input type="range" id="popPMass" min="0" max="150" step="5" value="${item.mass}" class="styled-slider">
-      </div>
-      <div class="field-row">
-        <div class="field-label"><span>Conductivity κ</span> <span id="popPKappaVal" class="field-num">${item.conductivity.toFixed(2)}</span></div>
-        <input type="range" id="popPKappa" min="0" max="1" step="0.05" value="${item.conductivity}" class="styled-slider">
-      </div>
-      <button id="popDeleteBtn" class="btn-pill btn-danger" style="margin-top:4px; width:100%; justify-content:center;">Delete Piston</button>
-    `;
-    document.getElementById('popPMass').addEventListener('input', (e) => {
-      item.mass = parseInt(e.target.value, 10);
-      document.getElementById('popPMassVal').textContent = item.mass;
-    });
-    document.getElementById('popPKappa').addEventListener('input', (e) => {
-      item.conductivity = parseFloat(e.target.value);
-      document.getElementById('popPKappaVal').textContent = item.conductivity.toFixed(2);
-    });
-    document.getElementById('popDeleteBtn').addEventListener('click', () => {
-      recordUndoState();
-      engine.pistons = engine.pistons.filter(p => p !== item);
-      app.selectedItems = [];
-      closePopup();
-      updateElementsList();
-    });
-
-  } else if (item instanceof Wall) {
-    popupTitle.textContent = item.type === 'manual_valve' ? 'Valve' : 'Wall';
-    popupBody.innerHTML = `
-      <div class="field-row">
-        <div class="field-label"><span>Conductivity κ</span> <span id="popWKappaVal" class="field-num">${item.conductivity.toFixed(2)}</span></div>
-        <input type="range" id="popWKappa" min="0" max="1" step="0.05" value="${item.conductivity}" class="styled-slider">
-      </div>
-      <button id="popDeleteBtn" class="btn-pill btn-danger" style="margin-top:4px; width:100%; justify-content:center;">Delete Wall</button>
-    `;
-    document.getElementById('popWKappa').addEventListener('input', (e) => {
-      item.conductivity = parseFloat(e.target.value);
-      document.getElementById('popWKappaVal').textContent = item.conductivity.toFixed(2);
-    });
-    document.getElementById('popDeleteBtn').addEventListener('click', () => {
-      recordUndoState();
-      engine.walls = engine.walls.filter(w => w !== item);
-      app.selectedItems = [];
-      closePopup();
-      updateElementsList();
-    });
-
-  } else if (item instanceof Reservoir) {
-    popupTitle.textContent = 'Thermal Reservoir';
-    popupBody.innerHTML = `
-      <div class="field-row">
-        <div class="field-label"><span>Temperature T</span> <span id="popResTVal" class="field-num">${Math.round(item.temperature)} K</span></div>
-        <input type="range" id="popResT" min="50" max="800" step="25" value="${item.temperature}" class="styled-slider">
-      </div>
-      <button id="popDeleteBtn" class="btn-pill btn-danger" style="margin-top:4px; width:100%; justify-content:center;">Delete Reservoir</button>
-    `;
-    document.getElementById('popResT').addEventListener('input', (e) => {
-      item.temperature = parseInt(e.target.value, 10);
-      item.label = `${item.temperature}K`;
-      document.getElementById('popResTVal').textContent = `${item.temperature} K`;
-    });
-    document.getElementById('popDeleteBtn').addEventListener('click', () => {
-      recordUndoState();
-      engine.reservoirs = engine.reservoirs.filter(r => r !== item);
-      app.selectedItems = [];
-      closePopup();
-      updateElementsList();
-    });
-
-  } else if (item instanceof SensorZone) {
-    popupTitle.textContent = 'Chamber Sensor';
-    popupBody.innerHTML = `
-      <div class="field-row">
-        <div class="field-label"><span>Chamber Name</span></div>
-        <input type="text" id="popSensName" value="${item.label}" class="styled-select" style="width:100%;">
-      </div>
-      <button id="popDeleteBtn" class="btn-pill btn-danger" style="margin-top:4px; width:100%; justify-content:center;">Delete Sensor</button>
-    `;
-    document.getElementById('popSensName').addEventListener('input', (e) => {
-      item.label = e.target.value.trim() || 'Chamber';
-      updateElementsList();
-    });
-    document.getElementById('popDeleteBtn').addEventListener('click', () => {
-      recordUndoState();
-      engine.sensors = engine.sensors.filter(s => s !== item);
-      app.selectedItems = [];
-      closePopup();
-      updateElementsList();
-    });
-
-  } else {
-    popupTitle.textContent = 'Component';
-    popupBody.innerHTML = `
-      <button id="popDeleteBtn" class="btn-pill btn-danger" style="width:100%; justify-content:center;">Delete Element</button>
-    `;
-    document.getElementById('popDeleteBtn').addEventListener('click', () => {
-      deleteSelectedItems();
-      closePopup();
-      updateElementsList();
-    });
-  }
 }
 
 
@@ -18133,7 +18081,6 @@ function deleteSelectedItems() {
   }
 
   app.selectedItems = [];
-  closePopup();
   closeContextMenu();
   updateElementsList();
   engine.syncWallsToGPU();
@@ -18491,8 +18438,7 @@ function getSelectionHud() {
 }
 
 function shapeBadge(gid, n) {
-  const names = { rect: 'Rectangle', circle: 'Circle', arc: 'Arc', poly: 'Polygon', group: 'Group' };
-  return `${names[shapeKind(gid)]} (${n})`;
+  return `${groupName(gid, engine)} (${n})`;
 }
 
 function formatAngle(rad) {
@@ -18855,14 +18801,14 @@ function commonType(items) {
 function headerFor(items, type) {
   const gids = new Set(items.map(i => i.groupId || null));
   const gid = gids.size === 1 ? [...gids][0] : null;
-  if (gid && items.length > 1) {
+  if (gid && items.length > 1 && engine.elements.filter(e => e.groupId === gid).length === items.length) {
     const kind = shapeKind(gid);
     const what = type === 'wall' ? 'segments' : 'elements';
-    return { tag: kind === 'group' ? 'GROUP' : 'SHAPE', title: `${SHAPE_NAMES[kind]} (${items.length} ${what})` };
+    return { tag: kind === 'group' ? 'GROUP' : SHAPE_NAMES[kind].toUpperCase(), title: `${groupName(gid, engine)} · ${items.length} ${what}` };
   }
   if (type) {
     const def = ELEMENT_TYPES[type];
-    return { tag: def.tag, title: items.length > 1 ? `${items.length} × ${def.label}` : def.label };
+    return { tag: def.tag, title: items.length > 1 ? `${items.length} × ${def.label}` : elementName(items[0], engine) };
   }
   return { tag: 'MIXED', title: `${items.length} elements` };
 }
@@ -19052,60 +18998,9 @@ function refreshInspectorLive() {
 
 
 // --- src/app/elementTree.js ---
-// Elements outline list and group management in the left sidebar.
-
-// ============================================================================
-// Interactive Canvas Elements Outline List
-// ============================================================================
-function getElementInfo(item, index) {
-  if (item instanceof Wall) {
-    const vLabel = item.type === 'manual_valve' ? `Valve ${index + 1}` : (item.type === 'check_valve' ? `Check Valve ${index + 1}` : (item.type === 'relief_valve' ? `PRV Valve ${index + 1}` : `Wall ${index + 1} (${item.conductivity > 0 ? 'Conductive' : 'Insulated'})`));
-    return { tag: 'WALL', label: vLabel };
-  } else if (item instanceof ThrottleValve) {
-    return { tag: 'THROTTLE', label: `Throttle Valve ${index + 1} [${Math.round(item.openRatio * 100)}%]` };
-  } else if (item instanceof Piston) {
-    const modeLabels = { free: 'displacer', spring: 'accumulator', motorized: 'compressor', damper: 'expander' };
-    const mLabel = modeLabels[item.mode] || item.mode;
-    return { tag: 'PISTON', label: `Piston ${index + 1} (${mLabel})` };
-  } else if (item instanceof Reservoir) {
-    return { tag: 'SINK', label: `Sink [${Math.round(item.temperature)}K]` };
-  } else if (item instanceof HeatExchanger) {
-    return { tag: 'HX', label: `Heat Exchanger [${Math.round(item.temperature)}K]` };
-  } else if (item instanceof RegeneratorMatrix) {
-    const minT = Math.round(Math.min(...item.temperatures));
-    const maxT = Math.round(Math.max(...item.temperatures));
-    return { tag: 'REGEN', label: `Regenerator [${minT}-${maxT}K]` };
-  } else if (item instanceof ThermalBlock) {
-    return { tag: 'RESSAVOIR', label: `Ressavoir [${Math.round(item.temperature)}K]` };
-  } else if (item instanceof SensorZone) {
-    return { tag: 'SENSOR', label: item.label };
-  } else if (item instanceof Emitter) {
-    return { tag: 'SOURCE', label: `Emitter (${item.rate}/s)` };
-  } else if (item instanceof Sink) {
-    return { tag: 'ABSORBER', label: 'Absorber' };
-  } else if (item instanceof Regulator) {
-    return { tag: 'REGULATOR', label: `Regulator [${item.currentCount || 0}/${item.targetCount} pts]` };
-  } else if (item instanceof TextLabel) {
-    return { tag: 'NOTE', label: `"${item.text}"` };
-  } else if (item instanceof ParticleGroup) {
-    const activeCount = item.getActiveCount(engine);
-    const avgT = Math.round(item.getAverageTemperature(engine));
-    return { tag: 'SPAWNER', label: `${item.label} [${activeCount} pts, ${avgT}K]` };
-  }
-  return { tag: 'ITEM', label: `Element ${index + 1}` };
-}
-
-// ============================================================================
-// CAD Feature Tree & Accordion Group Management
-// ============================================================================
-const treeExpandedGroups = new Set();
-
-function updateElementCardLabel(itemIndex, newLabel) {
-  const card = document.querySelector(`[data-elindex="${itemIndex}"]`);
-  if (!card) return;
-  const labelSpan = card.querySelector('.element-label-text');
-  if (labelSpan) labelSpan.textContent = newLabel;
-}
+// Element tree in the left sidebar: shapes/groups with their segments,
+// type icons, names (double-click to rename), live values, search filter,
+// hover highlight on the canvas, multi-selection and layer drag & drop.
 
 // Re-renders the element tree and the properties panel.
 function updateElementsList() {
@@ -19113,266 +19008,297 @@ function updateElementsList() {
   renderInspector();
 }
 
+const expandedGroups = new Set();
+let filterText = '';
+
+// ---------------------------------------------------------------------------
+// Icons (taken from the ribbon buttons) and live values
+// ---------------------------------------------------------------------------
+const TYPE_ICON_SOURCES = {
+  wall: '#toolWallPoly', manual_valve: '#toolValveManual', check_valve: '#toolValveCheck', relief_valve: '#toolValvePRV',
+  throttle_valve: '#toolValveThrottle', reservoir: '#toolSolidRes', heat_exchanger: '#toolHeatEx', regenerator: '#toolRegen',
+  thermal_block: '#toolStorage', emitter: '#toolEmitter', sink: '#toolSink', regulator: '#toolRegulator', gas: '#toolGas',
+  sensor: '#toolSensor', text: '#toolText'
+};
+const PISTON_ICON_SOURCES = { free: '#toolPistonFree', spring: '#toolPistonSpring', motorized: '#toolPistonMotor', damper: '#toolPistonDamper' };
+const GROUP_ICON_SOURCES = { rect: '#toolWallRect', circle: '#toolWallCircle', arc: '#toolWallArc', poly: '#toolWallPoly', group: '#btnGroupSelected' };
+const iconCache = new Map();
+
+function iconFrom(selector) {
+  if (!iconCache.has(selector)) {
+    const svg = document.querySelector(`${selector} svg`);
+    iconCache.set(selector, svg ? svg.outerHTML.replace(/width="\d+" height="\d+"/, 'width="13" height="13"') : '');
+  }
+  return iconCache.get(selector);
+}
+
+function itemIcon(item) {
+  const type = elementTypeOf(item);
+  if (type === 'piston') return iconFrom(PISTON_ICON_SOURCES[item.mode] || '#toolPistonFree');
+  return iconFrom(TYPE_ICON_SOURCES[type] || '#toolSelect');
+}
+
+const K = (t) => `${Math.round(t)} K`;
+
+// Short live value next to the name.
+function itemMeta(item) {
+  switch (elementTypeOf(item)) {
+    case 'wall': return item.conductivity > 0 ? `κ ${item.conductivity.toFixed(2)} · ${K(item.temperature)}` : 'insulated';
+    case 'manual_valve': return item.isOpen ? 'open' : 'closed';
+    case 'check_valve': return item.allowedDirection > 0 ? 'forward' : 'reverse';
+    case 'relief_valve': return `${item.triggerPressure} Pa`;
+    case 'throttle_valve': return `${Math.round(item.openRatio * 100)}%`;
+    case 'piston': return { free: 'displacer', spring: 'accumulator', motorized: 'compressor', damper: 'expander' }[item.mode] || item.mode;
+    case 'reservoir':
+    case 'heat_exchanger':
+    case 'thermal_block': return K(item.temperature);
+    case 'regenerator': return `${K(Math.min(...item.temperatures))}–${K(Math.max(...item.temperatures))}`;
+    case 'emitter': return `${item.rate}/s`;
+    case 'sink': return item.tempFilterMode === 'all' ? 'all' : `${item.tempFilterMode === 'above' ? '>' : '<'} ${K(item.filterTemperature)}`;
+    case 'regulator': return `${item.currentCount || 0}/${item.targetCount}`;
+    case 'gas': return `${item.getActiveCount(engine)} pts`;
+    case 'sensor': return item.temperature ? K(item.temperature) : '';
+    default: return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tree model: z-ordered entries, grouped elements collected at their first member
+// ---------------------------------------------------------------------------
+function buildEntries() {
+  const entries = [];
+  const groups = new Map();
+  engine.elements.forEach((item, index) => {
+    if (item.groupId) {
+      if (!groups.has(item.groupId)) {
+        const g = { kind: 'group', groupId: item.groupId, members: [] };
+        groups.set(item.groupId, g);
+        entries.push(g);
+      }
+      groups.get(item.groupId).members.push({ item, index });
+    } else {
+      entries.push({ kind: 'item', item, index });
+    }
+  });
+  // A "group" of one element is shown as that element
+  return entries.map(e => (e.kind === 'group' && e.members.length === 1 ? { kind: 'item', ...e.members[0] } : e));
+}
+
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+function treeRowHtml({ index, icon, name, meta, selected, depth = 0, groupId = null, expanded = null, deletable = true, ungroup = false }) {
+  const attrs = groupId ? `data-group="${esc(groupId)}"` : `data-index="${index}"`;
+  const caret = expanded === null ? '<span class="tree-caret-spacer"></span>'
+    : `<button type="button" class="tree-caret" title="${expanded ? 'Collapse' : 'Expand'}">${expanded ? '▾' : '▸'}</button>`;
+  return `
+    <div class="tree-row ${selected ? 'selected' : ''} ${depth ? 'tree-child' : ''}" ${attrs} ${groupId || depth ? '' : 'draggable="true"'}>
+      ${caret}
+      <span class="tree-icon">${icon}</span>
+      <span class="tree-name" title="Double-click to rename">${esc(name)}</span>
+      <span class="tree-meta">${esc(meta)}</span>
+      <span class="tree-actions">
+        ${ungroup ? '<button type="button" class="tree-btn" data-ungroup title="Ungroup / break shape">⧉</button>' : ''}
+        ${deletable ? `<button type="button" class="tree-btn tree-del" title="Delete">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>` : ''}
+      </span>
+    </div>`;
+}
+
 function renderElementTree() {
   if (!elementsListContainer) return;
   const elements = engine.elements || [];
-
   elementCountBadge.textContent = elements.length;
+  ensureFilterInput();
 
   if (elements.length === 0) {
-    elementsListContainer.innerHTML = '<p class="empty-cell" style="padding:8px 0;">No elements on canvas</p>';
+    elementsListContainer.innerHTML = '<p class="tree-empty">No elements yet. Pick a tool in the ribbon and draw on the canvas.</p>';
     return;
   }
 
-  // Group elements for Feature Tree: standalone items vs group clusters
-  const treeEntries = [];
-  const groupMap = new Map();
-
-  elements.forEach((item, index) => {
-    if (item.groupId) {
-      if (!groupMap.has(item.groupId)) {
-        const grp = {
-          type: 'group',
-          groupId: item.groupId,
-          items: []
-        };
-        groupMap.set(item.groupId, grp);
-        treeEntries.push(grp);
-      }
-      groupMap.get(item.groupId).items.push({ item, index });
-    } else {
-      treeEntries.push({ type: 'single', item, index });
-    }
-  });
-
+  const sel = new Set(app.selectedItems);
+  const filter = filterText.trim().toLowerCase();
+  const matches = (name) => !filter || name.toLowerCase().includes(filter);
   let html = '';
-  treeEntries.forEach(entry => {
-    if (entry.type === 'single') {
-      const { item, index } = entry;
-      const info = getElementInfo(item, index);
-      const isSel = app.selectedItems.includes(item);
-      html += `
-        <div class="element-item-card ${isSel ? 'selected' : ''}" data-elindex="${index}">
-          <div class="element-item-header" draggable="true">
-            <div class="element-item-info">
-              <span class="element-drag-handle" title="Drag to reorder layer">::</span>
-              <span style="font-size:8px; color:var(--text-dim);">${isSel ? '▾' : '▸'}</span>
-              <span class="element-item-tag" style="font-size:9px; font-weight:700; color:var(--accent); background:rgba(56,189,248,0.1); padding:1px 4px; border-radius:3px;">${info.tag}</span>
-              <span class="element-label-text">${info.label}</span>
-            </div>
-            <div class="element-item-actions">
-              <button class="element-item-btn element-item-del" data-delindex="${index}" title="Delete Element">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-              </button>
-            </div>
-          </div>
-        </div>
-      `;
-    } else {
-      const { groupId, items } = entry;
-      const groupItemsList = items.map(x => x.item);
-      const isGroupSelected = groupItemsList.length > 0 && groupItemsList.every(i => app.selectedItems.includes(i));
-      const isExpanded = treeExpandedGroups.has(groupId);
 
-      let groupTag = 'GROUP';
-      let groupLabel = `Group (${items.length} items)`;
-      if (groupId.startsWith('g_circle_')) {
-        groupTag = 'CIRCLE';
-        groupLabel = `Circle Wall (${items.length} segments)`;
-      } else if (groupId.startsWith('g_arc_')) {
-        groupTag = 'ARC';
-        groupLabel = `Arc Wall (${items.length} segments)`;
-      } else if (groupId.startsWith('g_rect_')) {
-        groupTag = 'RECT';
-        groupLabel = `Rectangle Wall (${items.length} segments)`;
-      } else if (groupId.startsWith('g_poly_')) {
-        groupTag = 'POLYGON';
-        groupLabel = `Polygon Wall (${items.length} segments)`;
-      }
-
-      let childrenHtml = '';
-      if (isExpanded) {
-        childrenHtml = `
-          <div class="tree-children-container">
-            ${items.map(({ item: child, index: childIdx }, sIdx) => {
-              const isChildSel = app.selectedItems.includes(child);
-              return `
-                <div class="tree-child-item ${isChildSel ? 'selected' : ''}" data-childindex="${childIdx}" title="Click to inspect segment">
-                  <span>↳ Segment #${sIdx + 1}</span>
-                  <span style="font-size:8.5px; opacity:0.6;">#${childIdx + 1}</span>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        `;
-      }
-
-      html += `
-        <div class="element-item-card tree-group-card ${isGroupSelected ? 'selected' : ''}" data-groupid="${groupId}">
-          <div class="element-item-header tree-group-header">
-            <div class="element-item-info">
-              <span class="tree-toggle-arrow" data-togglegroup="${groupId}" title="Toggle Feature Tree">${isExpanded ? '▼' : '▶'}</span>
-              <span class="element-item-tag" style="font-size:9px; font-weight:700; color:#38bdf8; background:rgba(56,189,248,0.15); padding:1px 4px; border-radius:3px;">${groupTag}</span>
-              <span class="element-label-text" style="font-weight:600;">${groupLabel}</span>
-            </div>
-            <div class="element-item-actions">
-              <button class="element-item-btn element-group-del" data-delgroup="${groupId}" title="Delete Entire Group">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-              </button>
-            </div>
-          </div>
-          ${childrenHtml}
-        </div>
-      `;
+  for (const entry of buildEntries()) {
+    if (entry.kind === 'item') {
+      const name = elementName(entry.item, engine);
+      if (!matches(name)) continue;
+      html += treeRowHtml({ index: entry.index, icon: itemIcon(entry.item), name, meta: itemMeta(entry.item), selected: sel.has(entry.item) });
+      continue;
     }
+    const gname = groupName(entry.groupId, engine);
+    const childNames = entry.members.map(m => elementName(m.item, engine));
+    if (!matches(gname) && !childNames.some(matches)) continue;
+    const allWalls = entry.members.every(m => m.item instanceof Wall);
+    const kind = groupKindOf(entry.groupId);
+    const expanded = expandedGroups.has(entry.groupId) || (!!filter && !matches(gname));
+    html += treeRowHtml({
+      groupId: entry.groupId, icon: iconFrom(GROUP_ICON_SOURCES[kind]), name: gname,
+      meta: `${entry.members.length} ${allWalls ? 'segments' : 'elements'}`,
+      selected: entry.members.every(m => sel.has(m.item)), expanded, ungroup: true
+    });
+    if (expanded) {
+      entry.members.forEach((m, i) => {
+        html += treeRowHtml({ index: m.index, depth: 1, icon: itemIcon(m.item), name: childNames[i], meta: itemMeta(m.item), selected: sel.has(m.item), deletable: false });
+      });
+    }
+  }
+  elementsListContainer.innerHTML = html || '<p class="tree-empty">No element matches the filter.</p>';
+  bindTreeEvents();
+}
+
+// ---------------------------------------------------------------------------
+// Interaction
+// ---------------------------------------------------------------------------
+function rowItems(row) {
+  if (row.dataset.group !== undefined) return engine.elements.filter(e => e.groupId === row.dataset.group);
+  const item = engine.elements[parseInt(row.dataset.index, 10)];
+  return item ? [item] : [];
+}
+
+function selectFromRow(row, e) {
+  const items = rowItems(row);
+  if (items.length === 0) return;
+  if (items.length === 1 && window.sequencerUI?.handleItemPicked(items[0])) return;
+  const isChild = row.classList.contains('tree-child');
+  const target = isChild ? items : (items[0].groupId ? getAllGroupItems(items[0]) : items);
+  if (e.shiftKey || e.ctrlKey || e.metaKey) {
+    const allIn = target.every(i => app.selectedItems.includes(i));
+    app.selectedItems = allIn ? app.selectedItems.filter(i => !target.includes(i)) : [...app.selectedItems, ...target.filter(i => !app.selectedItems.includes(i))];
+  } else {
+    app.selectedItems = target;
+  }
+  updateElementsList();
+}
+
+function startRename(row) {
+  const nameEl = row.querySelector('.tree-name');
+  const items = rowItems(row);
+  if (!nameEl || items.length === 0) return;
+  const input = document.createElement('input');
+  input.className = 'tree-rename';
+  input.value = nameEl.textContent;
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (commit && input.value.trim() && input.value !== nameEl.textContent) {
+      recordUndoState(false);
+      if (row.dataset.group !== undefined) renameGroup(row.dataset.group, input.value, engine);
+      else renameElement(items[0], input.value);
+    }
+    updateElementsList();
+    window.sequencerUI?.render();
+  };
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') finish(false);
   });
+  input.addEventListener('blur', () => finish(true));
+}
 
-  elementsListContainer.innerHTML = html;
+let dragFromIndex = null;
 
-  // Feature Tree toggle arrow click
-  elementsListContainer.querySelectorAll('.tree-toggle-arrow').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+function bindTreeEvents() {
+  elementsListContainer.querySelectorAll('.tree-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.tree-actions') || e.target.closest('.tree-caret') || e.target.closest('.tree-rename')) return;
+      selectFromRow(row, e);
+    });
+    row.querySelector('.tree-name')?.addEventListener('dblclick', (e) => {
       e.stopPropagation();
-      const gid = btn.dataset.togglegroup;
-      if (treeExpandedGroups.has(gid)) treeExpandedGroups.delete(gid);
-      else treeExpandedGroups.add(gid);
+      startRename(row);
+    });
+    row.addEventListener('mouseenter', () => { renderer.hoverItems = rowItems(row); });
+    row.addEventListener('mouseleave', () => { renderer.hoverItems = null; });
+
+    row.querySelector('.tree-caret')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const gid = row.dataset.group;
+      if (expandedGroups.has(gid)) expandedGroups.delete(gid);
+      else expandedGroups.add(gid);
+      renderElementTree();
+    });
+    row.querySelector('[data-ungroup]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      recordUndoState(false);
+      rowItems(row).forEach(i => { delete i.groupId; });
       updateElementsList();
     });
-  });
-
-  // Group Header click: select/deselect all in group
-  elementsListContainer.querySelectorAll('.tree-group-header').forEach(hdr => {
-    hdr.addEventListener('click', (e) => {
-      if (e.target.closest('.element-item-actions') || e.target.closest('.tree-toggle-arrow')) return;
-      const card = hdr.closest('.tree-group-card');
-      const gid = card.dataset.groupid;
-      const grp = groupMap.get(gid);
-      if (grp) {
-        const groupItemsList = grp.items.map(x => x.item);
-        const isAllSelected = groupItemsList.length > 0 && groupItemsList.every(i => app.selectedItems.includes(i));
-        if (isAllSelected && app.selectedItems.length === groupItemsList.length) {
-          app.selectedItems = [];
-        } else {
-          app.selectedItems = [...groupItemsList];
-        }
-        updateElementsList();
-      }
-    });
-  });
-
-  // Group Delete button
-  elementsListContainer.querySelectorAll('.element-group-del').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    row.querySelector('.tree-del')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      const gid = btn.dataset.delgroup;
-      const grp = groupMap.get(gid);
-      if (grp) {
-        app.selectedItems = grp.items.map(x => x.item);
-        deleteSelectedItems();
-      }
+      app.selectedItems = rowItems(row);
+      deleteSelectedItems();
+      renderer.hoverItems = null;
     });
-  });
 
-  // Child item click in Feature Tree
-  elementsListContainer.querySelectorAll('.tree-child-item').forEach(el => {
-    el.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const childIdx = parseInt(el.dataset.childindex, 10);
-      const childItem = elements[childIdx];
-      if (childItem && window.sequencerUI && window.sequencerUI.handleItemPicked(childItem)) {
-        return;
-      }
-      if (childItem) {
-        app.selectedItems = [childItem];
-        updateElementsList();
-      }
-    });
-  });
-
-  // Drag and Drop Layer Reordering (Single item cards)
-  let draggedCardIdx = null;
-  let hasDragged = false;
-  const cards = elementsListContainer.querySelectorAll('.element-item-card[data-elindex]');
-
-  cards.forEach(card => {
-    const header = card.querySelector('.element-item-header');
-    if (header) {
-      header.addEventListener('dragstart', (e) => {
-        if (e.target.closest('.element-item-del') || e.target.closest('button')) {
-          e.preventDefault();
-          return;
-        }
-        hasDragged = true;
-        draggedCardIdx = parseInt(card.dataset.elindex, 10);
-        card.classList.add('dragging');
+    // Layer order: drag single rows onto another row
+    if (row.getAttribute('draggable') === 'true') {
+      row.addEventListener('dragstart', (e) => {
+        dragFromIndex = parseInt(row.dataset.index, 10);
+        row.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', String(draggedCardIdx));
+        e.dataTransfer.setData('text/plain', String(dragFromIndex));
       });
-
-      header.addEventListener('dragend', () => {
-        cards.forEach(c => {
-          c.classList.remove('dragging');
-          c.classList.remove('drag-over');
-        });
-        draggedCardIdx = null;
-        setTimeout(() => { hasDragged = false; }, 50);
+      row.addEventListener('dragend', () => {
+        dragFromIndex = null;
+        elementsListContainer.querySelectorAll('.tree-row').forEach(r => r.classList.remove('dragging', 'drag-over'));
       });
     }
-
-    card.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      card.classList.add('drag-over');
-    });
-
-    card.addEventListener('dragleave', () => {
-      card.classList.remove('drag-over');
-    });
-
-    card.addEventListener('drop', (e) => {
-      e.preventDefault();
-      card.classList.remove('drag-over');
-      const targetIdx = parseInt(card.dataset.elindex, 10);
-      if (draggedCardIdx !== null && draggedCardIdx !== targetIdx && !isNaN(targetIdx)) {
-        recordUndoState();
-        engine.reorderElements(draggedCardIdx, targetIdx);
-        updateElementsList();
-      }
-    });
-  });
-
-  // Single card header click: select / accordion toggle
-  elementsListContainer.querySelectorAll('.element-item-card[data-elindex] > .element-item-header').forEach(hdr => {
-    hdr.addEventListener('click', (e) => {
-      if (hasDragged || e.target.closest('.element-item-actions')) return;
-      const card = hdr.closest('.element-item-card');
-      const idx = parseInt(card.dataset.elindex, 10);
-      const item = elements[idx];
-      if (item && window.sequencerUI && window.sequencerUI.handleItemPicked(item)) {
-        return;
-      }
-      if (item) {
-        if (app.selectedItems.includes(item) && app.selectedItems.length === 1) {
-          app.selectedItems = [];
-        } else {
-          app.selectedItems = item.groupId ? getAllGroupItems(item) : [item];
+    if (row.dataset.index !== undefined && !row.classList.contains('tree-child')) {
+      row.addEventListener('dragover', (e) => {
+        if (dragFromIndex === null) return;
+        e.preventDefault();
+        row.classList.add('drag-over');
+      });
+      row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const to = parseInt(row.dataset.index, 10);
+        if (dragFromIndex !== null && dragFromIndex !== to) {
+          recordUndoState(false);
+          engine.reorderElements(dragFromIndex, to);
+          updateElementsList();
         }
-        updateElementsList();
-      }
-    });
+      });
+    }
   });
 
-  // Single card delete button
-  elementsListContainer.querySelectorAll('.element-item-card[data-elindex] .element-item-del').forEach(delBtn => {
-    delBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(delBtn.dataset.delindex, 10);
-      const item = elements[idx];
-      if (item) {
-        app.selectedItems = [item];
-        deleteSelectedItems();
-      }
-    });
+  elementsListContainer.querySelector('.tree-row.selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+// Filter box above the tree (created once)
+function ensureFilterInput() {
+  if (document.getElementById('treeFilter')) return;
+  const input = document.createElement('input');
+  input.id = 'treeFilter';
+  input.type = 'search';
+  input.className = 'tree-filter';
+  input.placeholder = 'Filter elements…';
+  input.addEventListener('input', () => {
+    filterText = input.value;
+    renderElementTree();
+  });
+  input.addEventListener('keydown', (e) => e.stopPropagation());
+  elementsListContainer.parentElement.insertBefore(input, elementsListContainer);
+}
+
+// Live values in the tree (~4 Hz), without rebuilding the rows.
+function refreshTreeLive() {
+  if (!elementsListContainer) return;
+  elementsListContainer.querySelectorAll('.tree-row[data-index]').forEach(row => {
+    const item = engine.elements[parseInt(row.dataset.index, 10)];
+    const meta = row.querySelector('.tree-meta');
+    if (item && meta) {
+      const text = itemMeta(item);
+      if (meta.textContent !== text) meta.textContent = text;
+    }
   });
 }
 
@@ -19430,7 +19356,6 @@ btnPlayPause.addEventListener('click', () => {
     app.selectedItems = [];
     resetPolygonDraft();
     pointer.arcSteps = [];
-    closePopup();
     closeContextMenu();
   }
 
@@ -19456,7 +19381,6 @@ btnStep.addEventListener('click', () => {
     ribbonToolBtns.forEach(b => b.classList.remove('active'));
     document.getElementById('toolSelect')?.classList.add('active');
     if (toolDialogPanel) toolDialogPanel.style.display = 'none';
-    closePopup();
     closeContextMenu();
   }
   pushHistoryFrame();
@@ -19485,7 +19409,6 @@ btnStopReset.addEventListener('click', () => {
   playIcon.classList.add('is-play');
   playIcon.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>';
   
-  closePopup();
   closeContextMenu();
   updateElementsList();
   renderToolProperties(app.activeTool);
@@ -19510,12 +19433,10 @@ function updateZoomText() {
 btnZoomIn.addEventListener('click', () => {
   renderer.zoomAt(canvas.width * 0.5, canvas.height * 0.5, 1.2);
   updateZoomText();
-  updatePopupPosition();
 });
 btnZoomOut.addEventListener('click', () => {
   renderer.zoomAt(canvas.width * 0.5, canvas.height * 0.5, 0.83);
   updateZoomText();
-  updatePopupPosition();
 });
 btnResetView.addEventListener('click', fitViewToScene);
 
@@ -19586,7 +19507,6 @@ function fitViewToScene() {
     renderer.setViewport(cx - (bounds.minX + bounds.maxX) * 0.5 * z, cy - (bounds.minY + bounds.maxY) * 0.5 * z, z);
   }
   updateZoomText();
-  updatePopupPosition();
 }
 
 
@@ -19932,7 +19852,6 @@ function setProjectName(name) {
 }
 
 function refreshSceneUI() {
-  closePopup();
   closeContextMenu();
   updateElementsList();
   renderToolProperties(app.activeTool);
@@ -19960,7 +19879,6 @@ function stopAndResetSimulationForNewScene() {
   app.selectedItems = [];
   resetPolygonDraft();
   pointer.arcSteps = [];
-  closePopup();
   closeContextMenu();
 }
 
@@ -20074,7 +19992,6 @@ btnToolbarClear.addEventListener('click', newCanvas);
 function selectAllElements() {
   if (app.isSimulating) return;
   app.selectedItems = [...engine.elements];
-  closePopup();
   updateElementsList();
 }
 
@@ -20302,7 +20219,6 @@ canvas.addEventListener('wheel', (e) => {
   const coords = getCoords(e);
   renderer.zoomAt(coords.screenX, coords.screenY, factor);
   updateZoomText();
-  updatePopupPosition();
 }, { passive: false });
 
 // Right-Click Context Menu
@@ -20589,7 +20505,6 @@ window.addEventListener('mousemove', (e) => {
   if (pointer.isPanning) {
     renderer.panX = pointer.panStartCamera.x + (coords.screenX - pointer.panStartScreen.x);
     renderer.panY = pointer.panStartCamera.y + (coords.screenY - pointer.panStartScreen.y);
-    updatePopupPosition();
     return;
   }
 
@@ -20621,7 +20536,6 @@ window.addEventListener('mousemove', (e) => {
   // Transform frame drag (resize / rotate)
   if (isTransforming()) {
     updateTransform(coords.worldX, coords.worldY, { shift: e.shiftKey, alt: e.altKey });
-    updatePopupPosition();
     return;
   }
 
@@ -20660,7 +20574,6 @@ window.addEventListener('mousemove', (e) => {
       item.amplitude = Math.max(0, (item.maxPos - item.minPos - halfThick * 2) * 0.5);
       item.centerPos = (item.minPos + item.maxPos) * 0.5;
     }
-    updatePopupPosition();
     return;
   }
 
@@ -20671,7 +20584,6 @@ window.addEventListener('mousemove', (e) => {
     if (dx !== 0 || dy !== 0) {
       moveSelectedItems(dx, dy);
       pointer.moveStartWorld = { x: coords.snapX, y: coords.snapY };
-      updatePopupPosition();
     }
     return;
   }
@@ -20716,7 +20628,6 @@ window.addEventListener('mouseup', (e) => {
     pointer.dragStartWorld = null;
     renderer.draftInfo = null;
     updateElementsList();
-    updatePopupPosition();
     return;
   }
   const wasDraggingHandle = !!pointer.draggingHandle;
@@ -20748,7 +20659,6 @@ window.addEventListener('mouseup', (e) => {
       });
       updateElementsList();
     }
-    updatePopupPosition();
     return;
   }
 
@@ -20913,7 +20823,6 @@ function selectToolButton(btn) {
   resetPolygonDraft();
   pointer.arcSteps = [];
   renderer.draftInfo = null;
-  closePopup();
   closeContextMenu();
   renderToolProperties(tool);
 }
@@ -21045,7 +20954,6 @@ function performUndo() {
   const prevJSON = undoStack.pop();
   engine.importState(JSON.parse(prevJSON), false);
   app.selectedItems = [];
-  closePopup();
   closeContextMenu();
   updateElementsList();
   renderToolProperties(app.activeTool);
@@ -21058,7 +20966,6 @@ function performRedo() {
   const nextJSON = redoStack.pop();
   engine.importState(JSON.parse(nextJSON), false);
   app.selectedItems = [];
-  closePopup();
   closeContextMenu();
   updateElementsList();
   renderToolProperties(app.activeTool);
@@ -21550,7 +21457,6 @@ window.addEventListener('keydown', (e) => {
     }
     resetPolygonDraft();
     pointer.arcSteps = [];
-    closePopup();
     closeContextMenu();
     closeAllMenus();
     closeSaveModal();
@@ -21678,6 +21584,7 @@ function animate(now) {
   if (telemetryTimer >= 0.15) {
     updateChamberCards();
     refreshInspectorLive();
+    refreshTreeLive();
     telemetryTimer = 0;
   }
 

@@ -21,7 +21,6 @@ import { updateElementsList } from './elementTree.js';
 import { closeAllMenus } from './menus.js';
 import { updateZoomText } from './playback.js';
 import { createArcWall, createCircleWall, deleteSelectedItems, duplicateSelection, findItemAt, findItemsInBox, findPistonSnap, getAllGroupItems, moveSelectedItems, toggleGroupSelection } from './selection.js';
-import { updatePopupPosition } from './popup.js';
 import { beginTransform, constrainEndpoint, cursorForHit, endTransform, getLinkedEndpoints, hitTestTransform, isTransforming, moveEndpoints, updateTransform } from './transform.js';
 import { openSelectionSizeInput } from './dimensions.js';
 
@@ -121,7 +120,6 @@ canvas.addEventListener('wheel', (e) => {
   const coords = getCoords(e);
   renderer.zoomAt(coords.screenX, coords.screenY, factor);
   updateZoomText();
-  updatePopupPosition();
 }, { passive: false });
 
 // Right-Click Context Menu
@@ -408,7 +406,6 @@ window.addEventListener('mousemove', (e) => {
   if (pointer.isPanning) {
     renderer.panX = pointer.panStartCamera.x + (coords.screenX - pointer.panStartScreen.x);
     renderer.panY = pointer.panStartCamera.y + (coords.screenY - pointer.panStartScreen.y);
-    updatePopupPosition();
     return;
   }
 
@@ -440,7 +437,6 @@ window.addEventListener('mousemove', (e) => {
   // Transform frame drag (resize / rotate)
   if (isTransforming()) {
     updateTransform(coords.worldX, coords.worldY, { shift: e.shiftKey, alt: e.altKey });
-    updatePopupPosition();
     return;
   }
 
@@ -479,7 +475,6 @@ window.addEventListener('mousemove', (e) => {
       item.amplitude = Math.max(0, (item.maxPos - item.minPos - halfThick * 2) * 0.5);
       item.centerPos = (item.minPos + item.maxPos) * 0.5;
     }
-    updatePopupPosition();
     return;
   }
 
@@ -490,7 +485,6 @@ window.addEventListener('mousemove', (e) => {
     if (dx !== 0 || dy !== 0) {
       moveSelectedItems(dx, dy);
       pointer.moveStartWorld = { x: coords.snapX, y: coords.snapY };
-      updatePopupPosition();
     }
     return;
   }
@@ -535,7 +529,6 @@ window.addEventListener('mouseup', (e) => {
     pointer.dragStartWorld = null;
     renderer.draftInfo = null;
     updateElementsList();
-    updatePopupPosition();
     return;
   }
   const wasDraggingHandle = !!pointer.draggingHandle;
@@ -567,7 +560,6 @@ window.addEventListener('mouseup', (e) => {
       });
       updateElementsList();
     }
-    updatePopupPosition();
     return;
   }
 

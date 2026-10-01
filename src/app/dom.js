@@ -73,10 +73,6 @@ export const elementsListContainer = document.getElementById('elementsListContai
 export const elementCountBadge = document.getElementById('elementCountBadge');
 
 // Context Popup & Menu
-export const elementPopup = document.getElementById('elementPopup');
-export const popupTitle = document.getElementById('popupTitle');
-export const popupBody = document.getElementById('popupBody');
-export const btnPopupClose = document.getElementById('btnPopupClose');
 
 export const contextMenu = document.getElementById('contextMenu');
 export const ctxDuplicate = document.getElementById('ctxDuplicate');

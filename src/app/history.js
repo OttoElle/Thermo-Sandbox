@@ -5,7 +5,6 @@ import { app } from './state.js';
 import { renderToolProperties } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
 import { closeContextMenu } from './canvasInput.js';
-import { closePopup } from './popup.js';
 
 // Undo & Redo Stacks for Edit Mode
 export const undoStack = [];
@@ -30,7 +29,6 @@ export function performUndo() {
   const prevJSON = undoStack.pop();
   engine.importState(JSON.parse(prevJSON), false);
   app.selectedItems = [];
-  closePopup();
   closeContextMenu();
   updateElementsList();
   renderToolProperties(app.activeTool);
@@ -43,7 +41,6 @@ export function performRedo() {
   const nextJSON = redoStack.pop();
   engine.importState(JSON.parse(nextJSON), false);
   app.selectedItems = [];
-  closePopup();
   closeContextMenu();
   updateElementsList();
   renderToolProperties(app.activeTool);

@@ -10,7 +10,6 @@ export const app = {
   hasActiveSession: false,
   activeTool: 'select',
   selectedItems: [],
-  popupTargetItem: null,
 };
 window.app = app; // for tests and console debugging
 

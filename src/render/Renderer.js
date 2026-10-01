@@ -45,6 +45,7 @@ export class Renderer {
     this.showItemHandles = true;
     this.hudLabel = null;
     this.hoverItem = null;
+    this.hoverItems = null;
     this.colorByVelocity = true;
     this.snapCursor = null; // { x, y } in world coordinates
 
@@ -266,8 +267,12 @@ export class Renderer {
     // 9.5 Sequencer Action Selection Glow (Subtle Cyan Outline, No Handles)
     if (this.highlightedSequencerItem) {
       this.drawSequencerHighlight(this.highlightedSequencerItem);
-    } else if (this.hoverItem && !(Array.isArray(selectedItems) && selectedItems.includes(this.hoverItem))) {
-      this.drawSequencerHighlight(this.hoverItem, 0.45);
+    } else {
+      // Hover from the canvas (one element) or the element tree (a whole group)
+      const hovered = this.hoverItems || (this.hoverItem ? [this.hoverItem] : []);
+      for (const item of hovered) {
+        if (!(Array.isArray(selectedItems) && selectedItems.includes(item))) this.drawSequencerHighlight(item, 0.45);
+      }
     }
 
     // 10. Draft Previews (Valves, Walls, Rectangles, Marquee Selection)

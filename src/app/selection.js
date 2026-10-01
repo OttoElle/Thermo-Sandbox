@@ -21,7 +21,6 @@ import { recordUndoState } from './history.js';
 import { wallOptions } from './toolPanel.js';
 import { updateElementsList } from './elementTree.js';
 import { closeContextMenu } from './canvasInput.js';
-import { closePopup } from './popup.js';
 
 // ============================================================================
 // Canvas Selection & Multi-Item Transforms
@@ -486,7 +485,6 @@ export function deleteSelectedItems() {
   }
 
   app.selectedItems = [];
-  closePopup();
   closeContextMenu();
   updateElementsList();
   engine.syncWallsToGPU();

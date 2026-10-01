@@ -187,59 +187,6 @@ body.sequencer-expanded .floating-vel-legend {
 }
 
 /* ==========================================================================
-   4. Positioned Floating Context Popup on Canvas
-   ========================================================================== */
-.element-popup {
-  position: absolute;
-  background-color: #1e222d;
-  border: 1px solid var(--border-card);
-  border-radius: 10px;
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);
-  width: 240px;
-  z-index: 50;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  transform: translate(-50%, -110%);
-  pointer-events: auto;
-}
-
-.popup-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 6px;
-}
-
-.popup-title {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent-blue);
-  text-transform: uppercase;
-}
-
-.popup-close {
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  font-size: 16px;
-  cursor: pointer;
-  line-height: 1;
-}
-
-.popup-close:hover {
-  color: #ffffff;
-}
-
-.popup-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* ==========================================================================
    7. Modern WebGPU Requirement Modal
    ========================================================================== */
 .webgpu-error-overlay {

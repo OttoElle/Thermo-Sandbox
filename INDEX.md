@@ -27,10 +27,9 @@
 ## src/control/ (Cycle Automation & Sequencer Architecture)
 - **CycleSequencer.js**: Precision GRAFCET state machine coordinator managing steps, loop cycles, and state import/export.
 - **SequencerConditions.js**: Compound transition condition evaluator (Time Duration, Piston TDC/BDC/Position, Sensor Pressure/Temp) with AND/OR logic.
-- **SequencerExecutor.js**: Generic action snapshot applier updating pistons, valves, thermals, emitters, sinks, and regulators in the simulation engine.
-- **SequencerCatalogDefaults.js**: Canonical default parameter reference and lookup helpers conforming to TOOL_CATALOG.md for live default tracking and one-click reset.
-- **SequencerFieldControls.js**: Modular UI form controls (DualInput slider+number, 5-button direction toggles, segmented buttons) with default indicators and live modified status.
-- **SequencerActionFields.js**: Dynamic inspector property form generator and snapshot extractor for element action snapshots (omitting thickness, spawner, chamber).
+- **SequencerActions.js**: Step actions on the element schema: sequenceable types, action values, translation of actions saved by older versions (`normalizeAction`), applying actions (incl. piston drive commands) and summaries.
+- **SequencerExecutor.js**: Applies the actions of a step (delegates to SequencerActions).
+- **SequencerActionFields.js**: Action form (shared property form in the `sequencer` context) and snapshot extraction.
 - **SequencerActionDialog.js**: Object-anchored floating CAD modal dialog with live cyan glow highlight, smooth camera centering, free header dragging, modified indicators, and Reset to Default button.
 - **SequencerTransitionDialog.js**: Compound transition configuration modal with AND/OR combining gates and safety fallback timeouts.
 - **SequencerTransitionBuilder.js**: 2D compound condition builder grid with bracketed rows, monochrome CAD SVG chips, clickable operator pills, and formula generator.
@@ -77,15 +76,20 @@
 ## src/
 - **main.js**: App entry point: imports the `src/app` modules, starts the ambient splash scene and runs the `requestAnimationFrame` loop.
 
+## src/model/ (Element Schema)
+- **elementSchema.js**: Single source of truth for element properties (labels, units, ranges, defaults, conditional fields, setters, contexts tool / inspector / sequencer); `elementTypeOf()`.
+- **elementNames.js**: Element and group display names, stored with the scene.
+
 ## src/app/ (UI Orchestration, split from the former 4.6k-line main.js)
 - **state.js**: Shared mutable state: `app` (project name, simulating/splash flags, active tool, selection, popup target; exposed as `window.app`) and `pointer` (mouse, drag and drawing-draft state), `resetPolygonDraft()`.
 - **dom.js**: DOM element lookups shared by the modules.
 - **core.js**: Engine, Renderer, charts and SequencerUI instances (`window.engine`/`renderer`/`sequencerUI`), canvas sizing, WebGPU + GPU compute start-up.
 - **history.js**: Edit-mode undo/redo stacks and the playback history (Step Back, GPU snapshots).
 - **fields.js**: Grid snapping and the dual slider/number input helpers.
-- **toolPanel.js**: `toolConfigs` (tool defaults), ribbon tool buttons, tool help and the floating tool properties dialog.
-- **inspector.js**: Accordion property editors for selected elements.
-- **elementTree.js**: Elements outline list and group management in the left sidebar.
+- **toolPanel.js**: `toolConfigs` (tool defaults derived from the schema), `wallOptions()`, ribbon tool buttons, tool help and the floating tool dialog.
+- **propertyForm.js**: Renders schema fields (slider + number, segmented toggles, directions, switches, selects, text, color) with default notch, modified marker and reset; used by tool dialog, properties panel and sequencer.
+- **inspector.js**: Properties panel below the tree: header with name, live info, geometry (X/Y/W/H or length/angle), schema fields for single or same-type multi-selections, sensor piston binding, actions.
+- **elementTree.js**: Element tree: shapes/groups with segments, icons, names (double-click rename), live values, filter, hover highlight, multi-select, layer drag & drop.
 - **menus.js**: Menu bar (File/Edit/View/Simulation/Help) with enabled/checked state, scene lifecycle (`openScene` for presets/recent/files, New Canvas, Revert to Saved, Save/Save As, PNG export), view toggles.
 - **transform.js**: Selection transform frame (resize/rotate handles, hit-testing, cursors), linked vertices of wall shapes, exact size setters.
 - **dimensions.js**: Live dimension labels while drawing, typed dimension input (drawing and selection size labels).
@@ -93,7 +97,6 @@
 - **playback.js**: Play/pause/step/step-back/stop, physics model and gravity toggles, zoom controls, `fitViewToScene()` (zoom to fit into the area not covered by panels).
 - **canvasInput.js**: Canvas mouse interaction: coordinates and magnetic snapping, context menu, drawing (`createFromDrag`, click-move-click, polyline), dragging, panning.
 - **selection.js**: Selection transforms (rotate/flip/group), duplicate, hit-testing and box selection, circle/arc wall generators, move and delete.
-- **popup.js**: Element popup next to the selected canvas item.
 - **keyboard.js**: Keyboard shortcuts, info + shortcuts modals and chart tabs (side-effect module, imported bare by main.js).
 - **dashboard.js**: Right sidebar: system stats, chamber cards and custom charts.
 - **toolPreview.js**: Live previews of the active drawing tool.

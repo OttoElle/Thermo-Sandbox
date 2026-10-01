@@ -267,6 +267,29 @@ def run_pass(page, label):
     typed_hx = page.eval('JSON.stringify(window.engine.heatExchangers.map(h => [h.x, h.y, h.width, h.height]))')
     page.click_id('toolSelect')
 
+    # Element tree + properties panel: select the shape in the tree, rename it,
+    # edit a property for all its segments, undo it.
+    tree = page.eval("""(() => {
+        document.querySelector('.tree-row[data-group]').click();
+        document.querySelector('.tree-row[data-group] .tree-name').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        const inp = document.querySelector('.tree-rename');
+        inp.value = 'Cylinder';
+        inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+        const slider = document.querySelector('#propertiesPanel .prop-row[data-key="conductivity"] .prop-slider');
+        slider.dispatchEvent(new PointerEvent('pointerdown'));
+        slider.value = 0.5;
+        slider.dispatchEvent(new Event('input'));
+        const gid = window.app.selectedItems[0].groupId;
+        const after = window.engine.walls.filter(w => w.groupId === gid).map(w => w.conductivity);
+        document.getElementById('btnUndo').click();
+        const walls = window.engine.walls.filter(w => w.groupId === gid);
+        return {
+            name: document.querySelector('.tree-row[data-group] .tree-name').textContent,
+            title: document.getElementById('propertiesTitle').textContent,
+            after, undone: walls.map(w => w.conductivity)
+        };
+    })()""")
+
     def closed(ws):
         return all(ws[i][2:] == ws[(i + 1) % len(ws)][:2] for i in range(len(ws)))
 
@@ -290,6 +313,8 @@ def run_pass(page, label):
     assert max(w[0] for w in resized) == 280 and closed(resized), f'frame resize failed: {resized}'
     assert rotated != resized and closed(rotated), f'rotation failed: {rotated}'
     assert after_gas == rotated, 'spawner tool moved a wall vertex'
+    assert tree['name'] == 'Cylinder' and tree['title'].startswith('Cylinder'), f'tree rename failed: {tree}'
+    assert tree['after'] == [0.5] * 4 and tree['undone'] == [0] * 4, f'properties panel edit/undo failed: {tree}'
     assert json.loads(typed_hx) == [[400, 0, 120, 60]], f'typed dimensions failed: {typed_hx}'
     assert n_reverted == 0 and n_revert_undone == n_before_clear, f'Revert to Saved is not undoable ({n_before_clear} -> {n_reverted} -> {n_revert_undone})'
     assert not page.problems, f'{len(page.problems)} runtime error(s) in {label} mode'

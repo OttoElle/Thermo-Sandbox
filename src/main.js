@@ -5,7 +5,7 @@ import { engine, renderer, sequencerUI, tempChart, velChart } from './app/core.j
 import { app } from './app/state.js';
 import { pushHistoryFrame } from './app/history.js';
 import { renderToolProperties, selectToolButton } from './app/toolPanel.js';
-import { updateElementsList } from './app/elementTree.js';
+import { refreshTreeLive, updateElementsList } from './app/elementTree.js';
 import { refreshInspectorLive } from './app/inspector.js';
 import { updateViewMenuLabels } from './app/menus.js';
 import { customCharts, updateChamberCards, updateSystemStats } from './app/dashboard.js';
@@ -83,6 +83,7 @@ function animate(now) {
   if (telemetryTimer >= 0.15) {
     updateChamberCards();
     refreshInspectorLive();
+    refreshTreeLive();
     telemetryTimer = 0;
   }
 
