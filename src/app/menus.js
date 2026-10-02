@@ -179,7 +179,7 @@ function revertToSaved() {
 function newCanvas() {
   if (app.isSimulating) return;
   recordUndoState();
-  engine.clear();
+  engine.resetScene();
   resetPolygonDraft();
   pointer.arcSteps = [];
   app.selectedItems = [];

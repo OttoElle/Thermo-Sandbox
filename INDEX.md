@@ -21,7 +21,7 @@
 - **sidebar-right.css**: Right sidebar (`#sidebarRight`), system statistics grid, chamber cards accordion, and telemetry charts.
 - **playback.css**: Bottom floating playback dock, play/pause/step controls, speed slider, model & gravity toggles, and zoom controls.
 - **modals.css**: Modal dialog system, save/export dialog, file import preview, and simulation overlay lock card.
-- **splash.css**: Welcome dashboard overlay (`#splashOverlay`), quick actions, recent profiles, presets library, and splash-mode styling.
+- **splash.css**: Start screen overlay (`#splashOverlay`): quick actions, recent scenes, example cards, splash-mode styling.
 - **sequencer.css**: Persistent bottom drawer (`#seqDrawerHeader`, `#seqDrawerBody`), GRAFCET timeline, step cards, and transition gates.
 
 ## src/control/ (Cycle Automation & Sequencer Architecture)
@@ -40,7 +40,7 @@
 - **SequencerUI.js**: Master coordinator facade integrating dock, timeline, action dialog, transition dialog, and engine hooks.
 
 ## src/presets/ (Simulation Templates)
-- **index.js**: Library of built-in thermodynamic experiments (Split-Stirling Cryocooler, Venturi Nozzle, Dual-Chamber Partition, Joule-Thomson, Adiabatic Cylinder, Brownian Motion).
+- **index.js**: Start-screen examples (`Examples`, `loadExample`): Gas in a Box, Thermal Equilibrium, Free Expansion, Atmosphere in Gravity, Adiabatic Compression, Carnot, Otto, Stirling. Each one is checked by `tests/test_examples_cdp.py`.
 
 ## src/physics/ (Physics Engine & Geometry)
 - **HistoryBuffer.js**: Time series of the system and sensor zones: full run kept (recent samples at full resolution, older ones in uniform time buckets), sequencer cycle per sample.
@@ -103,7 +103,10 @@
 - **keyboard.js**: Keyboard shortcuts, info + shortcuts modals and chart tabs (side-effect module, imported bare by main.js).
 - **dashboard.js**: Right sidebar: system stats, chamber cards and custom charts.
 - **toolPreview.js**: Live previews of the active drawing tool.
-- **splash.js**: Splash screen, presets, recent profiles and the ambient background scene.
+- **splash.js**: Start screen: example cards and recent scenes with thumbnails, Continue (autosave), the ambient background scene.
+- **sceneThumbnail.js**: Draws a small preview of a saved scene state (walls, pistons, zones, particles by speed).
+- **autosave.js**: Keeps the open scene in localStorage (every 4 s, on page hide); `getAutosave()` for Continue.
+- **canvasHint.js**: Hint on an empty canvas with a link to the examples.
 
 ## tests/ (Automated Verification & CDP Test Suites)
 - **verify_all.py**: Master test suite running file size audits (< 350 lines), CSS syntax checks, build verification (incl. module check), headless browser runtime test, WebGPU runtime test, 50,000 particle Zero-Copy compute verification, and the UI smoke test.
@@ -113,4 +116,5 @@
 - **test_sequencer_modal_cdp.py**: Chrome DevTools Protocol end-to-end test verifying sequencer UI, dialogs, exclusive accordions, and scrolling.
 - **test_sequencer_cycles_cdp.py**: Sequencer on a real cycle (alpha Stirling, two pistons, chamber bound to both): closed cycle, TDC on the gas side, isochoric steps, step labels in the history; adiabatic energy balance of the piston face pressure.
 - **test_transition_cdp.py**: CDP test suite verifying 2D compound transition builder, Boolean precedence, square chip collapse, and cycle execution.
+- **test_examples_cdp.py**: Runs every start-screen example and checks the physics claim of its card (Maxwell-Boltzmann relaxation, equilibrium without mixing, free expansion, barometric layers, adiabatic heating, positive net work of the three cycles). `uv run tests/test_examples_cdp.py carnot:7` runs one example for more cycles.
 - **test_ui_smoke_cdp.py**: UI smoke test run against the bundle, `index.html?dev` and the standalone HTML: all ribbon tools, drawing every element type with real mouse events, selection/popup/context menu, Delete + undo/redo, view menu, playback; fails on any uncaught exception or console error.

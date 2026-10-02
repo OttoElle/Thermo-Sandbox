@@ -36,6 +36,13 @@
     <!-- Fullscreen Infinite UI & Geometry Canvas (Layer 2, transparent overlay) -->
     <canvas id="simCanvas"></canvas>
 
+    <!-- Shown on an empty canvas (canvasHint.js) -->
+    <div id="emptyCanvasHint" class="empty-canvas-hint" hidden>
+      <div class="empty-canvas-title">Empty canvas</div>
+      <div class="empty-canvas-text">Pick a tool in the ribbon and drag on the canvas: walls, a gas spawner, a sensor zone.<br>Press <kbd>?</kbd> for shortcuts.</div>
+      <button type="button" class="empty-canvas-btn" id="btnHintExamples">Start from an example</button>
+    </div>
+
     <!-- WebGPU Modern Browser Requirement Overlay (Shown only if WebGPU is unavailable) -->
     <div id="webgpuErrorOverlay" class="webgpu-error-overlay" style="display: none;">
       <div class="webgpu-error-card">
@@ -105,10 +112,10 @@
       <!-- ROW 1: Menu Bar, Centered Project Title & Save As -->
       <div class="header-row-menubar">
         <div class="menubar-left">
-          <div class="brand-badge" id="brandBadge" title="Open Welcome Dashboard / Splash Screen">
+          <div class="brand-badge" id="brandBadge" title="Start screen: examples and recent scenes">
             <img src="logo.png" alt="Logo" class="brand-logo-img">
           </div>
-          <span class="brand-title" id="brandTitle" title="Open Welcome Dashboard / Splash Screen">Thermo Sandbox</span>
+          <span class="brand-title" id="brandTitle" title="Start screen: examples and recent scenes">Thermo Sandbox</span>
 
           <div class="header-vdivider"></div>
 
@@ -239,7 +246,7 @@
           <div class="ribbon-group" title="General Tools">
             <span class="ribbon-group-title">TOOLS</span>
             <div class="ribbon-group-controls">
-              <button class="ribbon-tool-btn active" data-tool="select" id="toolSelect" title="Select & Move Tool (Shift+Click to multi-select)">
+              <button class="ribbon-tool-btn active" data-tool="select" id="toolSelect" title="Select & Move (Shift+Click adds to the selection)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7 18 3-7 7-3L3 3z"/></svg>
                 <span>Select</span>
               </button>
@@ -256,7 +263,7 @@
           <div class="ribbon-group" title="Transform Selected Objects">
             <span class="ribbon-group-title">TRANSFORM</span>
             <div class="ribbon-group-controls">
-              <button id="btnRotate90" class="ribbon-btn" title="Rotate Selection 90° Clockwise">
+              <button id="btnRotate90" class="ribbon-btn" title="Rotate 90° Clockwise (R)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               </button>
               <button id="btnFlipH" class="ribbon-btn" title="Flip Selection Horizontally">
@@ -265,7 +272,7 @@
               <button id="btnFlipV" class="ribbon-btn" title="Flip Selection Vertically">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7,8 12,3 17,8"/><polygon points="7,16 12,21 17,16"/><line x1="3" y1="12" x2="21" y2="12"/></svg>
               </button>
-              <button id="btnGroupSelected" class="ribbon-btn" title="Group / Ungroup Selected Objects (Ctrl+G)">
+              <button id="btnGroupSelected" class="ribbon-btn" title="Group (Ctrl+G) / Ungroup (Ctrl+Shift+G)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
               </button>
             </div>
@@ -297,7 +304,7 @@
           <div class="ribbon-group" title="Particle Display">
             <span class="ribbon-group-title">VIEW</span>
             <div class="ribbon-group-controls">
-              <button id="btnToggleVectors" class="ribbon-btn" title="Toggle Velocity Vectors (v⃗)">
+              <button id="btnToggleVectors" class="ribbon-btn" title="Velocity Vectors (V)">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="5" cy="19" r="2.5" fill="currentColor"/><path d="M7.5 16.5L19 5m0 0h-6.5m6.5 0v6.5"/></svg>
               </button>
               <button id="btnToggleColor" class="ribbon-btn active" title="Toggle Particle Color by Speed / Colormap">
@@ -314,19 +321,19 @@
           <div class="ribbon-group ribbon-creation-group" title="Wall Tools">
             <span class="ribbon-group-title">WALLS</span>
             <div class="ribbon-group-controls">
-              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="polygon" id="toolWallPoly" title="Polyline Wall">
+              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="polygon" id="toolWallPoly" title="Wall (polyline; Enter finishes)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 17 9 7 15 15 21 5"/></svg>
                 <span>Polyline</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="rect" id="toolWallRect" title="Rectangle Wall Box">
+              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="rect" id="toolWallRect" title="Rectangle Wall">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
                 <span>Rect</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="arc" id="toolWallArc" title="Circular Arc Wall">
+              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="arc" id="toolWallArc" title="Arc Wall">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20A16 16 0 0 1 20 4"/></svg>
                 <span>Arc</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="circle" id="toolWallCircle" title="Complete Circle Wall (Center-Radius Drag)">
+              <button class="ribbon-tool-btn" data-tool="wall" data-wshape="circle" id="toolWallCircle" title="Circle Wall (drag from the center)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
                 <span>Circle</span>
               </button>
@@ -339,19 +346,19 @@
           <div class="ribbon-group ribbon-creation-group" title="Particle Elements">
             <span class="ribbon-group-title">PARTICLES</span>
             <div class="ribbon-group-controls">
-              <button class="ribbon-tool-btn" data-tool="gas" id="toolGas" title="Particle Spawner Infill">
+              <button class="ribbon-tool-btn" data-tool="gas" id="toolGas" title="Gas Spawner (fills a rectangle with gas)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><circle cx="12" cy="12" r="3"/></svg>
                 <span>Spawner</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="emitter" id="toolEmitter" title="Particle Source / Emitter (360° Option, Max Count, Click to Toggle)">
+              <button class="ribbon-tool-btn" data-tool="emitter" id="toolEmitter" title="Particle Emitter (adds particles at a rate)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
                 <span>Emitter</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="sink" id="toolSink" title="Particle Absorber / Vacuum">
+              <button class="ribbon-tool-btn" data-tool="sink" id="toolSink" title="Particle Sink (removes particles)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
                 <span>Absorber</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="regulator" id="toolRegulator" title="Particle Regulator Zone (Maintains Target N with Hysteresis)">
+              <button class="ribbon-tool-btn" data-tool="regulator" id="toolRegulator" title="Particle Regulator (keeps the particle count in a zone at a target)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2 2"/><path d="M7 12h10M12 7v10"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
                 <span>Regulator</span>
               </button>
@@ -368,11 +375,11 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>
                 <span>Heat Bath</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="heat_exchanger" id="toolHeatEx" title="Heat Exchanger (Permeable, Constant-T, Cross-Hatch Pattern)">
+              <button class="ribbon-tool-btn" data-tool="heat_exchanger" id="toolHeatEx" title="Heat Exchanger (permeable zone at constant temperature)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2 2"/><line x1="4" y1="4" x2="20" y2="20"/><line x1="20" y1="4" x2="4" y2="20"/></svg>
                 <span>Heat Exchanger</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="regenerator" id="toolRegen" title="Regenerator Matrix (Permeable, Finite Capacity C, Directional Parallel Lines)">
+              <button class="ribbon-tool-btn" data-tool="regenerator" id="toolRegen" title="Regenerator (permeable heat store with finite capacity)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2 2"/><line x1="3" y1="7" x2="21" y2="7"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="17" x2="21" y2="17"/></svg>
                 <span>Regenerator</span>
               </button>
@@ -389,19 +396,19 @@
           <div class="ribbon-group ribbon-creation-group" title="Piston Tools">
             <span class="ribbon-group-title">PISTONS</span>
             <div class="ribbon-group-controls">
-              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="free" id="toolPistonFree" title="Displacer Piston (Free / Phase Displacer)">
+              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="free" id="toolPistonFree" title="Free Piston (moved by the gas pressure)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="9" width="14" height="6" rx="1"/><line x1="12" y1="3" x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="21"/></svg>
                 <span>Displacer</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="spring" id="toolPistonSpring" title="Accumulator Piston (Spring / Gas Bounce Space)">
+              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="spring" id="toolPistonSpring" title="Spring Piston (held by a spring, gas accumulator)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h3l2-5 3 10 3-10 2 5h4"/></svg>
                 <span>Accumulator</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="motorized" id="toolPistonMotor" title="Compressor Piston (Motor-Driven Work Input)">
+              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="motorized" id="toolPistonMotor" title="Motor Piston (sinusoidal drive, puts work in)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 8v8m-4-4h8"/></svg>
                 <span>Compressor</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="damper" id="toolPistonDamper" title="Expander Piston (Work Extraction Load)">
+              <button class="ribbon-tool-btn" data-tool="piston" data-pmode="damper" id="toolPistonDamper" title="Load Piston (takes work out against a damper)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="8" rx="1"/><line x1="12" y1="2" x2="12" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                 <span>Expander</span>
               </button>
@@ -414,19 +421,19 @@
           <div class="ribbon-group ribbon-creation-group" title="Valve Tools">
             <span class="ribbon-group-title">VALVES</span>
             <div class="ribbon-group-controls">
-              <button class="ribbon-tool-btn" data-tool="throttle_valve" id="toolValveThrottle" title="Throttle Valve (Variable Opening Orifice)">
+              <button class="ribbon-tool-btn" data-tool="throttle_valve" id="toolValveThrottle" title="Throttle Valve (adjustable opening)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6v12l8-6zm16 0v12l-8-6z"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
                 <span>Throttle</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="manual_valve" id="toolValveManual" title="Manual Valve (Click to Open/Close)">
+              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="manual_valve" id="toolValveManual" title="Manual Valve (open or closed)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6v12l8-6zm16 0v12l-8-6z"/><circle cx="12" cy="6" r="2"/></svg>
                 <span>Manual</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="check_valve" id="toolValveCheck" title="Check Valve (One-Way Flow Diode)">
+              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="check_valve" id="toolValveCheck" title="Check Valve (lets gas through in one direction)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18l6-6-6-6"/><line x1="18" y1="6" x2="18" y2="18"/></svg>
                 <span>Check</span>
               </button>
-              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="relief_valve" id="toolValvePRV" title="PRV (Pressure Relief Valve)">
+              <button class="ribbon-tool-btn" data-tool="valve" data-vtype="relief_valve" id="toolValvePRV" title="Relief Valve (opens above a set pressure)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8m-4 4 4-4 4 4"/><circle cx="12" cy="18" r="4"/></svg>
                 <span>PRV</span>
               </button>
@@ -439,7 +446,7 @@
           <div class="ribbon-group ribbon-creation-group" title="Chamber Sensor">
             <span class="ribbon-group-title">SENSORS</span>
             <div class="ribbon-group-controls">
-              <button class="ribbon-tool-btn" data-tool="sensor" id="toolSensor" title="Chamber Measurement Zone (Drift & Multi-Chart Analytics)">
+              <button class="ribbon-tool-btn" data-tool="sensor" id="toolSensor" title="Sensor Zone (measures T, P, V and N; can follow a piston)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/><circle cx="12" cy="12" r="2"/></svg>
                 <span>Chamber</span>
               </button>
@@ -586,15 +593,15 @@
       <!-- 1. Top Bar: Playback Controls & Sequencer Toggle Button -->
       <div class="unified-dock-bar" id="unifiedDockBar">
         <div class="playback-btn-group">
-          <button id="btnPlayPause" class="playback-btn btn-play" title="Play / Pause Simulation (Spacebar)">
+          <button id="btnPlayPause" class="playback-btn btn-play" title="Play / Pause (Space)">
             <span id="playIcon" class="is-play">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
             </span>
           </button>
-          <button id="btnStopReset" class="playback-btn btn-stop" title="Stop & Reset to Initial State (Enables Building)">
+          <button id="btnStopReset" class="playback-btn btn-stop" title="Stop and reset to the start state (enables editing)">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
           </button>
-          <button id="btnStepBack" class="playback-btn" title="Step Back (Previous Frame)">
+          <button id="btnStepBack" class="playback-btn" title="Step Back (previous frame)">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="5" y1="5" x2="5" y2="19"/><polyline points="12 19 5 12 12 5"/><line x1="19" y1="12" x2="6" y2="12"/></svg>
           </button>
           <button id="btnStep" class="playback-btn" title="Step Forward (S)">
@@ -626,7 +633,7 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="9" ry="4"/><ellipse cx="12" cy="12" rx="4" ry="9"/></svg>
             <span>Ideal Fluid</span>
           </button>
-          <button class="model-toggle-btn" data-model="lennard_jones" title="Real Fluid (Lennard-Jones Intermolecular Potential)">
+          <button class="model-toggle-btn" data-model="lennard_jones" title="Real Fluid (Lennard-Jones potential)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5c2 1 4 5 6 13 1 3 2 3 4-2 2-6 5-10 8-10"/></svg>
             <span>Real Fluid</span>
           </button>
@@ -815,7 +822,7 @@
           <section>
             <h4>Edit</h4>
             <dl>
-              <dt>Ctrl+Z / Ctrl+Y</dt><dd>Undo / Redo</dd>
+              <dt>Ctrl+Z / Ctrl+Y</dt><dd>Undo / Redo (also Ctrl+Shift+Z)</dd>
               <dt>Ctrl+A</dt><dd>Select All</dd>
               <dt>Ctrl+D</dt><dd>Duplicate</dd>
               <dt>Ctrl+G</dt><dd>Group</dd>
@@ -828,16 +835,28 @@
           <section>
             <h4>Drawing</h4>
             <dl>
+              <dt>0–9</dt><dd>Type exact size while drawing</dd>
               <dt>Enter</dt><dd>Close Polyline / Finish</dd>
               <dt>Esc</dt><dd>Cancel / Select Tool</dd>
+              <dt>Shift+Drag point</dt><dd>Snap the segment angle to 15°</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>Transform</h4>
+            <dl>
+              <dt>Shift+Drag corner</dt><dd>Resize keeping proportions</dd>
+              <dt>Alt+Drag corner</dt><dd>Resize from the center</dd>
+              <dt>Rotate handle</dt><dd>Rotate in 15° steps, Shift: free (boxes and pistons: 90°)</dd>
             </dl>
           </section>
           <section>
             <h4>View</h4>
             <dl>
               <dt>F</dt><dd>Zoom to Fit</dd>
-              <dt>+ / −</dt><dd>Zoom In / Out</dd>
+              <dt>+ / − or Wheel</dt><dd>Zoom In / Out</dd>
+              <dt>Alt+Drag</dt><dd>Pan (also middle mouse)</dd>
               <dt>V</dt><dd>Velocity Vectors</dd>
+              <dt>?</dt><dd>This Overview</dd>
             </dl>
           </section>
           <section>
@@ -858,12 +877,14 @@
           <h3>Thermo Sandbox – Quick Guide</h3>
           <button id="btnInfoClose" class="modal-close-btn">&times;</button>
         </div>
-        <div class="modal-body">
-          <p><b>1. Building & Editing:</b> When the simulation is stopped (<code>■ Stop</code>), click any tool mode button in the top ribbon to draw on the canvas.</p>
-          <p><b>2. Properties Inspector:</b> The left panel dynamically shows live sliders and synchronized numeric input boxes for the active tool or selection.</p>
-          <p><b>3. Multi-Select & Transforms:</b> Hold <code>Shift</code> and click to select multiple objects. Use <code>TRANSFORM</code> tools to rotate 90° or flip horizontally / vertically.</p>
-          <p><b>4. Thermal Triad:</b> Choose between constant-temperature <b>Reservoir</b>, permeable <b>Porous Matrix</b>, or impermeable <b>Solid Thermal Block</b>.</p>
-          <p><b>5. Valves & Emitters:</b> Emitters feature 360° emission and can be clicked to toggle ON/OFF. Valves include Pressure Relief Valves (PRV) with automatic release.</p>
+        <div class="modal-body guide-body">
+          <p><b>Build.</b> With the simulation stopped, pick a tool in the ribbon and drag on the canvas. Type a number while drawing for an exact size. The panel on the left shows the settings of the active tool or the selected element.</p>
+          <p><b>Gas.</b> The particle tool fills a rectangle with gas at a chosen temperature. Walls are impermeable; give them a conductivity &kappa; to exchange heat.</p>
+          <p><b>Heat.</b> A <b>heat bath</b> keeps its temperature, a <b>thermal mass</b> warms up and cools down, a <b>heat exchanger</b> is a permeable zone that brings the gas inside to its temperature, a <b>regenerator</b> stores heat along the flow.</p>
+          <p><b>Measure.</b> A <b>sensor zone</b> records temperature, pressure, volume and particle count. Bind it to a piston (properties panel) and it follows the piston face and also measures the piston pressure, the right quantity for the work &oint;P&thinsp;dV.</p>
+          <p><b>Automate.</b> The <b>sequencer</b> at the bottom runs steps: each step sets elements (e.g. drive a piston to a stroke position, switch a heat exchanger) and waits for its transition (time, piston position, sensor value).</p>
+          <p><b>Analyse.</b> Every sidebar chart opens large with <b>&#10530;</b>: P-V, P-T and T-s diagrams with the work per cycle, zoom, PNG and CSV export. File &rarr; Export Data saves all time series.</p>
+          <p>The examples on the start screen (File &rarr; Examples &amp; Recent) show each of these in a working setup. Press <kbd>?</kbd> for the keyboard shortcuts.</p>
         </div>
       </div>
     </div>
@@ -881,7 +902,7 @@
             </div>
             <div class="splash-brand-text">
               <h1 class="splash-title">Thermo Sandbox</h1>
-              <p class="splash-subtitle">Interactive 2D Thermodynamic & Kinetic Particle Laboratory</p>
+              <p class="splash-subtitle">Thermodynamics from particle collisions, in 2D</p>
             </div>
           </div>
           <button id="btnSplashClose" class="splash-close-btn" title="Return to Canvas (Esc)" style="display: none;">
@@ -889,77 +910,76 @@
           </button>
         </div>
 
-        <!-- Section 1: Quick Actions -->
+        <!-- Quick actions -->
         <div class="splash-actions-row">
           <button id="btnSplashNew" class="splash-action-card splash-action-primary">
             <div class="splash-action-icon splash-icon-primary">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             </div>
             <div class="splash-action-content">
               <span class="splash-action-title">New Simulation</span>
-              <span class="splash-action-desc">Start fresh with an empty canvas</span>
+              <span class="splash-action-desc">Empty canvas</span>
             </div>
           </button>
 
           <button id="btnSplashOpen" class="splash-action-card splash-action-secondary">
             <div class="splash-action-icon splash-icon-secondary">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             </div>
             <div class="splash-action-content">
-              <span class="splash-action-title">Open Profile...</span>
-              <span class="splash-action-desc">Load simulation from JSON</span>
+              <span class="splash-action-title">Open File…</span>
+              <span class="splash-action-desc">Load a saved .json scene</span>
+            </div>
+          </button>
+
+          <button id="btnSplashContinue" class="splash-action-card splash-action-accent" style="display: none;">
+            <div class="splash-action-icon splash-icon-accent">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+            </div>
+            <div class="splash-action-content">
+              <span class="splash-action-title">Continue</span>
+              <span class="splash-action-desc" id="splashContinueDesc">Last session</span>
             </div>
           </button>
 
           <button id="btnSplashResume" class="splash-action-card splash-action-accent" style="display: none;">
             <div class="splash-action-icon splash-icon-accent">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 19 12 6 20 6 4"/></svg>
             </div>
             <div class="splash-action-content">
               <span class="splash-action-title">Return to Canvas</span>
-              <span class="splash-action-desc">Resume active experiment</span>
+              <span class="splash-action-desc">Back to the open scene (Esc)</span>
             </div>
           </button>
         </div>
 
-        <!-- Section 2: Split Columns (Recent Profiles & Physical Presets) -->
+        <!-- Recent scenes and examples -->
         <div class="splash-grid-columns">
-          <!-- Left Column: Recent Profiles -->
-          <div class="splash-column">
+          <div class="splash-column splash-column-recent">
             <div class="splash-col-header">
-              <div class="splash-col-title-wrap">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                <span class="splash-col-title">Recent Profiles</span>
-              </div>
-              <button id="btnClearRecent" class="splash-clear-btn" title="Clear recent history">Clear History</button>
+              <span class="splash-col-title">Recent</span>
+              <button id="btnClearRecent" class="splash-clear-btn" title="Clear the list of recent scenes">Clear</button>
             </div>
             <div id="splashRecentContainer" class="splash-list-container">
-              <!-- Dynamically populated from localStorage -->
               <div class="splash-empty-state">
-                <p>No recent profiles yet</p>
-                <span>Profiles you save or open will appear here</span>
+                <p>No recent scenes yet</p>
+                <span>Scenes you open or save appear here</span>
               </div>
             </div>
           </div>
 
-          <!-- Right Column: Curated Physical Presets -->
           <div class="splash-column">
             <div class="splash-col-header">
-              <div class="splash-col-title-wrap">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-                <span class="splash-col-title">Physical Presets & Experiments</span>
-              </div>
+              <span class="splash-col-title">Examples</span>
             </div>
-            <div id="splashPresetsContainer" class="splash-presets-list">
-              <!-- Dynamically populated from Presets object in JS -->
-            </div>
+            <div id="splashPresetsContainer" class="splash-examples-grid"></div>
           </div>
         </div>
 
         <!-- Splash Footer -->
         <div class="splash-footer">
           <div class="splash-footer-left">
-            <span class="splash-keyboard-hint">Tip: Click the <strong>Thermo Sandbox</strong> logo or press <kbd>Esc</kbd> anytime to open this dashboard.</span>
+            <span class="splash-keyboard-hint">Reopen this screen with the <strong>Thermo Sandbox</strong> logo or File → Examples &amp; Recent · <kbd>Esc</kbd> returns to the canvas</span>
           </div>
           <div class="splash-footer-right">
             <span class="splash-tag">v2.1 • WebGPU Accelerated</span>

@@ -54,8 +54,8 @@ body.splash-mode #simCanvas {
 
 .splash-card {
   width: 100%;
-  max-width: 920px;
-  max-height: 90vh;
+  max-width: 1120px;
+  max-height: calc(100vh - 48px);
   background: #131722;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 18px;
@@ -152,9 +152,9 @@ body.splash-mode #simCanvas {
 
 .splash-actions-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
-  padding: 20px 30px 16px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  padding: 16px 30px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   background: #0d1017;
 }
@@ -163,7 +163,7 @@ body.splash-mode #simCanvas {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 14px 18px;
+  padding: 11px 16px;
   border-radius: 12px;
   background: #141720;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -258,12 +258,18 @@ body.splash-mode #simCanvas {
 
 .splash-grid-columns {
   display: grid;
-  grid-template-columns: 1fr 1.35fr;
+  grid-template-columns: 260px 1fr;
   gap: 26px;
-  padding: 20px 30px;
+  padding: 18px 30px 20px;
   overflow-y: auto;
   flex: 1;
-  max-height: 440px;
+  min-height: 0;
+}
+
+@media (max-width: 900px) {
+  .splash-grid-columns {
+    grid-template-columns: 1fr;
+  }
 }
 
 .splash-column {
@@ -288,7 +294,7 @@ body.splash-mode #simCanvas {
 }
 
 .splash-col-title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -339,19 +345,31 @@ body.splash-mode #simCanvas {
 .splash-recent-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
+  gap: 10px;
+  padding: 6px;
   border-radius: 9px;
   background: #141720;
   border: 1px solid rgba(255, 255, 255, 0.07);
   cursor: pointer;
-  transition: all 0.15s ease;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.splash-recent-item:hover {
+.splash-recent-item:hover,
+.splash-recent-item:focus-visible {
   background: #1a1e29;
-  border-color: rgba(56, 189, 248, 0.4);
-  transform: translateX(3px);
+  border-color: rgba(56, 189, 248, 0.45);
+  outline: none;
+}
+
+.splash-recent-thumb {
+  width: 72px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  display: block;
 }
 
 .splash-recent-left {
@@ -387,83 +405,90 @@ body.splash-mode #simCanvas {
   color: var(--text-muted);
 }
 
-.splash-presets-list {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  overflow-y: auto;
-  max-height: 380px;
+.splash-examples-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
 }
 
-.splash-preset-card {
+.splash-example-card {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
+  flex-direction: column;
   border-radius: 10px;
   background: #141720;
   border: 1px solid rgba(255, 255, 255, 0.07);
   cursor: pointer;
-  transition: all 0.16s ease;
+  overflow: hidden;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 
-.splash-preset-card:hover {
+.splash-example-card:hover,
+.splash-example-card:focus-visible {
   background: #1a1e29;
-  border-color: rgba(34, 197, 94, 0.4);
-  transform: translateX(4px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  border-color: rgba(34, 197, 94, 0.45);
+  transform: translateY(-2px);
+  outline: none;
 }
 
-.splash-preset-info {
+.splash-example-thumb {
+  width: 100%;
+  height: 92px;
+  display: block;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.splash-example-body {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  padding-right: 12px;
+  gap: 4px;
+  padding: 10px 12px 12px;
 }
 
-.splash-preset-top {
+.splash-example-top {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.splash-preset-name {
-  font-size: 13.5px;
+.splash-example-name {
+  font-size: 13px;
   font-weight: 700;
   color: #ffffff;
 }
 
-.splash-preset-badge {
+.splash-example-tag {
   font-size: 9.5px;
   font-weight: 700;
   text-transform: uppercase;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(34, 197, 94, 0.12);
-  color: var(--accent-green);
-  border: 1px solid rgba(34, 197, 94, 0.25);
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
-.splash-preset-desc {
+.splash-example-desc {
   font-size: 11.5px;
   color: var(--text-muted);
-  line-height: 1.35;
+  line-height: 1.4;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-.splash-preset-arrow {
+.splash-example-observe {
+  font-size: 10.5px;
   color: var(--text-dim);
-  flex-shrink: 0;
-  transition: all 0.15s ease;
+  line-height: 1.35;
 }
 
-.splash-preset-card:hover .splash-preset-arrow {
+.splash-example-observe b {
   color: var(--accent-green);
-  transform: translateX(3px);
+  font-weight: 600;
 }
 
 .splash-footer {

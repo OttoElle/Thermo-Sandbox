@@ -94,8 +94,8 @@ window.addEventListener('keydown', (e) => {
     closeContextMenu();
     closeAllMenus();
     closeSaveModal();
-    infoModal.style.display = 'none';
-    shortcutsModal.style.display = 'none';
+    // Any other open dialog (guide, shortcuts, transition, custom chart, …)
+    document.querySelectorAll('.modal-overlay').forEach(m => { if (m.style.display !== 'none') m.style.display = 'none'; });
   }
 });
 

@@ -111,13 +111,18 @@ Heute gibt es vier getrennte Formular-Implementierungen: `toolPanel.js` (Tool-Di
 - [x] Nicht gebraucht, daher nicht gebaut: Rampen, parallele Zweige, dP/dt-Bedingungen. Schritt kopieren und verschieben gab es schon.
 - [x] Die Sequencer-Felder (auch die Bedingungen) kommen aus dem Schema bzw. der gemeinsamen Property-Form. `src/control/` bleibt unter 350 Zeilen pro Datei.
 
-## Phase 6 — Splash, Onboarding, Feinschliff
+## Phase 6 — Splash, Onboarding, Feinschliff ✅ (2026-10-02, PROGRESS AK)
 
-- [ ] Splash: Thumbnails für Presets/Recent (Canvas-Snapshot beim Speichern), „Continue last session“, kompakteres Layout. Die Presets werden später ohnehin durch eigene ersetzt.
-- [ ] Leerer Canvas: dezenter Hinweis („Draw a wall with R / P …“).
-- [ ] Shortcut-Übersicht aktualisieren, Tooltips mit Shortcuts vereinheitlichen.
-- [ ] Konsistenz-Pass: Abstände, Schriftgrößen, Icon-Stil, Fokus-Zustände, Tastaturbedienung der Dialoge, Fenstergrößen 1366 → 2560 px.
-- [ ] Autosave in `localStorage` (Absturz/Reload verliert sonst die Szene).
+- [x] **Beispiele statt Presets**: acht selbst gebaute Szenen (Gas in a Box, Thermal Equilibrium, Free Expansion, Atmosphere in Gravity, Adiabatic Compression, Carnot, Otto, Stirling), jede mit Beschreibung und „Watch“-Hinweis. `tests/test_examples_cdp.py` prüft die physikalische Aussage jeder Karte.
+- [x] **Startbildschirm**: Beispiel-Kacheln und Recent-Liste mit Vorschaubildern (aus dem Szenenzustand gezeichnet, nichts gespeichert); „Continue“ (Autosave); kompakter, bis 2560 px geprüft.
+- [x] **Autosave** in `localStorage` alle 4 s und beim Verlassen; beim Simulieren der Stand vom Start. Ein leerer Canvas überschreibt ihn nicht.
+- [x] **Leerer Canvas**: Hinweis mit Knopf „Start from an example“.
+- [x] **Shortcut-Übersicht** ergänzt (Maßeingabe, Transform, Pan, `?`). Tooltips vereinheitlicht: Name, Zweck, Shortcut. Kurzanleitung neu geschrieben.
+- [x] **Konsistenz**:
+  - Zoom-Leiste und Legende lagen bei 1366–1600 px unter der Dock-Leiste.
+  - Esc schließt jeden Dialog.
+  - Einheitlicher Fokusring für die Tastaturbedienung.
+  - „New“ übernahm Sequencer und Schwerkraft der alten Szene (neu: `engine.resetScene()`).
 
 ---
 

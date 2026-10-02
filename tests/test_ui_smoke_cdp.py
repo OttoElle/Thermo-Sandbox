@@ -150,6 +150,7 @@ def run_pass(page, label):
     # Leave the splash screen into an empty scene
     page.click_id('btnSplashNew')
     time.sleep(0.3)
+    hint_on_empty = page.eval("!document.getElementById('emptyCanvasHint').hidden")
     before = page.eval(COUNT_JS)
 
     # Draw every element type, spread over a grid in the middle of the canvas
@@ -316,6 +317,21 @@ def run_pass(page, label):
         };
     })()""")
 
+    # Autosave (every 4 s) and the start screen: example cards with thumbnails load a scene
+    time.sleep(4.5)
+    autosaved = page.eval("(() => { const r = JSON.parse(localStorage.getItem('thermo_autosave') || 'null'); return r ? r.data.walls.length : -1; })()")
+    start = page.eval("""(() => {
+        document.getElementById('brandBadge').click();
+        const cards = document.querySelectorAll('.splash-example-card').length;
+        const thumbs = [...document.querySelectorAll('.splash-example-thumb')].filter(c => c.width > 0).length;
+        document.querySelector('.splash-example-card[data-example="stirling"]').click();
+        return { cards, thumbs, splash: window.app.isSplashActive, pistons: window.engine.pistons.length,
+                 steps: window.engine.sequencer.isEnabled ? window.engine.sequencer.steps.length : 0,
+                 bindings: window.engine.sensors[0]?.getPistonBindings().length,
+                 hint: !document.getElementById('emptyCanvasHint').hidden };
+    })()""")
+    print(f'start screen: {start}, autosaved walls: {autosaved}')
+
     def closed(ws):
         return all(ws[i][2:] == ws[(i + 1) % len(ws)][:2] for i in range(len(ws)))
 
@@ -345,6 +361,10 @@ def run_pass(page, label):
     assert tree['after'] == [0.5] * 4 and tree['undone'] == [0] * 4, f'properties panel edit/undo failed: {tree}'
     assert json.loads(typed_hx) == [[400, 0, 120, 60]], f'typed dimensions failed: {typed_hx}'
     assert n_reverted == 0 and n_revert_undone == n_before_clear, f'Revert to Saved is not undoable ({n_before_clear} -> {n_reverted} -> {n_revert_undone})'
+    assert hint_on_empty, 'empty-canvas hint not shown'
+    assert autosaved >= 2, f'scene was not autosaved: {autosaved}'
+    assert start['cards'] == 8 and start['thumbs'] == 8, f'example cards missing: {start}'
+    assert not start['splash'] and start['pistons'] == 2 and start['steps'] == 4 and start['bindings'] == 2, f'example did not load: {start}'
     assert not page.problems, f'{len(page.problems)} runtime error(s) in {label} mode'
     print(f'{label}: PASSED')
 

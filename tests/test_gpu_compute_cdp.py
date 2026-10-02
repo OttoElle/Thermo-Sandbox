@@ -568,7 +568,13 @@ def run_test():
 
                 // 13f. Motorized piston starting off its sinusoid must not teleport, and a fast
                 // piston face must sweep particles instead of letting them slip into/behind it
-                window.Presets.compressionCylinder.load(E);
+                E.clear();
+                E.addWall(80, 140, 840, 140, { thickness: 6 });
+                E.addWall(80, 500, 840, 500, { thickness: 6 });
+                E.addWall(80, 140, 80, 500, { thickness: 6 });
+                E.addPiston({ orientation: 'horizontal', x: 600, y: 320, width: 28, height: 350, minPos: 200, maxPos: 760,
+                              mode: 'motorized', frequency: 0.5, phase: 0, mass: 50, conductivity: 0 });
+                E.spawnGasRaster(120, 180, 440, 280, 160, 1.0, 280, 'maxwell_boltzmann');
                 E.ambientBounds = null;
                 E.syncParticlesToGPU();
                 E.syncWallsToGPU();

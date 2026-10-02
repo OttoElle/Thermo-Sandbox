@@ -291,7 +291,7 @@ body.sequencer-expanded .unified-dock-bar {
    ========================================================================== */
 .floating-zoom-panel {
   position: absolute;
-  bottom: 20px;
+  bottom: 84px; /* above the bottom dock (16 + 52 + 16), which can reach under it on narrow windows */
   right: 410px;
   background-color: var(--bg-card);
   border: 1px solid var(--border-card);

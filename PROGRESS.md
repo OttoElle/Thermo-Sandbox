@@ -531,13 +531,36 @@
   - Alpha-Stirling über 3 Zyklen: Zyklus geschlossen, TDC nach Gasseite, Volumen in den isochoren Schritten konstant, Kammer folgt beiden Kolben, Schritt in jedem Messpunkt.
   - Adiabatische Energiebilanz des Kolbendrucks.
 
+### AK. UI-Polish Phase 6: Start, Beispiele, Autosave, Feinschliff (Claude Code)
+- [x] **Beispiele** (`src/presets/index.js`, `Examples` + `loadExample`, auch `window.Examples`/`window.loadExample`): Die Gemini-Presets sind ersetzt durch acht selbst gebaute Szenen. Jede zeigt eine Idee, und `tests/test_examples_cdp.py` prüft sie:
+  - Maxwell-Boltzmann-Relaxation: relative Streuung der Geschwindigkeiten 0 → 0,54 (Theorie 0,52).
+  - Temperaturausgleich ohne Durchmischung: 600 K / 150 K → 377 / 384 K.
+  - Freie Expansion: Energie auf 10⁻⁵ erhalten, nach dem Schwappen wieder die Starttemperatur.
+  - Barometrische Schichtung: 225 / 121 / 54 Teilchen von unten nach oben.
+  - Adiabatische Erwärmung.
+  - Carnot, Otto, Stirling mit positiver Arbeit pro Zyklus über 7 Zyklen stabil: Carnot ≈ 1,8 M, Otto 0,26–0,67 M, Stirling 0,14–0,24 M.
+- [x] **Erste Fassungen von Carnot und Otto leisteten negative Arbeit**: Der Wärmetauscher am Zylinderende (76 px) konnte die Kompressionswärme nicht abführen, das Gas stieg Zyklus für Zyklus auf ~3700 K. Jetzt füllt der Wärmetauscher den Zylinder. Die Carnot-Hubpunkte folgen aus V1·V3 = V2·V4, die Adiabaten enden zusätzlich bei der Gegentemperatur. Die Otto-Flamme hat 2000 K.
+- [x] **Startbildschirm**: Beispiel-Kacheln und Recent-Liste mit Vorschaubildern (`sceneThumbnail.js` zeichnet sie aus dem Szenenzustand), „Continue“ aus dem Autosave, Footer-Hinweis korrigiert (Esc öffnet den Startbildschirm nicht).
+- [x] **Autosave** (`autosave.js`): alle 4 s bei Änderung, bei `pagehide` und beim Verbergen der Seite; beim Simulieren der Szenenstand vom Start. Ein leerer Canvas überschreibt die gesicherte Szene nicht.
+- [x] **`engine.resetScene()`**: „New Simulation“ und „New Canvas“ übernahmen bisher Sequencer und Schwerkraft der vorherigen Szene.
+- [x] **Leerer Canvas** (`canvasHint.js`): Hinweis und Knopf „Start from an example“.
+- [x] **Hilfe**:
+  - Shortcut-Übersicht ergänzt (Maßeingabe, Shift/Alt beim Transformieren, Pan, `?`) und verbreitert.
+  - Kurzanleitung neu (die alte beschrieb „Thermal Triad“ und „Porous Matrix“).
+  - Tooltips vereinheitlicht: Name (Zweck) (Shortcut), ohne Werbetext.
+- [x] **Konsistenz**:
+  - Zoom-Leiste und Geschwindigkeitslegende lagen bei 1366–1600 px Breite unter der Dock-Leiste.
+  - Esc schließt jeden offenen Dialog.
+  - Ein Fokusring (`:focus-visible`) für alle Buttons.
+  - Startbildschirm bei 1366×768 und 2560×1440 geprüft.
+- [x] **Tests**: `test_examples_cdp.py` (neu, ~4 min). Der UI-Smoke-Test prüft Beispielkarten, Laden des Stirling-Beispiels, Autosave und den Canvas-Hinweis. `test_gpu_compute_cdp.py` baut die frühere Preset-Szene selbst.
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)
-- [ ] **UI-Polish Phase 6** (Splash, Onboarding, Autosave, Konsistenz) laut `UI_POLISH_PLAN.md`.
 - [ ] **Kammerdruck auf zugängliche Fläche umstellen?** Der ideale Kammerdruck unterschätzt den mechanischen Druck um ~12 % (Randschicht Radius + halbe Wandstärke). Entscheidung offen.
 - [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren.
 - [ ] **Weitere Performance**: Pair-Suche dominiert weiterhin (Kernel-Profil siehe Abschnitt AC); Telemetrie-/Upload-Overhead pro Frame (`getGPUWalls()` allokiert jedes Frame).
-- [ ] **Große App-Module weiter zerlegen**: `canvasInput.js` (~850 Zeilen, ein großer mousedown/mouseup-Handler pro Werkzeug), `toolPanel.js` und `inspector.js` (je ~650, pro Elementtyp duplizierte Formulare) könnten pro Elementtyp datengetrieben werden.
+- [ ] **`canvasInput.js` zerlegen**: ein großer mousedown/mouseup-Handler pro Werkzeug (toolPanel/inspector sind seit Phase 3 schemagetrieben).
 - [ ] **Interaktiver Partikel-Inspektor**: Klick auf ein einzelnes Partikel zur Verfolgung von Trajektorie, Kollisionshistorie und Geschwindigkeitsvektor.
 

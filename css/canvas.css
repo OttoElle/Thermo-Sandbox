@@ -89,7 +89,7 @@
 .floating-vel-legend {
   position: absolute;
   right: 410px;
-  bottom: 164px;
+  bottom: 228px;
   width: 38px;
   background-color: var(--bg-card);
   border: 1px solid var(--border-card);
@@ -258,4 +258,63 @@ body.sequencer-expanded .floating-vel-legend {
 
 .dim-input::placeholder {
   color: var(--text-dim);
+}
+
+/* Empty canvas hint (canvasHint.js) */
+.empty-canvas-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  max-width: 420px;
+  text-align: center;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.empty-canvas-hint[hidden] {
+  display: none;
+}
+
+.empty-canvas-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.empty-canvas-text {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.empty-canvas-text kbd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 0 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.empty-canvas-btn {
+  pointer-events: auto;
+  margin-top: 4px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.empty-canvas-btn:hover,
+.empty-canvas-btn:focus-visible {
+  border-color: var(--accent-green);
+  outline: none;
 }

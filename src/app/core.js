@@ -3,7 +3,7 @@ import { Engine } from '../physics/Engine.js';
 import { Renderer } from '../render/Renderer.js';
 import { ChartView } from '../analytics/ChartView.js';
 import { DashboardChart } from '../analytics/DashboardChart.js';
-import { Presets } from '../presets/index.js';
+import { Examples, loadExample } from '../presets/index.js';
 import { SequencerUI } from '../control/SequencerUI.js';
 import { ParticleGPUCompute } from '../physics/ParticleGPUCompute.js';
 import { WORLD_SIZE } from '../physics/Constants.js';
@@ -33,7 +33,8 @@ export const engine = new Engine(WORLD_SIZE, WORLD_SIZE);
 export const renderer = new Renderer(canvas, null, bgCanvas);
 window.engine = engine;
 window.renderer = renderer;
-window.Presets = Presets;
+window.Examples = Examples;
+window.loadExample = loadExample;
 window.DashboardChart = DashboardChart;
 
 // Asynchronously initialize WebGPU & GPU Compute

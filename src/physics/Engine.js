@@ -135,6 +135,15 @@ export class Engine {
     this._updateStats();
   }
 
+  // Empty scene with default settings (gravity off, an empty one-step sequence).
+  resetScene() {
+    this.clear();
+    this.gravityEnabled = false;
+    this.gravity = 350;
+    this.groupNames = {};
+    this.sequencer.importState({ steps: [] });
+  }
+
   addParticle(x, y, vx, vy, mass = 1, groupId = null) {
     if (this._deferToGPU) {
       // Spawned during a GPU step (emitters, regulators): goes straight to VRAM.

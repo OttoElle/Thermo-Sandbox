@@ -11,6 +11,7 @@ import { updateViewMenuLabels } from './app/menus.js';
 import { customCharts, updateChamberCards, updateSystemStats } from './app/dashboard.js';
 import { renderLiveToolPreviews } from './app/toolPreview.js';
 import { renderChartViewer } from './app/chartViewer.js';
+import { updateCanvasHint } from './app/canvasHint.js';
 import { getSelectionHud, getTransformFrame } from './app/transform.js';
 import { setupAmbientScene, showSplashScreen } from './app/splash.js';
 import './app/keyboard.js';
@@ -63,6 +64,7 @@ function animate(now) {
   renderer.showItemHandles = app.activeTool === 'select' && !app.isSimulating;
   renderer.render(engine, app.selectedItems, !app.isSimulating && !app.isAmbientSim);
   renderLiveToolPreviews();
+  updateCanvasHint();
   sequencerUI?.updateLive();
 
   // Throttled Chart Updates (~15 Hz) to keep UI and Render loop at max FPS

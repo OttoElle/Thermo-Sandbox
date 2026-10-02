@@ -44,3 +44,10 @@ body {
   overflow: hidden;
 }
 
+/* Keyboard focus: one ring for every button-like control (inputs mark focus with their border) */
+button:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}

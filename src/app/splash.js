@@ -1,5 +1,8 @@
-// Splash screen, presets, recent profiles and the ambient background scene.
-import { Presets } from '../presets/index.js';
+// Start screen: examples, recent scenes, continue (autosave) and the ambient background scene.
+import { Examples, loadExample } from '../presets/index.js';
+import { Engine } from '../physics/Engine.js';
+import { drawSceneThumbnail } from './sceneThumbnail.js';
+import { getAutosave } from './autosave.js';
 import { brandBadge, brandTitle, btnClearRecent, btnSplashClose, btnSplashNew, btnSplashOpen, btnSplashResume, canvas, fileImportInput, splashOverlay, splashPresetsContainer, splashRecentContainer } from './dom.js';
 import { engine, renderer } from './core.js';
 import { app } from './state.js';
@@ -73,8 +76,8 @@ function renderRecentProfiles() {
   if (list.length === 0) {
     splashRecentContainer.innerHTML = `
       <div class="splash-empty-state">
-        <p>No recent profiles yet</p>
-        <span>Profiles you save or open will appear here</span>
+        <p>No recent scenes yet</p>
+        <span>Scenes you open or save appear here</span>
       </div>
     `;
     return;
@@ -82,59 +85,77 @@ function renderRecentProfiles() {
 
   splashRecentContainer.innerHTML = '';
   list.forEach(item => {
-    const el = document.createElement('div');
+    const el = document.createElement('button');
+    el.type = 'button';
     el.className = 'splash-recent-item';
     el.innerHTML = `
+      <canvas class="splash-recent-thumb"></canvas>
       <div class="splash-recent-left">
-        <span class="splash-recent-name">${item.name}</span>
+        <span class="splash-recent-name"></span>
         <div class="splash-recent-meta">
-          <span class="splash-recent-badge">${item.particleCount || 0} particles</span>
-          <span class="splash-recent-badge">${item.elementCount || 0} elements</span>
+          <span>${item.particleCount || 0} particles</span>
+          <span>·</span>
           <span>${formatTimeAgo(item.timestamp)}</span>
         </div>
       </div>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
     `;
-    el.addEventListener('click', () => {
-      openScene(item.name, item.data);
-    });
+    el.querySelector('.splash-recent-name').textContent = item.name;
+    el.title = item.name;
+    el.addEventListener('click', () => openScene(item.name, item.data));
     splashRecentContainer.appendChild(el);
+    drawSceneThumbnail(el.querySelector('canvas'), item.data);
   });
 }
 
+// Scene states of the examples, built once in a scratch engine for the thumbnails.
+let exampleStates = null;
+
 function renderSplashPresets() {
   if (!splashPresetsContainer) return;
-  const presetsObj = window.Presets || Presets || {};
-  const keys = Object.keys(presetsObj);
-  if (keys.length === 0) {
-    splashPresetsContainer.innerHTML = '<div class="splash-empty-state"><p>No presets available</p></div>';
-    return;
+  if (!exampleStates) {
+    const scratch = new Engine();
+    exampleStates = Object.fromEntries(Object.entries(Examples).map(([key, ex]) => [key, loadExample(scratch, ex)]));
   }
-
   splashPresetsContainer.innerHTML = '';
-  keys.forEach(key => {
-    const p = presetsObj[key];
-    const card = document.createElement('div');
-    card.className = 'splash-preset-card';
+  Object.entries(Examples).forEach(([key, ex]) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'splash-example-card';
+    card.dataset.example = key;
     card.innerHTML = `
-      <div class="splash-preset-info">
-        <div class="splash-preset-top">
-          <span class="splash-preset-name">${p.name}</span>
-          <span class="splash-preset-badge">${p.category || 'Thermodynamics'}</span>
+      <canvas class="splash-example-thumb"></canvas>
+      <div class="splash-example-body">
+        <div class="splash-example-top">
+          <span class="splash-example-name">${ex.name}</span>
+          <span class="splash-example-tag">${ex.category}</span>
         </div>
-        <p class="splash-preset-desc">${p.description}</p>
-      </div>
-      <div class="splash-preset-arrow">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+        <p class="splash-example-desc">${ex.description}</p>
+        <p class="splash-example-observe"><b>Watch:</b> ${ex.observe}</p>
       </div>
     `;
+    card.title = ex.description;
     card.addEventListener('click', () => {
       stopAndResetSimulationForNewScene();
-      p.load(engine);
-      openScene(p.name, engine.exportState(p.name));
+      openScene(ex.name, loadExample(engine, ex), { addToRecent: false });
     });
     splashPresetsContainer.appendChild(card);
+    drawSceneThumbnail(card.querySelector('canvas'), exampleStates[key]);
   });
+}
+
+// "Continue" offers the autosaved scene when no scene is open yet.
+function renderContinue() {
+  const btn = document.getElementById('btnSplashContinue');
+  if (!btn) return;
+  const rec = app.hasActiveSession ? null : getAutosave();
+  btn.style.display = rec ? 'flex' : 'none';
+  if (!rec) return;
+  const desc = document.getElementById('splashContinueDesc');
+  if (desc) desc.textContent = `${rec.name} · ${formatTimeAgo(rec.timestamp)}`;
+  btn.onclick = () => {
+    stopAndResetSimulationForNewScene();
+    openScene(rec.name, rec.data, { addToRecent: false });
+  };
 }
 
 export function setupAmbientScene() {
@@ -184,6 +205,7 @@ export function showSplashScreen(options = {}) {
     btnSplashClose.style.display = isReturning ? 'flex' : 'none';
   }
   
+  renderContinue();
   renderRecentProfiles();
   renderSplashPresets();
 }
@@ -203,8 +225,7 @@ export function hideSplashScreen() {
 // Splash Screen Action Event Listeners
 btnSplashNew?.addEventListener('click', () => {
   stopAndResetSimulationForNewScene();
-  engine.clear();
-  engine.gravityEnabled = false;
+  engine.resetScene();
   openScene('Untitled Simulation', engine.exportState('Untitled Simulation'), { addToRecent: false });
 });
 
