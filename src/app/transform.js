@@ -276,18 +276,9 @@ export function endTransform() {
     if (s.item instanceof SensorZone) {
       s.item.volume = s.item.width * s.item.height;
       if (active.mode === 'rotate' && s.item.pistonBinding) s.item.unbindPiston();
-      else if (s.item.pistonBinding) updateSensorBinding(s.item);
     }
   });
   active = null;
-}
-
-function updateSensorBinding(zone) {
-  const pb = zone.pistonBinding;
-  if (pb.edge === 'right') pb.fixedOpposite = zone.x;
-  else if (pb.edge === 'left') pb.fixedOpposite = zone.x + zone.width;
-  else if (pb.edge === 'bottom') pb.fixedOpposite = zone.y;
-  else if (pb.edge === 'top') pb.fixedOpposite = zone.y + zone.height;
 }
 
 // ---------------------------------------------------------------------------

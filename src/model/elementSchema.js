@@ -34,6 +34,8 @@ const ACTIVE = (label = 'Active') => ({ key: 'isActive', label, kind: 'bool', de
 const DIRECTION = (def) => ({ key: 'direction', label: 'Direction', kind: 'direction', def });
 const MAX_COUNT = (label) => num('maxParticles', label, 0, 500, 10, 0, '', { int: true });
 
+const isDrive = c => c === 'drive_tdc' || c === 'drive_bdc' || c === 'drive_to';
+
 // Piston mode while running freely (the sequencer's drive commands override it).
 const runMode = v => (v.command === undefined || v.command === 'release') ? v.mode : null;
 
@@ -102,10 +104,12 @@ export const ELEMENT_TYPES = {
         options: [
           { value: 'drive_tdc', label: 'Drive to TDC (min volume)' },
           { value: 'drive_bdc', label: 'Drive to BDC (max volume)' },
+          { value: 'drive_to', label: 'Drive to stroke position' },
           { value: 'hold', label: 'Hold position' },
           { value: 'release', label: 'Release (run in mode below)' }
         ] },
-      num('targetSpeed', 'Drive Speed', 20, 400, 10, 160, 'px/s', { in: { tool: false, inspector: false }, visible: v => v.command === 'drive_tdc' || v.command === 'drive_bdc' }),
+      num('strokeTarget', 'Stroke Position (0 = TDC)', 0, 100, 5, 50, '%', { in: { tool: false, inspector: false }, visible: v => v.command === 'drive_to' }),
+      num('targetSpeed', 'Drive Speed', 5, 400, 5, 160, 'px/s', { in: { tool: false, inspector: false }, visible: v => isDrive(v.command) }),
       { key: 'mode', label: 'Mode', kind: 'toggle', def: 'free', options: PISTON_MODES, in: { tool: false }, visible: v => v.command === undefined || v.command === 'release' },
       num('mass', 'Mass m', 0, 150, 5, 30, 'kg'),
       CONDUCTIVITY(0.2),

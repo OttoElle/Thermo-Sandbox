@@ -224,7 +224,8 @@ Jedes Feld zeigt den Default als Markierung am Slider; geänderte Felder sind bl
 
 ### 6.2 Interaktive Canvas-Steuerung
 - **Hub-Begrenzungsgriffe (`minPos`, `maxPos`):** Ziehbare kreisförmige Anfasspunkte zur Einstellung des oberen Totpunkts (OT / TDC) und unteren Totpunkts (UT / BDC).
-- **Sequencer-Kopplung:** Über den GRAFCET-Sequencer können Kolben aktiv auf OT, UT, Halt oder Freiflug gesteuert werden.
+- **Sequencer-Kopplung:** Über den GRAFCET-Sequencer fahren Kolben auf OT (TDC), UT (BDC) oder eine Hubposition in % (0 % = OT), halten oder laufen frei im gewählten Modus. OT ist das Hubende mit dem kleinsten Gasvolumen; die Gasseite kommt aus der an den Kolben gebundenen Messkammer.
+- **Übergangsbedingungen:** „Fahrziel erreicht“ (alle im Schritt gefahrenen Kolben), Kolben an OT/UT, Hub ≥ / ≤ x %.
 
 ---
 
@@ -280,6 +281,8 @@ Gemeinsame Parameter für alle Ventiltypen:
 - **Echtzeit-Telemetrie:**
   - Kammerdaten werden mit 15 Hz in den Sidebar-Karten aktualisiert.
   - Ermöglicht $P$-$V$-Indikatordiagramme für geschlossene Kreisprozesse.
+- **Kolbenbindung:** Die Kammerkante zum Kolben folgt dessen Fläche. Eine Kammer zwischen zwei Kolben bindet zusätzlich den Kolben an der gegenüberliegenden Kante (Properties Panel: „Piston on Opposite Edge“).
+- **Kolbendruck $P_\text{piston}$:** Bei gebundener Kammer der mechanische Druck auf die Kolbenflächen aus dem Impulsübertrag, über 0,3 s gemittelt. Er enthält die Stoßarbeit schneller Kolben, die der Gleichgewichtsdruck der Kammer ($P = N k_B T / A$) nicht sieht, und ist die richtige Größe für die Arbeit $\oint P\,dV$ (Diagramm „P-V Diagram (piston)“).
 
 ---
 

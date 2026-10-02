@@ -407,9 +407,11 @@ export function duplicateSelection() {
   moveItems(copies, offset, offset);
   copies.forEach(c => {
     if (c instanceof SensorZone && c.pistonBinding) {
-      const piston = pistonMap.get(c.pistonBinding.pistonId);
-      if (piston) c.bindToPiston(piston, c.pistonBinding.edge, true);
-      else c.unbindPiston();
+      // A copied chamber follows the copied pistons; bindings to pistons outside the copy are dropped.
+      const [b1, b2] = [c.pistonBinding, c.pistonBinding2];
+      c.unbindPiston();
+      if (pistonMap.get(b1.pistonId)) c.bindToPiston(pistonMap.get(b1.pistonId), b1.edge, true);
+      if (b2 && pistonMap.get(b2.pistonId)) c.bindToPiston(pistonMap.get(b2.pistonId), b2.edge, true, c.pistonBinding ? 2 : 1);
     }
   });
   engine.particles.forEach(p => { p.selected = false; });

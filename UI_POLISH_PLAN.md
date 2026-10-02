@@ -96,12 +96,20 @@ Heute gibt es vier getrennte Formular-Implementierungen: `toolPanel.js` (Tool-Di
 - [x] **P-V-Diagramm**: Der laufende Zyklus ist kräftig, frühere sind blass. Arbeit pro Zyklus W = ∮P dV / 100 in denselben Einheiten wie E_kin (vorher Faktor 1e-4, also um ×100 daneben). Vorher war der P-V-Tab des Systemverlaufs nur ein Platzhalter.
 - [ ] Erkenntnis für Phase 5: Der Sensor misst den mittleren Gleichgewichtsdruck. Bei Kolbengeschwindigkeiten nahe der thermischen Geschwindigkeit fehlt deshalb die Stoßarbeit an der Kolbenfläche im P-V-Diagramm (gemessen: ΔE_kin ≈ +2,7 MJ pro Zyklus bei W_Sensor ≈ +2,7 MJ). Abhilfe: eine Kurve „Druck an der Kolbenfläche“ aus dem Kolbenimpuls.
 
-## Phase 5 — Sequencer an echten Kreisprozessen erproben
+## Phase 5 — Sequencer an echten Kreisprozessen erproben ✅ (2026-10-02, PROGRESS AJ)
 
-- [ ] Drei Referenz-Kreisprozesse *selbst* bauen (nicht die Gemini-Presets): Stirling (Verdränger + Arbeitskolben, Regenerator), Carnot-ähnlich (isotherm über Reservoir-Umschaltung, adiabat), Otto/Joule (Ventile + Kolben). Dabei alles notieren, was fehlt oder hakt.
-- [ ] Erwartbare Lücken (prüfen, nicht vorab bauen): Bedingungen auf abgeleitete Größen (Volumen einer Zone, V/T-Schwellwert, dP/dt); Rampen statt Sprung-Aktionen (Temperatur/Position über Zeit); parallele Zweige bzw. Aktionen, die über mehrere Schritte gelten; Schritt kopieren/verschieben; Markierung der Zyklusphasen im P-V-Diagramm.
-- [ ] Sequencer-Felder kommen aus dem Schema von Phase 3 (einheitlich mit Tool/Sidebar).
-- [ ] Die 350-Zeilen-Grenze für `src/control/` bleibt bestehen.
+- [x] Drei Kreisprozesse selbst gebaut (`scratch/cycles.js`, nicht die Presets): Carnot-artig (Wärmetauscher heiß/kalt umgeschaltet, adiabat), Otto (Kompression, isochore Wärmezufuhr, Arbeitstakt, isochore Kühlung), Alpha-Stirling (zwei Kolben, Regenerator, zwei Wärmetauscher).
+- [x] Gefundene Lücken, behoben:
+  - Kolben kannten nur TDC/BDC: Isotherme Abschnitte ließen sich nur über die Zeit steuern, und der Zyklus wanderte (TDC 1263 → 1238 → 1216 → 1210 px). Neu: **„Drive to stroke position“** (0 % = TDC, 100 % = BDC) und die Bedingung **„Stroke ≥ / ≤ x %“**.
+  - TDC war immer die kleine Koordinate. Liegt das Gas rechts vom (oder unter dem) Kolben, war TDC das größte Volumen. Neu: Die Seite des Gases kommt aus der gebundenen Messkammer.
+  - Eine Kammer zwischen zwei Kolben (Alpha-Stirling) ließ sich nicht messen. Neu: zweite Kolbenbindung für die gegenüberliegende Kante.
+  - Das 10-s-Sicherheitszeitlimit war immer an und schnitt langsame Schritte ab. Neu: standardmäßig aus, frei einstellbar.
+  - Bedingungen nur auf P und T. Neu: auch auf V, N und den Kolbendruck.
+  - Übergangsdialog: eigene Controls, „Piston 1“ statt Namen, deutsche Reste. Neu: gemeinsame Property-Form, Elementnamen, lesbare Zusammenfassungen.
+  - P-V-Arbeit aus dem Kammerdruck verfehlt bei zügigen Kolben die Hälfte der Arbeit. Neu: **Kolbendruck** aus dem Impulsübertrag mit P-V-Diagramm (Kolben); die Arbeit stimmt auf 1–2 % mit ΔE.
+  - Zyklusphasen im Diagramm: Neu sind nummerierte Marken an jedem Schrittbeginn und der Schrittname im Tooltip.
+- [x] Nicht gebraucht, daher nicht gebaut: Rampen, parallele Zweige, dP/dt-Bedingungen. Schritt kopieren und verschieben gab es schon.
+- [x] Die Sequencer-Felder (auch die Bedingungen) kommen aus dem Schema bzw. der gemeinsamen Property-Form. `src/control/` bleibt unter 350 Zeilen pro Datei.
 
 ## Phase 6 — Splash, Onboarding, Feinschliff
 

@@ -331,7 +331,7 @@ def run_pass(page, label):
     assert after_delete < after_box, 'Delete key did not delete the selection'
     assert after_undo == after_box, 'Ctrl+Z did not restore the deleted elements'
     assert state['sim'] and state['t'] > 0, 'simulation did not run'
-    assert charts['open'] and charts['closed'] and charts['ranged'] and charts['metrics'] == 10, f'chart dialog failed: {charts}'
+    assert charts['open'] and charts['closed'] and charts['ranged'] and charts['metrics'] == 12, f'chart dialog failed: {charts}'
     assert charts['custom'] >= 1, 'custom dashboard chart was not added'
     assert all_selected == all_elements, 'Ctrl+A did not select all elements'
     assert grouped and ungrouped, 'Ctrl+G / Ctrl+Shift+G did not group / ungroup'

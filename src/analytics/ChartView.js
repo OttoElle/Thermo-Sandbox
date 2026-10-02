@@ -2,8 +2,9 @@
 // of a target ('global', a sensor zone, or 'sensors'). Draws crisp on HiDPI,
 // with nice-number axes and units, a legend from two series on, a crosshair +
 // tooltip on hover, and P-V loops coloured per sequencer cycle (current cycle
-// bright, earlier ones faded) with the work per cycle.
-import { AXIS, CHART_PALETTE, TIME_METRICS, XY_METRICS, cycleWork, formatValue, metricKind, metricTitle, speedSamples, timeSeries, xySeries } from './chartData.js';
+// bright, earlier ones faded) with the work per cycle and numbered markers
+// where each sequencer step begins.
+import { AXIS, CHART_PALETTE, TIME_METRICS, XY_METRICS, cycleWork, formatValue, metricKind, metricTitle, speedSamples, stepNames, timeSeries, xySeries } from './chartData.js';
 
 const THEME = {
   surface: '#12141a', grid: '#1f232c', axis: '#2d3342',
@@ -318,6 +319,10 @@ export class ChartView {
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(Math.round(this.hover.x) + 0.5, plot.y0); ctx.lineTo(Math.round(this.hover.x) + 0.5, plot.y1); ctx.stroke();
       const lines = [{ text: `t = ${t.toFixed(2)} s` }];
+      const names = stepNames(engine);
+      const s0 = series[0];
+      const iStep = Math.min(s0.t.length - 1, lowerBound(s0.t, t));
+      if (s0.step[iStep] >= 0 && names[s0.step[iStep]]) lines.push({ text: `${s0.step[iStep] + 1} · ${names[s0.step[iStep]]}` });
       series.forEach(s => {
         let i = Math.min(s.t.length - 1, lowerBound(s.t, t));
         if (i > 0 && Math.abs(s.t[i - 1] - t) < Math.abs(s.t[i] - t)) i--;
@@ -381,12 +386,14 @@ export class ChartView {
       ctx.globalAlpha = 1;
     });
     ctx.restore();
+    const names = stepNames(engine);
+    if (plot.y1 - plot.y0 >= 70) series.forEach((s, k) => this._stepMarkers(ctx, s, vis[k], sx, sy, names));
     series.forEach((s, k) => {
       const i = vis[k][1] - 1;
       this._dot(ctx, sx(s.x[i]), sy(s.y[i]), s.color, this.large ? 4 : 3);
     });
 
-    if (this.spec.metric === 'pv') this._workLabel(ctx, plot, series, vis);
+    if (def.x === 'volume') this._workLabel(ctx, plot, series, vis);
 
     if (this.hover && this.hover.x >= plot.x0 && this.hover.x <= plot.x1 && this.hover.y >= plot.y0 && this.hover.y <= plot.y1) {
       let best = null;
@@ -399,12 +406,37 @@ export class ChartView {
       if (best && best.d < 40) {
         const { s, i } = best;
         this._dot(ctx, sx(s.x[i]), sy(s.y[i]), s.color, this.large ? 4 : 3);
+        const step = s.step[i] >= 0 && names[s.step[i]] ? [{ text: `${s.step[i] + 1} · ${names[s.step[i]]}` }] : [];
         this._tooltip(ctx, w, h, sx(s.x[i]), sy(s.y[i]), [
           { text: `t = ${s.t[i].toFixed(2)} s${s.cycle[i] ? ` · cycle ${s.cycle[i]}` : ''}` },
+          ...step,
           { color: s.color, text: `${AXIS[def.x].symbol} = ${formatValue(s.x[i], AXIS[def.x].unit)}` },
           { color: s.color, text: `${AXIS[def.y].symbol} = ${formatValue(s.y[i], AXIS[def.y].unit)}` }
         ]);
       }
+    }
+  }
+
+  // Numbered marker where each sequencer step last began (current cycle, or the
+  // previous one for steps the current cycle hasn't reached yet).
+  _stepMarkers(ctx, s, [a, b], sx, sy, names) {
+    const starts = new Map();
+    for (let i = Math.max(1, a); i < b; i++) {
+      if (s.step[i] >= 0 && s.step[i] !== s.step[i - 1]) starts.set(s.step[i], i);
+    }
+    const r = this.large ? 8 : 6;
+    ctx.font = `bold ${this.large ? 10 : 8}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const [step, i] of starts) {
+      if (!names[step]) continue;
+      const x = sx(s.x[i]), y = sy(s.y[i]);
+      ctx.fillStyle = THEME.surface;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = THEME.textMain;
+      ctx.fillText(String(step + 1), x, y + 0.5);
     }
   }
 

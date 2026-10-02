@@ -846,57 +846,51 @@ body.seq-picking-active #simCanvas {
 .seq-trans-chips-track {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   flex: 1;
-  overflow-x: auto;
-  scrollbar-width: thin;
+  min-width: 0;
   padding: 2px 0;
 }
 
-/* Compact Square Chip (Collapsed) */
+/* Collapsed chip: icon + condition summary */
 .seq-trans-chip.is-collapsed {
-  width: 42px;
-  height: 42px;
-  min-width: 42px;
-  min-height: 42px;
+  height: 30px;
+  max-width: 220px;
+  padding: 0 9px;
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
   cursor: pointer;
   box-sizing: border-box;
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
   user-select: none;
-  position: relative;
 }
 
 .seq-trans-chip.is-collapsed:hover {
   border-color: #38bdf8;
   background: rgba(56, 189, 248, 0.08);
-  transform: translateY(-1px);
 }
 
 .seq-trans-chip-icon {
-  color: var(--text-main);
+  color: var(--text-muted);
   display: flex;
   align-items: center;
-  justify-content: center;
   line-height: 1;
 }
 
 .seq-trans-chip-badge {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 8px;
-  font-weight: 700;
-  color: var(--text-muted);
-  max-width: 38px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-main);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 2px;
 }
 
 /* Expanded Chip */
@@ -908,8 +902,8 @@ body.seq-picking-active #simCanvas {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  min-width: 220px;
-  max-width: 260px;
+  width: 270px;
+  flex-shrink: 0;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
   box-sizing: border-box;
 }
@@ -922,10 +916,8 @@ body.seq-picking-active #simCanvas {
 }
 
 .seq-chip-type-select {
-  font-size: 10px;
-  height: 22px;
-  padding: 1px 4px;
   flex: 1;
+  min-width: 0;
 }
 
 .btn-del-chip {
@@ -963,37 +955,20 @@ body.seq-picking-active #simCanvas {
   gap: 4px;
 }
 
-.seq-trans-chip .styled-select,
-.seq-trans-chip input[type="number"],
-.seq-trans-chip select {
-  height: 24px;
-  font-size: 10px;
-  padding: 2px 5px;
-  border-radius: 4px;
-  box-sizing: border-box;
-  background-color: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-main);
-  outline: none;
+.seq-trans-chip-body .prop-row {
+  margin-bottom: 6px;
 }
 
-.seq-trans-chip .styled-select:focus,
-.seq-trans-chip input[type="number"]:focus,
-.seq-trans-chip select:focus {
-  border-color: #38bdf8;
+.seq-trans-intro {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
-.seq-trans-chip input[type="number"] {
-  -moz-appearance: textfield;
-  font-family: 'JetBrains Mono', monospace;
-  font-weight: 600;
-  text-align: right;
-}
-
-.seq-trans-chip input[type="number"]::-webkit-outer-spin-button,
-.seq-trans-chip input[type="number"]::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
+.seq-trans-timeout {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* Operator Pills (& / ||) */

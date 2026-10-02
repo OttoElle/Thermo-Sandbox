@@ -5,6 +5,10 @@
  */
 
 import { SequencerTransitionBuilder } from './SequencerTransitionBuilder.js';
+import { renderPropertyForm } from '../app/propertyForm.js';
+
+// Safety timeout: the step advances after this time even if its conditions never hold.
+const TIMEOUT_FIELD = { key: 'fallbackTimeout', label: 'Safety Timeout (0 = off)', kind: 'number', min: 0, max: 120, step: 1, def: 0, unit: 's' };
 
 export class SequencerTransitionDialog {
   constructor(engine, onTransitionSaved) {
@@ -29,28 +33,20 @@ export class SequencerTransitionDialog {
           <div class="modal-header">
             <div style="display:flex; align-items:center; gap:8px;">
               <span class="tool-dialog-badge" style="background:rgba(56,189,248,0.18); color:#38bdf8;">GATE</span>
-              <h3 id="seqTransTitle" style="font-size:13px;">Configure Transition Conditions</h3>
+              <h3 id="seqTransTitle" style="font-size:13px;">Transition</h3>
             </div>
             <button id="seqTransBtnClose" class="modal-close-btn">&times;</button>
           </div>
           <div class="modal-body" style="padding:16px; gap:12px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:2px;">
-              <span style="font-size:10px; font-weight:700; letter-spacing:0.5px; color:var(--text-muted); text-transform:uppercase;">
-                Compound Conditions (Brackets &amp; Logic)
-              </span>
-              <span style="font-size:10px; color:var(--text-dim); font-style:italic;">
-                Row: ( &amp; / || ) • Vertical: &amp; / ||
-              </span>
+            <div class="seq-trans-intro">
+              Advance to the next step when these conditions hold. Conditions in a row are bracketed;
+              click <b>&amp;</b> / <b>||</b> to switch between AND and OR.
             </div>
 
             <!-- 2D Grid Container -->
             <div id="seqTransGridContainer" class="seq-trans-grid-container" style="max-height:340px; overflow-y:auto; padding-right:4px;"></div>
 
-            <!-- Fallback Safety Timeout -->
-            <div class="field-row" style="margin-top:6px; padding-top:10px; border-top:1px solid var(--border-subtle);">
-              <div class="field-label"><span>Fallback Safety Timeout</span><span class="field-num" id="lbl_seqTrans_timeout">10.0 s</span></div>
-              <input type="range" id="seqTrans_timeout" min="1" max="60" step="0.5" value="10" class="styled-slider">
-            </div>
+            <div id="seqTransTimeout" class="seq-trans-timeout"></div>
 
             <div class="modal-actions-row" style="margin-top:8px;">
               <button id="seqTransBtnCancel" class="btn-pill btn-secondary-action">Cancel</button>
@@ -63,13 +59,6 @@ export class SequencerTransitionDialog {
     }
     this.modalEl = modal;
 
-    // Timeout slider readout
-    const timeoutSlider = modal.querySelector('#seqTrans_timeout');
-    const timeoutLbl = modal.querySelector('#lbl_seqTrans_timeout');
-    timeoutSlider?.addEventListener('input', () => {
-      if (timeoutLbl) timeoutLbl.textContent = `${parseFloat(timeoutSlider.value).toFixed(1)} s`;
-    });
-
     // Modal action buttons
     modal.querySelector('#seqTransBtnClose')?.addEventListener('click', () => this.close());
     modal.querySelector('#seqTransBtnCancel')?.addEventListener('click', () => this.close());
@@ -81,21 +70,17 @@ export class SequencerTransitionDialog {
     const step = this.engine.sequencer?.steps[stepIndex];
     if (!step) return;
 
+    const steps = this.engine.sequencer.steps;
     const title = document.getElementById('seqTransTitle');
     if (title) {
-      const nextStepNum = stepIndex + 2 <= this.engine.sequencer.steps.length ? stepIndex + 2 : (this.engine.sequencer.isLooping ? '1' : 'End');
-      title.textContent = `Transition Gate: ${step.name} ➔ Step ${nextStepNum}`;
+      const next = stepIndex + 1 < steps.length ? stepIndex + 1 : (this.engine.sequencer.isLooping ? 0 : -1);
+      const name = (i) => `${i + 1} · ${steps[i].name}`;
+      title.textContent = `${name(stepIndex)}  ➔  ${next >= 0 ? name(next) : 'End'}`;
     }
 
     const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
     this.builder.setData(transition, this.engine);
-
-    // Set fallback timeout
-    const timeoutSlider = this.modalEl.querySelector('#seqTrans_timeout');
-    const timeoutLbl = this.modalEl.querySelector('#lbl_seqTrans_timeout');
-    const timeoutVal = this.builder.data.fallbackTimeout !== undefined ? this.builder.data.fallbackTimeout : 10.0;
-    if (timeoutSlider) timeoutSlider.value = timeoutVal;
-    if (timeoutLbl) timeoutLbl.textContent = `${timeoutVal.toFixed(1)} s`;
+    renderPropertyForm(this.modalEl.querySelector('#seqTransTimeout'), [TIMEOUT_FIELD], this.builder.data);
 
     // Render 2D Grid
     const gridContainer = this.modalEl.querySelector('#seqTransGridContainer');
@@ -111,8 +96,7 @@ export class SequencerTransitionDialog {
     if (!step) return;
 
     const transitionData = this.builder.getData();
-    const timeout = parseFloat(this.modalEl.querySelector('#seqTrans_timeout')?.value || '10');
-    transitionData.fallbackTimeout = timeout;
+    transitionData.fallbackTimeout = Math.max(0, Number(transitionData.fallbackTimeout) || 0);
 
     step.transition = transitionData;
     step.trigger = transitionData;

@@ -26,14 +26,15 @@
 
 ## src/control/ (Cycle Automation & Sequencer Architecture)
 - **CycleSequencer.js**: Precision GRAFCET state machine coordinator managing steps, loop cycles, and state import/export.
-- **SequencerConditions.js**: Compound transition condition evaluator (Time Duration, Piston TDC/BDC/Position, Sensor Pressure/Temp) with AND/OR logic.
+- **SequencerConditions.js**: Transition condition evaluator (time, piston at TDC/BDC/drive target/stroke threshold, sensor T/P/piston pressure/V/N) with AND/OR grid; piston stroke geometry (`strokeEnds` with TDC on the gas side of a bound sensor, `pistonGoal`, `strokeFraction`).
+- **SequencerConditionFields.js**: Condition form fields for the shared property form, defaults, migration of older conditions and one-line summaries.
 - **SequencerActions.js**: Step actions on the element schema: sequenceable types, action values, translation of actions saved by older versions (`normalizeAction`), applying actions (incl. piston drive commands) and summaries.
 - **SequencerExecutor.js**: Applies the actions of a step (delegates to SequencerActions).
 - **SequencerActionFields.js**: Action form (shared property form in the `sequencer` context) and snapshot extraction.
 - **SequencerActionDialog.js**: Object-anchored floating CAD modal dialog with live cyan glow highlight, smooth camera centering, free header dragging, modified indicators, and Reset to Default button.
-- **SequencerTransitionDialog.js**: Compound transition configuration modal with AND/OR combining gates and safety fallback timeouts.
-- **SequencerTransitionBuilder.js**: 2D compound condition builder grid with bracketed rows, monochrome CAD SVG chips, clickable operator pills, and formula generator.
-- **SequencerSummary.js**: Summarizers, parameter key-value formatters, and expandable accordion body generators for step actions.
+- **SequencerTransitionDialog.js**: Transition modal: condition grid plus optional safety timeout (0 = off).
+- **SequencerTransitionBuilder.js**: Condition grid editor: bracketed rows, summary chips, one expanded chip edited with the property form, AND/OR pills.
+- **SequencerSummary.js**: One-line summaries of step actions and transitions for the timeline.
 - **SequencerTimeline.js**: Visual timeline renderer for alternating Step Cards and Transition Nodes with expandable Element Accordions and smooth camera zoom.
 - **SequencerDock.js**: Bottom unified dock bar controller, animated drawer expansion, loop/active toggle buttons with green active styling, and status badges.
 - **SequencerUI.js**: Master coordinator facade integrating dock, timeline, action dialog, transition dialog, and engine hooks.
@@ -110,5 +111,6 @@
 - **bench_gpu.py**: WebGPU benchmark (headless Chrome CDP) reporting ms/frame for 50k–1M particles and up to ~480 wall segments; not part of verify_all.
 - **test_gpu_compute_cdp.py**: Headless Chrome CDP test verifying 50,000 particle Zero-Copy GPU compute, CCD anti-tunneling, emitter streaming, dense-gas anti-freezing, GPU telemetry, sinks, piston-bound sensors, and GPU coupling (free piston pressure, relief valve, regulator, compaction, step-back history).
 - **test_sequencer_modal_cdp.py**: Chrome DevTools Protocol end-to-end test verifying sequencer UI, dialogs, exclusive accordions, and scrolling.
+- **test_sequencer_cycles_cdp.py**: Sequencer on a real cycle (alpha Stirling, two pistons, chamber bound to both): closed cycle, TDC on the gas side, isochoric steps, step labels in the history; adiabatic energy balance of the piston face pressure.
 - **test_transition_cdp.py**: CDP test suite verifying 2D compound transition builder, Boolean precedence, square chip collapse, and cycle execution.
 - **test_ui_smoke_cdp.py**: UI smoke test run against the bundle, `index.html?dev` and the standalone HTML: all ribbon tools, drawing every element type with real mouse events, selection/popup/context menu, Delete + undo/redo, view menu, playback; fails on any uncaught exception or console error.

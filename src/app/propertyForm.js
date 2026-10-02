@@ -64,12 +64,12 @@ function rowHtml(f, value, id) {
 
 /**
  * Renders the fields of `type` for `context` ('tool' | 'inspector' | 'sequencer')
- * into `container`. `values` is updated in place; `onChange(key, value)` fires on
+ * into `container`; `type` may also be a field list (forms outside the element schema). `values` is updated in place; `onChange(key, value)` fires on
  * every edit, `onBeginEdit()` once before each user interaction (for undo).
  */
 export function renderPropertyForm(container, type, values, { context, onChange, onBeginEdit } = {}) {
   if (!container) return;
-  const fields = fieldsFor(type, context);
+  const fields = Array.isArray(type) ? type : fieldsFor(type, context);
   const prefix = `pf${++formCounter}`;
   const visibleKeys = () => fields.filter(f => isVisible(f, values)).map(f => f.key).join();
   const rerender = () => renderPropertyForm(container, type, values, { context, onChange, onBeginEdit });

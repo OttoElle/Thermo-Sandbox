@@ -108,10 +108,15 @@ function applyGeometry(key, v) {
 // ---------------------------------------------------------------------------
 // Extras for single elements
 // ---------------------------------------------------------------------------
+const escapeAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
 function renderSensorBinding(container, item) {
   const bound = item.pistonBinding?.pistonId || '';
   const edge = item.pistonBinding?.edge || 'right';
-  const pistons = engine.pistons.map((p, i) => `<option value="${p.id}" ${bound === p.id ? 'selected' : ''}>Piston ${i + 1}</option>`).join('');
+  const bound2 = item.pistonBinding2?.pistonId || '';
+  const option = (p, sel) => `<option value="${p.id}" ${sel === p.id ? 'selected' : ''}>${escapeAttr(elementName(p, engine))}</option>`;
+  const pistons = engine.pistons.map(p => option(p, bound)).join('');
+  const others = engine.pistons.filter(p => p.id !== bound).map(p => option(p, bound2)).join('');
   container.insertAdjacentHTML('beforeend', `
     <div class="properties-section">Piston Binding</div>
     <div class="prop-row"><div class="prop-label"><span>Follows Piston</span></div>
@@ -122,16 +127,23 @@ function renderSensorBinding(container, item) {
         <option value="left" ${edge === 'left' ? 'selected' : ''}>Left edge (zone right of piston)</option>
         <option value="bottom" ${edge === 'bottom' ? 'selected' : ''}>Bottom edge (zone above piston)</option>
         <option value="top" ${edge === 'top' ? 'selected' : ''}>Top edge (zone below piston)</option>
-      </select></div>`);
+      </select></div>
+    <div class="prop-row" ${bound ? '' : 'hidden'}><div class="prop-label"><span>Piston on Opposite Edge</span></div>
+      <select class="prop-select" id="propBindPiston2" title="For a chamber between two pistons"><option value="">None (fixed edge)</option>${others}</select></div>`);
   const pistonSel = container.querySelector('#propBindPiston');
   const edgeSel = container.querySelector('#propBindEdge');
+  const piston2Sel = container.querySelector('#propBindPiston2');
+  const OPPOSITE = { right: 'left', left: 'right', bottom: 'top', top: 'bottom' };
   const apply = () => {
     recordUndoState(false);
     const p = engine.getPistonById(pistonSel.value);
-    if (!p) item.unbindPiston();
-    else item.bindToPiston(p, edgeSel.value, true);
+    const p2 = p ? engine.getPistonById(piston2Sel.value) : null;
+    item.unbindPiston();
+    if (p) item.bindToPiston(p, edgeSel.value, true);
+    if (p2 && p2 !== p) item.bindToPiston(p2, OPPOSITE[edgeSel.value], true, 2);
     renderInspector(true);
   };
+  piston2Sel.addEventListener('change', apply);
   pistonSel.addEventListener('change', () => {
     const p = engine.getPistonById(pistonSel.value);
     if (p) {

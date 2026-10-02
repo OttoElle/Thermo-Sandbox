@@ -515,13 +515,29 @@
 - [x] **Farben**: Palette mit dem Dataviz-Validator geprüft (dunkle Fläche #12141a: Helligkeitsband, CVD ΔE ≥ 8,4, Kontrast ≥ 3:1). Neue Sensoren bekommen der Reihe nach eigene Farben statt alle Hellblau.
 - [x] **Tests**: Der UI-Smoke-Test öffnet den Dialog mit allen 10 Metriken, zoomt, wechselt den Bereich und fügt einen Custom Chart hinzu.
 
+### AJ. UI-Polish Phase 5: Sequencer an echten Kreisprozessen (Claude Code)
+- [x] **Erprobung**: Carnot-artig, Otto und Alpha-Stirling selbst gebaut und durchgemessen. Die Lücken stehen in `UI_POLISH_PLAN.md`, Phase 5.
+- [x] **Kolben-Hubpositionen**: Befehl `drive_to` mit `strokeTarget` (0 % = TDC, 100 % = BDC). Bedingung `piston` mit `pistonTarget` `step` (Fahrziel des Schritts) / `tdc` / `bdc` / `above` / `below` (+ `strokePos`). „Erreicht“ heißt angekommen (0,5 px statt 3,5 px), damit sich Zyklen exakt schließen.
+- [x] **TDC/BDC nach Gasseite** (`strokeEnds` in `SequencerConditions.js`): Ist eine Messkammer mit der Kante `left`/`top` an den Kolben gebunden, liegt das Gas auf der großen Koordinate, und TDC/BDC tauschen.
+- [x] **Kammer zwischen zwei Kolben**: `SensorZone.pistonBinding2` (gegenüberliegende Kante); `updateBoundsFromPistons()` statt `fixedOpposite`. Im Properties Panel als „Piston on Opposite Edge“.
+- [x] **Kolbendruck** `facePressure`: Die Kolben summieren den Impuls pro Fläche mit Sim-Zeitstempel (GPU: direkt aus der Readback, nicht aus den verzögert verteilten Pending-Puffern). Die Kammer mittelt über 0,3 s und schreibt den Wert in den Messpunkt der Fenstermitte, sonst hinkt er dem Volumen nach und verfälscht die Arbeit jedes Hubs. Neue History-Spalten `historyFacePressure` und `historyStep`; Metriken `facePressure` und `pv_piston`.
+  - Adiabatischer Test (GPU): Kompression mit 40 px/s, ΔE = +3,21 M, ∫P_Kolben dV = −3,17 M (1 %), ∫P_Kammer dV = −2,16 M.
+  - Auch in Ruhe liegt der Kolbendruck ~16 % über dem Kammerdruck: Die Kammer rechnet mit der vollen Fläche, Teilchenmittelpunkte erreichen aber nur die um Radius und halbe Wandstärke kleinere Fläche (~12 %), dazu ~4 % Nicht-Idealität harter Scheiben. Der Kolbendruck ist der mechanische Druck.
+- [x] **CPU-Bugfix**: Horizontale Kolben reflektierten mit endlicher Kolbenmasse (m = 30). Das kostete pro Treffer ~12 % der Relativenergie, das Gas kühlte beim Zyklieren ab. Jetzt elastisch im Kolbensystem wie auf der GPU und bei vertikalen Kolben; Energiebilanz exakt (W_Kraft = −903,3 k bei ΔE = +903,4 k).
+- [x] **Übergangsdialog** (`SequencerTransitionBuilder.js`, neu `SequencerConditionFields.js`): Bedingungen über die gemeinsame Property-Form (`renderPropertyForm` nimmt jetzt auch Feldlisten), Elementnamen, Zusammenfassungen wie „Cold piston at target“ oder „Working gas: T ≥ 600 K“. Sicherheitszeitlimit standardmäßig aus (0). Toter Code `formatActionPropsHTML` entfernt, doppeltes `reset()` in `CycleSequencer` entfernt.
+- [x] **Charts**: nummerierte Schritt-Marken in Zustandsdiagrammen, Schrittname im Tooltip, CSV mit `piston_pressure_Pa` und `step`.
+- [x] **Splash**: `hideSplashScreen` setzt `engine.ambientBounds` zurück (sonst wickelte ein manuell gesteppter Engine die Teilchen um das alte Sichtfeld).
+- [x] **Test** `tests/test_sequencer_cycles_cdp.py`:
+  - Alpha-Stirling über 3 Zyklen: Zyklus geschlossen, TDC nach Gasseite, Volumen in den isochoren Schritten konstant, Kammer folgt beiden Kolben, Schritt in jedem Messpunkt.
+  - Adiabatische Energiebilanz des Kolbendrucks.
+
 ---
 
 ## 3. Nächste Schritte (Next Session Starting Tasks)
-- [ ] **UI-Polish Phase 5** (Sequencer an echten Kreisprozessen erproben) laut `UI_POLISH_PLAN.md`, inkl. Druck an der Kolbenfläche als Messgröße.
+- [ ] **UI-Polish Phase 6** (Splash, Onboarding, Autosave, Konsistenz) laut `UI_POLISH_PLAN.md`.
+- [ ] **Kammerdruck auf zugängliche Fläche umstellen?** Der ideale Kammerdruck unterschätzt den mechanischen Druck um ~12 % (Randschicht Radius + halbe Wandstärke). Entscheidung offen.
 - [ ] **Regenerator-Überschwinger** (CPU + GPU) analysieren.
 - [ ] **Weitere Performance**: Pair-Suche dominiert weiterhin (Kernel-Profil siehe Abschnitt AC); Telemetrie-/Upload-Overhead pro Frame (`getGPUWalls()` allokiert jedes Frame).
 - [ ] **Große App-Module weiter zerlegen**: `canvasInput.js` (~850 Zeilen, ein großer mousedown/mouseup-Handler pro Werkzeug), `toolPanel.js` und `inspector.js` (je ~650, pro Elementtyp duplizierte Formulare) könnten pro Elementtyp datengetrieben werden.
-- [ ] **CSV- & JSON-Export für Chamber- & Dashboard-Telemetriedaten**: Export von Zeitreihen ($T(t), P(t), V(t), W_\text{net}$) als CSV/JSON für externe thermodynamische Auswertungen (z. B. Python/Excel).
 - [ ] **Interaktiver Partikel-Inspektor**: Klick auf ein einzelnes Partikel zur Verfolgung von Trajektorie, Kollisionshistorie und Geschwindigkeitsvektor.
 

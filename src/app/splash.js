@@ -191,6 +191,7 @@ export function showSplashScreen(options = {}) {
 export function hideSplashScreen() {
   app.isSplashActive = false;
   app.isAmbientSim = false;
+  engine.ambientBounds = null; // the ambient splash gas wraps around the view; the scene must not
   app.hasActiveSession = true;
   document.body.classList.remove('splash-mode');
   if (splashOverlay) {

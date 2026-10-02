@@ -173,16 +173,13 @@ export class Engine {
   }
 
   updateBoundSensors() {
+    if (!this._pistonLookup) this._pistonLookup = (id) => this.getPistonById(id);
     for (let i = 0; i < this.sensors.length; i++) {
       const s = this.sensors[i];
-      if (s.pistonBinding && s.pistonBinding.pistonId) {
-        const p = this.getPistonById(s.pistonBinding.pistonId);
-        if (p) {
-          s.updateBoundsFromPiston(p);
-        } else {
-          s.unbindPiston();
-        }
-      }
+      if (!s.pistonBinding && !s.pistonBinding2) continue;
+      if (s.pistonBinding2 && !this.getPistonById(s.pistonBinding2.pistonId)) s.unbindPiston(2);
+      if (s.pistonBinding && !this.getPistonById(s.pistonBinding.pistonId)) s.unbindPiston(1);
+      s.updateBoundsFromPistons(this._pistonLookup);
     }
   }
 
@@ -649,7 +646,9 @@ export class Engine {
     if (this.sequencer && this.sequencer.isEnabled) {
       this.sequencer.step(effectiveDt, this);
     }
-    historyClock.cycle = (this.sequencer && this.sequencer.isEnabled) ? this.sequencer.currentCycleCount : 0;
+    const seqOn = !!(this.sequencer && this.sequencer.isEnabled);
+    historyClock.cycle = seqOn ? this.sequencer.currentCycleCount : 0;
+    historyClock.step = seqOn ? this.sequencer.activeStepIndex : -1;
 
     // 1. Particle Emitters & Regulators & Throttle Valves (Active in both GPU and CPU modes)
     const gpuMode = this.isGPUSimulating();
@@ -682,6 +681,7 @@ export class Engine {
     }
 
     this.totalTime += effectiveDt;
+    for (let i = 0; i < this.pistons.length; i++) this.pistons[i].impulseFromGPU = false;
     this._updateComponents(effectiveDt);
     for (let i = 0; i < this.sensors.length; i++) this.sensors[i].updateMeasurements(this.particles, this.totalTime);
 
@@ -701,6 +701,7 @@ export class Engine {
     for (let i = 0; i < this.pistons.length; i++) {
       this.pistons[i]._frameStartX = this.pistons[i].x;
       this.pistons[i]._frameStartY = this.pistons[i].y;
+      this.pistons[i].impulseFromGPU = true;
     }
     this._updateComponents(dt);
 
@@ -832,6 +833,15 @@ export class Engine {
         const b = i * L.WALL_EV_STRIDE;
         this._gpuWallPendingFront[i] += raw(b) / L.EV_SCALE;
         this._gpuWallPendingBack[i] += raw(b + 2) / L.EV_SCALE;
+      }
+      // Piston face impulse with its sim time, undelayed (face pressure, P-V work)
+      for (let i = 0; i < nWalls && i < this._gpuWallOwners.length; i++) {
+        const { kind, ref } = this._gpuWallOwners[i];
+        if (kind !== 'pistonLeft' && kind !== 'pistonRight') continue;
+        const b = i * L.WALL_EV_STRIDE;
+        const imp = (raw(b) + raw(b + 2)) / L.EV_SCALE;
+        if (kind === 'pistonLeft') ref.impulseTotalLeft += imp; else ref.impulseTotalRight += imp;
+        ref.impulseTime = info.simTime;
       }
     }
 
@@ -1201,25 +1211,21 @@ export class Engine {
         const isLeft = p.pos.x < piston.x;
         const vPiston = piston.velocity;
 
+        // Elastic reflection in the piston frame (like the GPU's moving walls): the
+        // piston's own motion comes from the accumulated impulse, not from the hit.
         if (isLeft) {
           p.pos.x = bounds.left - pr;
           const relVel = p.vel.x - vPiston;
           if (relVel > 0) {
-            const m1 = p.mass;
-            const m2 = Math.max(1, piston.mass);
-            const imp = (2 * m1 * m2 * (vPiston - p.vel.x)) / (m1 + m2);
-            p.vel.x += imp / m1;
-            piston.accumulatedImpulseLeft += Math.abs(imp);
+            p.vel.x = 2 * vPiston - p.vel.x;
+            piston.accumulatedImpulseLeft += 2 * p.mass * relVel;
           }
         } else {
           p.pos.x = bounds.right + pr;
           const relVel = p.vel.x - vPiston;
           if (relVel < 0) {
-            const m1 = p.mass;
-            const m2 = Math.max(1, piston.mass);
-            const imp = (2 * m1 * m2 * (vPiston - p.vel.x)) / (m1 + m2);
-            p.vel.x += imp / m1;
-            piston.accumulatedImpulseRight += Math.abs(imp);
+            p.vel.x = 2 * vPiston - p.vel.x;
+            piston.accumulatedImpulseRight += 2 * p.mass * -relVel;
           }
         }
       } else {

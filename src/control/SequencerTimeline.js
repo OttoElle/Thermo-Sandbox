@@ -276,7 +276,7 @@ export class SequencerTimeline {
 
     const isActive = sequencer.isEnabled && sequencer.activeStepIndex === sIdx;
     const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
-    const summary = SequencerSummary.getTransitionSummary(transition);
+    const summary = SequencerSummary.getTransitionSummary(transition, this.engine);
     const progressPct = isActive ? Math.round(sequencer.stepProgress * 100) : 0;
 
     wrap.innerHTML = `
@@ -288,7 +288,7 @@ export class SequencerTimeline {
           <span class="seq-trans-tag">TRANSITION</span>
           <svg class="seq-trans-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </div>
-        <div class="seq-trans-desc">${summary}</div>
+        <div class="seq-trans-desc">${summary.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
         <div class="seq-transition-progress-track">
           <div class="seq-transition-progress-fill" style="width: ${progressPct}%;"></div>
         </div>

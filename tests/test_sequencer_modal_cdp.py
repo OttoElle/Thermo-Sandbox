@@ -143,7 +143,7 @@ def test_sequencer_modal():
                 const dlg = document.getElementById('seqActionDialog');
                 const glow = window.renderer.highlightedSequencerItem === p;
                 const cmd = dlg.querySelector('.prop-row[data-key="command"] select');
-                cmd.value = '3';  // Release (run in mode below)
+                cmd.value = [...cmd.options].find(o => o.text.startsWith('Release')).value;
                 cmd.dispatchEvent(new Event('change'));
                 const springRow = dlg.querySelector('.prop-row[data-key="springK"]');
                 const dualInputSlider = !!springRow?.querySelector('.prop-slider') && springRow.querySelector('.prop-num').value === '75';

@@ -8,7 +8,7 @@
  * schema field keys (plus the piston drive `command` and `targetSpeed`).
  */
 import { ELEMENT_TYPES, elementTypeOf, fieldsFor, readValues, setFieldValue } from '../model/elementSchema.js';
-import { SequencerConditions } from './SequencerConditions.js';
+import { DRIVE_COMMANDS, pistonGoal } from './SequencerConditions.js';
 
 // Schema type an element is sequenced as, or null if it can't be sequenced.
 export function actionTypeOf(item) {
@@ -35,7 +35,7 @@ const LEGACY_KEYS = {
   regulator: { maxFlowRate: 'rate' }
 };
 
-const PISTON_COMMANDS = ['drive_tdc', 'drive_bdc', 'hold', 'release'];
+const PISTON_COMMANDS = ['drive_tdc', 'drive_bdc', 'drive_to', 'hold', 'release'];
 const RUN_MODES = ['free', 'spring', 'motorized', 'damper'];
 
 /**
@@ -125,14 +125,14 @@ export function applyAction(act, engine) {
   const norm = normalizeAction(act, item);
 
   fieldsFor(type, 'sequencer').forEach(f => {
-    if (f.key === 'command' || f.key === 'targetSpeed' || norm[f.key] === undefined) return;
+    if (f.key === 'command' || f.key === 'targetSpeed' || f.key === 'strokeTarget' || norm[f.key] === undefined) return;
     setFieldValue(f, item, norm[f.key], engine);
   });
 
   if (type === 'piston') {
-    if (norm.command === 'drive_tdc' || norm.command === 'drive_bdc') {
+    if (DRIVE_COMMANDS.includes(norm.command)) {
       item.mode = 'controlled';
-      item.targetPos = SequencerConditions.resolvePistonTarget(item, norm.command, !!norm.invertTdcBdc);
+      item.targetPos = pistonGoal(item, norm.command, engine, norm.strokeTarget, !!norm.invertTdcBdc);
       item.targetSpeed = norm.targetSpeed !== undefined ? norm.targetSpeed : 160;
     } else if (norm.command === 'hold') {
       item.mode = 'hold';
@@ -152,6 +152,7 @@ export function summarizeAction(act, item = null) {
     case 'piston':
       if (a.command === 'drive_tdc') return 'Drive to TDC';
       if (a.command === 'drive_bdc') return 'Drive to BDC';
+      if (a.command === 'drive_to') return `Drive to ${Math.round(a.strokeTarget ?? 50)}% stroke`;
       if (a.command === 'hold') return 'Hold position';
       return `Release (${a.mode || 'free'})`;
     case 'throttle_valve': return a.isActive === false ? 'Disabled' : `Opening ${Math.round((a.openRatio ?? 0.3) * 100)}%`;

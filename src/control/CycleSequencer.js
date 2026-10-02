@@ -25,19 +25,6 @@ export class CycleSequencer {
     this.addStep({ name: 'Step 1' });
   }
 
-  reset() {
-    this.activeStepIndex = 0;
-    this.activePhaseIndex = 0;
-    this.elapsedStepTime = 0;
-    this.elapsedPhaseTime = 0;
-    this.currentCycleCount = 1;
-    this.stepProgress = 0;
-    this.phaseProgress = 0;
-    if (this.steps.length === 0) {
-      this.addStep({ name: 'Step 1' });
-    }
-  }
-
   addStep(options = {}) {
     const stepNum = this.steps.length + 1;
     const step = {
@@ -45,13 +32,10 @@ export class CycleSequencer {
       name: options.name || `Step ${stepNum}`,
       actions: options.actions || [],
       transition: options.transition || options.trigger || {
-        type: 'duration',
-        duration: 1.5,
-        operator: 'AND',
-        conditions: [
-          { type: 'duration', duration: 1.5 }
-        ],
-        fallbackTimeout: 10.0
+        type: 'compound_grid',
+        rows: [{ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] }],
+        rowOperators: [],
+        fallbackTimeout: 0
       }
     };
     step.trigger = step.transition;

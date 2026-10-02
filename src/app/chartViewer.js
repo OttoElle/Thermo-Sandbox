@@ -13,7 +13,7 @@ const metricSel = document.getElementById('chartViewerMetric');
 const targetSel = document.getElementById('chartViewerTarget');
 const rangeGroup = document.getElementById('chartViewerRange');
 
-const METRICS = ['temp', 'pressure', 'volume', 'count', 'kinetic', 'drift', 'pv', 'pt', 'ts', 'hist'];
+const METRICS = ['temp', 'pressure', 'facePressure', 'volume', 'count', 'kinetic', 'drift', 'pv', 'pv_piston', 'pt', 'ts', 'hist'];
 const viewerChart = viewerCanvas ? new ChartView(viewerCanvas, {}, { large: true }) : null;
 let drag = null; // { x, window } while panning
 

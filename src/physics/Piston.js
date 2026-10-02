@@ -66,6 +66,10 @@ export class Piston {
     this.forceRight = 0;
     this.accumulatedImpulseLeft = 0;
     this.accumulatedImpulseRight = 0;
+    this.impulseTotalLeft = 0;
+    this.impulseTotalRight = 0;
+    this.impulseTime = 0;
+    this.impulseFromGPU = false;
 
     this.isDragging = false;
 
@@ -258,6 +262,14 @@ export class Piston {
       this.forceRight = this.accumulatedImpulseRight / dt;
     }
 
+    // Cumulative face impulses up to sim time `impulseTime` (sensor chambers derive
+    // the face pressure from them). With GPU compute the engine books them from
+    // the readbacks instead, with their exact sim time.
+    if (!this.impulseFromGPU) {
+      this.impulseTotalLeft += this.accumulatedImpulseLeft;
+      this.impulseTotalRight += this.accumulatedImpulseRight;
+      this.impulseTime = totalTime;
+    }
     this.accumulatedImpulseLeft = 0;
     this.accumulatedImpulseRight = 0;
   }

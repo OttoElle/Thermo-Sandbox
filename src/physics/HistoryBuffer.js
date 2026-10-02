@@ -5,25 +5,28 @@
 
 export const HISTORY_KEYS = [
   'historyTime', 'historyTemp', 'historyPressure', 'historyVolume',
-  'historyCount', 'historyKineticEnergy', 'historyDrift', 'historyCycle'
+  'historyCount', 'historyKineticEnergy', 'historyDrift', 'historyFacePressure', 'historyCycle', 'historyStep'
 ];
+
+// Keys holding labels rather than measurements: a merged bucket keeps the last one.
+const LABEL_KEYS = ['historyCycle', 'historyStep'];
 
 export const HISTORY_INTERVAL = 0.045; // s of simulation time between samples
 const HISTORY_FULL_RES = 900;           // ~40 s at full resolution
 const HISTORY_MAX = 4000;
 
-// Shared sample context: the engine sets the current sequencer cycle each
-// step so global and sensor samples carry the same cycle index (P-V loops).
-export const historyClock = { cycle: 0 };
+// Shared sample context: the engine sets the current sequencer cycle and step
+// (-1 = sequencer off) so global and sensor samples carry the same labels.
+export const historyClock = { cycle: 0, step: -1 };
 
 export function resetHistory(target) {
   for (const k of HISTORY_KEYS) target[k] = [];
   target._historyBucket = 0;
 }
 
-// Appends one sample { t, temp, pressure, volume, count, kinetic, drift }.
+// Appends one sample { t, temp, pressure, volume, count, kinetic, drift, facePressure }.
 export function appendHistory(target, s) {
-  if (!target.historyCycle) target.historyCycle = [];
+  for (const k of HISTORY_KEYS) if (!target[k]) target[k] = new Array(target.historyTime?.length || 0).fill(NaN);
   target.historyTime.push(s.t);
   target.historyTemp.push(s.temp);
   target.historyPressure.push(s.pressure);
@@ -31,7 +34,9 @@ export function appendHistory(target, s) {
   target.historyCount.push(s.count);
   target.historyKineticEnergy.push(s.kinetic);
   target.historyDrift.push(s.drift);
+  target.historyFacePressure.push(s.facePressure ?? NaN);
   target.historyCycle.push(historyClock.cycle);
+  target.historyStep.push(historyClock.step);
   if (target.historyTime.length > HISTORY_MAX) compactHistory(target);
 }
 
@@ -55,7 +60,7 @@ function compactHistory(target) {
     while (j < old && Math.floor((t[j] - t0) / bucket) === b) j++;
     for (const k of HISTORY_KEYS) {
       const a = target[k];
-      if (k === 'historyCycle') { out[k].push(a[j - 1]); continue; }
+      if (LABEL_KEYS.includes(k)) { out[k].push(a[j - 1]); continue; }
       let sum = 0;
       for (let m = i; m < j; m++) sum += a[m];
       out[k].push(sum / (j - i));

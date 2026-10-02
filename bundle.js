@@ -704,6 +704,10 @@ class Piston {
     this.forceRight = 0;
     this.accumulatedImpulseLeft = 0;
     this.accumulatedImpulseRight = 0;
+    this.impulseTotalLeft = 0;
+    this.impulseTotalRight = 0;
+    this.impulseTime = 0;
+    this.impulseFromGPU = false;
 
     this.isDragging = false;
 
@@ -896,6 +900,14 @@ class Piston {
       this.forceRight = this.accumulatedImpulseRight / dt;
     }
 
+    // Cumulative face impulses up to sim time `impulseTime` (sensor chambers derive
+    // the face pressure from them). With GPU compute the engine books them from
+    // the readbacks instead, with their exact sim time.
+    if (!this.impulseFromGPU) {
+      this.impulseTotalLeft += this.accumulatedImpulseLeft;
+      this.impulseTotalRight += this.accumulatedImpulseRight;
+      this.impulseTime = totalTime;
+    }
     this.accumulatedImpulseLeft = 0;
     this.accumulatedImpulseRight = 0;
   }
@@ -1048,25 +1060,28 @@ class Reservoir {
 
 const HISTORY_KEYS = [
   'historyTime', 'historyTemp', 'historyPressure', 'historyVolume',
-  'historyCount', 'historyKineticEnergy', 'historyDrift', 'historyCycle'
+  'historyCount', 'historyKineticEnergy', 'historyDrift', 'historyFacePressure', 'historyCycle', 'historyStep'
 ];
+
+// Keys holding labels rather than measurements: a merged bucket keeps the last one.
+const LABEL_KEYS = ['historyCycle', 'historyStep'];
 
 const HISTORY_INTERVAL = 0.045; // s of simulation time between samples
 const HISTORY_FULL_RES = 900;           // ~40 s at full resolution
 const HISTORY_MAX = 4000;
 
-// Shared sample context: the engine sets the current sequencer cycle each
-// step so global and sensor samples carry the same cycle index (P-V loops).
-const historyClock = { cycle: 0 };
+// Shared sample context: the engine sets the current sequencer cycle and step
+// (-1 = sequencer off) so global and sensor samples carry the same labels.
+const historyClock = { cycle: 0, step: -1 };
 
 function resetHistory(target) {
   for (const k of HISTORY_KEYS) target[k] = [];
   target._historyBucket = 0;
 }
 
-// Appends one sample { t, temp, pressure, volume, count, kinetic, drift }.
+// Appends one sample { t, temp, pressure, volume, count, kinetic, drift, facePressure }.
 function appendHistory(target, s) {
-  if (!target.historyCycle) target.historyCycle = [];
+  for (const k of HISTORY_KEYS) if (!target[k]) target[k] = new Array(target.historyTime?.length || 0).fill(NaN);
   target.historyTime.push(s.t);
   target.historyTemp.push(s.temp);
   target.historyPressure.push(s.pressure);
@@ -1074,7 +1089,9 @@ function appendHistory(target, s) {
   target.historyCount.push(s.count);
   target.historyKineticEnergy.push(s.kinetic);
   target.historyDrift.push(s.drift);
+  target.historyFacePressure.push(s.facePressure ?? NaN);
   target.historyCycle.push(historyClock.cycle);
+  target.historyStep.push(historyClock.step);
   if (target.historyTime.length > HISTORY_MAX) compactHistory(target);
 }
 
@@ -1098,7 +1115,7 @@ function compactHistory(target) {
     while (j < old && Math.floor((t[j] - t0) / bucket) === b) j++;
     for (const k of HISTORY_KEYS) {
       const a = target[k];
-      if (k === 'historyCycle') { out[k].push(a[j - 1]); continue; }
+      if (LABEL_KEYS.includes(k)) { out[k].push(a[j - 1]); continue; }
       let sum = 0;
       for (let m = i; m < j; m++) sum += a[m];
       out[k].push(sum / (j - i));
@@ -1115,6 +1132,8 @@ function lastHistoryTime(target) {
 
 
 // --- src/physics/SensorZone.js ---
+
+const FACE_WINDOW = 0.3; // s, averaging window of the piston face pressure
 
 class SensorZone {
   constructor(options = {}) {
@@ -1144,17 +1163,19 @@ class SensorZone {
     // Continuous time history for the charts (see HistoryBuffer.js)
     resetHistory(this);
 
-    // Piston Binding for Dynamic Chamber Expansion / Compression
-    if (options.pistonBinding) {
-      this.pistonBinding = {
-        pistonId: options.pistonBinding.pistonId || null,
-        edge: options.pistonBinding.edge || 'right',
-        lockCrossDimension: options.pistonBinding.lockCrossDimension !== false,
-        fixedOpposite: options.pistonBinding.fixedOpposite !== undefined ? options.pistonBinding.fixedOpposite : null
-      };
-    } else {
-      this.pistonBinding = null;
-    }
+    // Piston bindings: the zone edge facing a piston follows its face. A
+    // chamber between two pistons binds one piston per side.
+    this.pistonBinding = SensorZone._binding(options.pistonBinding);
+    this.pistonBinding2 = SensorZone._binding(options.pistonBinding2);
+
+    // Pressure on the bound piston faces (momentum flux), averaged per history sample
+    this.facePressure = null;
+    this._faces = [];
+    this._faceSamples = []; // { t, impulse } of the bound faces within FACE_WINDOW
+  }
+
+  static _binding(b) {
+    return b && b.pistonId ? { pistonId: b.pistonId, edge: b.edge || 'right', lockCrossDimension: b.lockCrossDimension !== false } : null;
   }
 
   contains(pos) {
@@ -1192,9 +1213,9 @@ class SensorZone {
     const effectiveCount = Math.round(sampleCount * scaleFactor);
     this.particleCount = effectiveCount;
     const area = this.getArea();
-    this.volume = area;
     this.density = area > 0 ? (effectiveCount / area) * 1000 : 0;
     this.kineticEnergy = sampleKinetic * scaleFactor;
+    this.volume = this.width * this.height;
     this.speedSamples = speedSamples;
 
     if (sampleCount > 0) {
@@ -1227,90 +1248,122 @@ class SensorZone {
 
     const last = lastHistoryTime(this);
     if (last === null || currentTime - last >= HISTORY_INTERVAL) {
+      this._sampleFacePressure();
       appendHistory(this, {
         t: currentTime, temp: this.temperature, pressure: this.pressure, volume: this.volume,
-        count: this.particleCount, kinetic: this.kineticEnergy, drift: this.displayDriftSpeed
+        count: this.particleCount, kinetic: this.kineticEnergy, drift: this.displayDriftSpeed,
+        facePressure: this.facePressure ?? NaN
       });
     }
   }
 
   clearHistory() {
     resetHistory(this);
+    this.facePressure = null;
+    this._faceSamples = [];
     this.driftVx = 0;
     this.driftVy = 0;
     this.driftSpeed = 0;
     this.displayDriftSpeed = 0;
   }
 
-  bindToPiston(piston, edge = 'right', lockCrossDimension = true) {
-    if (!piston) {
-      this.unbindPiston();
-      return;
-    }
-    let fixedOpposite = null;
-    if (edge === 'right') {
-      fixedOpposite = this.x;
-    } else if (edge === 'left') {
-      fixedOpposite = this.x + this.width;
-    } else if (edge === 'bottom') {
-      fixedOpposite = this.y;
-    } else if (edge === 'top') {
-      fixedOpposite = this.y + this.height;
-    }
-
-    this.pistonBinding = {
-      pistonId: piston.id,
-      edge,
-      lockCrossDimension,
-      fixedOpposite
-    };
-    this.updateBoundsFromPiston(piston);
+  getPistonBindings() {
+    return [this.pistonBinding, this.pistonBinding2].filter(b => b && b.pistonId);
   }
 
-  unbindPiston() {
-    this.pistonBinding = null;
+  // slot 1 = primary binding, slot 2 = the piston on the opposite side.
+  bindToPiston(piston, edge = 'right', lockCrossDimension = true, slot = 1) {
+    if (!piston) {
+      this.unbindPiston(slot);
+      return;
+    }
+    const binding = { pistonId: piston.id, edge, lockCrossDimension };
+    if (slot === 2) this.pistonBinding2 = binding;
+    else this.pistonBinding = binding;
+    this.updateBoundsFromPistons(id => (id === piston.id ? piston : null));
+  }
+
+  // Without a slot both bindings are removed.
+  unbindPiston(slot = null) {
+    if (slot === null || slot === 1) this.pistonBinding = slot === null ? null : this.pistonBinding2;
+    if (slot === null || slot === 1 || slot === 2) this.pistonBinding2 = null;
+    this._faces = [];
+    this.facePressure = null;
   }
 
   updateBoundsFromPiston(piston) {
-    if (!this.pistonBinding || !this.pistonBinding.pistonId || !piston) return;
-    const pb = this.pistonBinding;
-    const pBounds = piston.getBounds();
+    this.updateBoundsFromPistons(id => (piston && id === piston.id ? piston : null));
+  }
 
-    if (piston.orientation === 'horizontal') {
-      if (pb.edge === 'right') {
-        // Chamber is to the left of piston; its right edge matches the piston's left face
-        const targetRight = pBounds.left;
-        this.width = Math.max(15, targetRight - this.x);
-      } else if (pb.edge === 'left') {
-        // Chamber is to the right of piston; its left edge matches the piston's right face
-        const fixedRight = (pb.fixedOpposite !== null && pb.fixedOpposite !== undefined) ? pb.fixedOpposite : (this.x + this.width);
-        const targetLeft = pBounds.right;
-        this.x = targetLeft;
-        this.width = Math.max(15, fixedRight - targetLeft);
+  // Moves the bound edges onto the piston faces; `getPiston(id)` resolves a binding.
+  updateBoundsFromPistons(getPiston) {
+    let left = this.x, right = this.x + this.width, top = this.y, bottom = this.y + this.height;
+    const faces = [];
+    for (const b of this.getPistonBindings()) {
+      const piston = getPiston(b.pistonId);
+      if (!piston) continue;
+      const pb = piston.getBounds();
+      const alongX = b.edge === 'left' || b.edge === 'right';
+      if (b.edge === 'right') right = pb.left;
+      else if (b.edge === 'left') left = pb.right;
+      else if (b.edge === 'bottom') bottom = pb.top;
+      else if (b.edge === 'top') top = pb.bottom;
+      if (b.lockCrossDimension !== false) {
+        if (alongX) { top = pb.top; bottom = pb.bottom; } else { left = pb.left; right = pb.right; }
       }
-      if (pb.lockCrossDimension !== false) {
-        this.y = pBounds.top;
-        this.height = piston.height;
-      }
-    } else { // vertical orientation
-      if (pb.edge === 'bottom') {
-        // Chamber is above piston; its bottom edge matches the piston's top face
-        const targetBottom = pBounds.top;
-        this.height = Math.max(15, targetBottom - this.y);
-      } else if (pb.edge === 'top') {
-        // Chamber is below piston; its top edge matches the piston's bottom face
-        const fixedBottom = (pb.fixedOpposite !== null && pb.fixedOpposite !== undefined) ? pb.fixedOpposite : (this.y + this.height);
-        const targetTop = pBounds.bottom;
-        this.y = targetTop;
-        this.height = Math.max(15, fixedBottom - targetTop);
-      }
-      if (pb.lockCrossDimension !== false) {
-        this.x = pBounds.left;
-        this.width = piston.width;
-      }
+      // Piston face toward the gas: impulse "Left" is the left/top face (see Engine.getGPUWalls)
+      faces.push({ piston, side: (b.edge === 'right' || b.edge === 'bottom') ? 'Left' : 'Right', length: alongX ? piston.height : piston.width });
     }
-
+    this._faces = faces;
+    if (faces.length === 0) return;
+    if (right - left < 15) {
+      if (this.pistonBinding?.edge === 'left' && !this.pistonBinding2) left = right - 15; else right = left + 15;
+    }
+    if (bottom - top < 15) {
+      if (this.pistonBinding?.edge === 'top' && !this.pistonBinding2) top = bottom - 15; else bottom = top + 15;
+    }
+    this.x = left; this.y = top;
+    this.width = right - left; this.height = bottom - top;
     this.volume = this.width * this.height;
+  }
+
+  // Pressure on the bound piston faces from the momentum the gas transfers to
+  // them (P = F / L, same scale as the gas pressure), averaged over FACE_WINDOW:
+  // single samples hold only a few wall hits. The pistons time-stamp their
+  // impulse totals with the sim time they were measured at (GPU readbacks
+  // arrive frames later), and the average is written to the history sample at
+  // the centre of its window: a trailing or delayed average lags behind the
+  // volume and biases the P-V work of every stroke. `facePressure` itself is
+  // the latest average (for display and conditions).
+  _sampleFacePressure() {
+    if (this._faces.length === 0) {
+      this.facePressure = null;
+      this._faceSamples.length = 0;
+      return;
+    }
+    let impulse = 0, length = 0, t = Infinity;
+    for (const f of this._faces) {
+      impulse += f.piston['impulseTotal' + f.side] || 0;
+      length += f.length;
+      t = Math.min(t, f.piston.impulseTime ?? 0);
+    }
+    const win = this._faceSamples;
+    const last = win[win.length - 1];
+    if (last && (t < last.t || impulse < last.impulse)) win.length = 0; // reset / new piston
+    else if (last && t === last.t) return; // no new measurement yet
+    win.push({ t, impulse });
+    while (win.length > 2 && t - win[1].t >= FACE_WINDOW) win.shift();
+    const first = win[0];
+    if (t - first.t <= 1e-6 || length <= 0) return;
+    this.facePressure = (impulse - first.impulse) / (t - first.t) / length * PRESSURE_SCALE;
+
+    // History sample closest to the window centre
+    const centre = 0.5 * (first.t + t);
+    const times = this.historyTime;
+    let i = times.length - 1;
+    while (i > 0 && times[i - 1] >= centre) i--;
+    if (i > 0 && centre - times[i - 1] < times[i] - centre) i--;
+    if (i >= 0 && Math.abs(times[i] - centre) <= HISTORY_INTERVAL) this.historyFacePressure[i] = this.facePressure;
   }
 
   toJSON() {
@@ -1322,7 +1375,8 @@ class SensorZone {
       width: this.width,
       height: this.height,
       color: this.color,
-      pistonBinding: this.pistonBinding ? { ...this.pistonBinding } : null
+      pistonBinding: this.pistonBinding ? { ...this.pistonBinding } : null,
+      pistonBinding2: this.pistonBinding2 ? { ...this.pistonBinding2 } : null
     };
   }
 
@@ -2340,6 +2394,8 @@ const ACTIVE = (label = 'Active') => ({ key: 'isActive', label, kind: 'bool', de
 const DIRECTION = (def) => ({ key: 'direction', label: 'Direction', kind: 'direction', def });
 const MAX_COUNT = (label) => num('maxParticles', label, 0, 500, 10, 0, '', { int: true });
 
+const isDrive = c => c === 'drive_tdc' || c === 'drive_bdc' || c === 'drive_to';
+
 // Piston mode while running freely (the sequencer's drive commands override it).
 const runMode = v => (v.command === undefined || v.command === 'release') ? v.mode : null;
 
@@ -2408,10 +2464,12 @@ const ELEMENT_TYPES = {
         options: [
           { value: 'drive_tdc', label: 'Drive to TDC (min volume)' },
           { value: 'drive_bdc', label: 'Drive to BDC (max volume)' },
+          { value: 'drive_to', label: 'Drive to stroke position' },
           { value: 'hold', label: 'Hold position' },
           { value: 'release', label: 'Release (run in mode below)' }
         ] },
-      num('targetSpeed', 'Drive Speed', 20, 400, 10, 160, 'px/s', { in: { tool: false, inspector: false }, visible: v => v.command === 'drive_tdc' || v.command === 'drive_bdc' }),
+      num('strokeTarget', 'Stroke Position (0 = TDC)', 0, 100, 5, 50, '%', { in: { tool: false, inspector: false }, visible: v => v.command === 'drive_to' }),
+      num('targetSpeed', 'Drive Speed', 5, 400, 5, 160, 'px/s', { in: { tool: false, inspector: false }, visible: v => isDrive(v.command) }),
       { key: 'mode', label: 'Mode', kind: 'toggle', def: 'free', options: PISTON_MODES, in: { tool: false }, visible: v => v.command === undefined || v.command === 'release' },
       num('mass', 'Mass m', 0, 150, 5, 30, 'kg'),
       CONDUCTIVITY(0.2),
@@ -2625,7 +2683,7 @@ const LEGACY_KEYS = {
   regulator: { maxFlowRate: 'rate' }
 };
 
-const PISTON_COMMANDS = ['drive_tdc', 'drive_bdc', 'hold', 'release'];
+const PISTON_COMMANDS = ['drive_tdc', 'drive_bdc', 'drive_to', 'hold', 'release'];
 const RUN_MODES = ['free', 'spring', 'motorized', 'damper'];
 
 /**
@@ -2715,14 +2773,14 @@ function applyAction(act, engine) {
   const norm = normalizeAction(act, item);
 
   fieldsFor(type, 'sequencer').forEach(f => {
-    if (f.key === 'command' || f.key === 'targetSpeed' || norm[f.key] === undefined) return;
+    if (f.key === 'command' || f.key === 'targetSpeed' || f.key === 'strokeTarget' || norm[f.key] === undefined) return;
     setFieldValue(f, item, norm[f.key], engine);
   });
 
   if (type === 'piston') {
-    if (norm.command === 'drive_tdc' || norm.command === 'drive_bdc') {
+    if (DRIVE_COMMANDS.includes(norm.command)) {
       item.mode = 'controlled';
-      item.targetPos = SequencerConditions.resolvePistonTarget(item, norm.command, !!norm.invertTdcBdc);
+      item.targetPos = pistonGoal(item, norm.command, engine, norm.strokeTarget, !!norm.invertTdcBdc);
       item.targetSpeed = norm.targetSpeed !== undefined ? norm.targetSpeed : 160;
     } else if (norm.command === 'hold') {
       item.mode = 'hold';
@@ -2742,6 +2800,7 @@ function summarizeAction(act, item = null) {
     case 'piston':
       if (a.command === 'drive_tdc') return 'Drive to TDC';
       if (a.command === 'drive_bdc') return 'Drive to BDC';
+      if (a.command === 'drive_to') return `Drive to ${Math.round(a.strokeTarget ?? 50)}% stroke`;
       if (a.command === 'hold') return 'Hold position';
       return `Release (${a.mode || 'free'})`;
     case 'throttle_valve': return a.isActive === false ? 'Disabled' : `Opening ${Math.round((a.openRatio ?? 0.3) * 100)}%`;
@@ -2764,27 +2823,102 @@ function summarizeAction(act, item = null) {
 // --- src/control/SequencerConditions.js ---
 /**
  * SequencerConditions.js
- * Compound Transition Condition Evaluator for Thermodynamic Cycle Sequencer
- * Evaluates Time, Piston Position, and Sensor Metrics with AND/OR Logic.
+ * Transition conditions of the cycle sequencer: time, piston position and
+ * sensor chamber measurements, combined in a 2D grid (AND/OR within a row,
+ * AND/OR between rows). Also the piston stroke geometry shared with the
+ * actions (TDC/BDC and stroke positions).
+ *
+ * Conditions:
+ *   { type: 'duration', duration }
+ *   { type: 'piston', pistonId, pistonTarget: 'step' | 'tdc' | 'bdc' | 'above' | 'below', strokePos }
+ *     no pistonId: every piston this step drives has reached its drive target
+ *   { type: 'sensor', sensorId, sensorMetric, sensorOperator: '>=' | '<=', sensorThreshold }
  */
 
+
+// A driven piston snaps onto its target, so "reached" means arrived.
+const REACH_TOLERANCE = 0.5; // px
+
+// Ends of a piston's stroke. TDC is the end with the smallest gas volume: the
+// gas side comes from a sensor chamber bound to the piston (default: gas on
+// the low-coordinate side, i.e. left of / above the piston).
+function strokeEnds(piston, engine) {
+  const { minTravel, maxTravel } = piston.getTravelLimits();
+  const gasOnMaxSide = (engine?.sensors || []).some(s => s.getPistonBindings?.().some(b =>
+    b.pistonId === piston.id && (b.edge === 'left' || b.edge === 'top')));
+  return gasOnMaxSide ? { tdc: maxTravel, bdc: minTravel } : { tdc: minTravel, bdc: maxTravel };
+}
+
+// Piston position as a fraction of its stroke: 0 = TDC, 1 = BDC.
+function strokeFraction(piston, engine) {
+  const { tdc, bdc } = strokeEnds(piston, engine);
+  return Math.abs(bdc - tdc) < 1e-6 ? 0 : (piston.getPos() - tdc) / (bdc - tdc);
+}
+
+// Position a drive command moves the piston to ('drive_tdc' | 'drive_bdc' | 'drive_to' with `strokePercent`).
+function pistonGoal(piston, command, engine, strokePercent = 50, invert = false) {
+  let { tdc, bdc } = strokeEnds(piston, engine);
+  if (invert) [tdc, bdc] = [bdc, tdc];
+  if (command === 'drive_tdc' || command === 'tdc') return tdc;
+  if (command === 'drive_bdc' || command === 'bdc') return bdc;
+  const f = Math.max(0, Math.min(100, Number(strokePercent) || 0)) / 100;
+  return tdc + (bdc - tdc) * f;
+}
+
+const DRIVE_COMMANDS = ['drive_tdc', 'drive_bdc', 'drive_to'];
+
+// Sensor quantities a condition can compare.
+const SENSOR_METRICS = {
+  temperature: { label: 'Temperature T', symbol: 'T', unit: 'K', get: s => s.temperature },
+  pressure: { label: 'Pressure P', symbol: 'P', unit: 'Pa', get: s => s.pressure },
+  facePressure: { label: 'Piston Pressure P_piston', symbol: 'P_piston', unit: 'Pa', get: s => s.facePressure ?? s.pressure },
+  volume: { label: 'Volume V', symbol: 'V', unit: 'px²', get: s => s.volume },
+  count: { label: 'Particles N', symbol: 'N', unit: '', get: s => s.particleCount }
+};
+
+function sensorValue(sensor, metric) {
+  if (metric === 'pressure_kpa') return sensor.pressure / 1000; // older saves
+  return (SENSOR_METRICS[metric] || SENSOR_METRICS.pressure).get(sensor);
+}
+
 class SequencerConditions {
-  /**
-   * Helper to resolve target position for a piston given a command:
-   * 'tdc': Top Dead Center (minimum chamber volume / min travel)
-   * 'bdc': Bottom Dead Center (maximum chamber volume / max travel)
-   */
-  static resolvePistonTarget(piston, command, invert = false) {
-    if (!piston || typeof piston.getTravelLimits !== 'function') {
-      return piston ? piston.getPos() : 0;
+  // Legacy entry point (TDC/BDC by the piston's own axis unless `invert`).
+  static resolvePistonTarget(piston, command, invert = false, engine = null) {
+    return piston?.getTravelLimits ? pistonGoal(piston, command, engine, 50, invert) : (piston ? piston.getPos() : 0);
+  }
+
+  // Pistons a piston condition watches, each with the position it must reach (or a stroke threshold).
+  static _pistonGoals(cond, engine, step) {
+    const pistons = engine.pistons || [];
+    const goals = [];
+    const driveGoal = (p, act) => {
+      const a = normalizeAction(act, p);
+      if (!DRIVE_COMMANDS.includes(a.command)) return null;
+      return pistonGoal(p, a.command, engine, a.strokeTarget, !!a.invertTdcBdc);
+    };
+    const stepAction = (p) => (step?.actions || []).find(a => a.targetId === p.id && a.type === 'piston');
+
+    if (!cond.pistonId) {
+      for (const act of (step?.actions || [])) {
+        const p = act.type === 'piston' ? pistons.find(x => x.id === act.targetId) : null;
+        const goal = p ? driveGoal(p, act) : null;
+        if (goal !== null) goals.push({ piston: p, goal });
+      }
+      return goals;
     }
-    const limits = piston.getTravelLimits();
-    const isTdc = command === 'tdc' || command === 'drive_tdc';
-    if (!invert) {
-      return isTdc ? limits.minTravel : limits.maxTravel;
+    const p = pistons.find(x => x.id === cond.pistonId);
+    if (!p) return goals;
+    const target = cond.pistonTarget || 'tdc';
+    if (target === 'above' || target === 'below') {
+      goals.push({ piston: p, threshold: (Number(cond.strokePos) || 0) / 100, dir: target });
+    } else if (target === 'step') {
+      const act = stepAction(p);
+      const goal = act ? driveGoal(p, act) : null;
+      if (goal !== null) goals.push({ piston: p, goal });
     } else {
-      return isTdc ? limits.maxTravel : limits.minTravel;
+      goals.push({ piston: p, goal: pistonGoal(p, target, engine, 50, !!cond.invert) });
     }
+    return goals;
   }
 
   /**
@@ -2796,109 +2930,43 @@ class SequencerConditions {
 
     if (type === 'duration') {
       const dur = Math.max(0.05, cond.duration !== undefined ? cond.duration : 1.5);
-      const met = elapsedStepTime >= dur;
-      const progress = Math.min(1.0, elapsedStepTime / dur);
-      return { met, progress };
+      return { met: elapsedStepTime >= dur, progress: Math.min(1.0, elapsedStepTime / dur) };
     }
 
     if (type === 'piston' || type === 'piston_target') {
-      let targetPistons = [];
-      if (cond.pistonId) {
-        const p = (engine.pistons || []).find(item => item.id === cond.pistonId);
-        if (p) {
-          targetPistons.push({
-            piston: p,
-            target: cond.pistonTarget || 'tdc',
-            targetPos: cond.targetPos,
-            invert: !!cond.invert
-          });
-        }
-      } else if (step && Array.isArray(step.actions)) {
-        // Collect all pistons commanded in this step if no specific piston is set
-        const driving = step.actions.filter(a => a.type === 'piston' && a.targetId);
-        for (const act of driving) {
-          const p = (engine.pistons || []).find(item => item.id === act.targetId);
-          if (p) {
-            const cmd = normalizeAction(act, p).command;
-            const tgt = (cmd === 'drive_tdc' || cmd === 'drive_bdc') ? cmd.replace('drive_', '') : 'tdc';
-            targetPistons.push({
-              piston: p,
-              target: tgt,
-              targetPos: act.targetPos,
-              invert: !!act.invertTdcBdc
-            });
-          }
-        }
-      }
-
-      if (targetPistons.length === 0) {
+      const goals = this._pistonGoals(cond, engine, step);
+      // Nothing to watch (no driven piston, piston deleted): never blocks the cycle for long.
+      if (goals.length === 0) {
         const fallback = cond.fallbackTimeout || 1.5;
-        const met = elapsedStepTime >= fallback;
-        return { met, progress: Math.min(1.0, elapsedStepTime / fallback) };
+        return { met: elapsedStepTime >= fallback, progress: Math.min(1.0, elapsedStepTime / fallback) };
       }
-
-      let allReached = true;
-      let totalFraction = 0;
-
-      for (let i = 0; i < targetPistons.length; i++) {
-        const item = targetPistons[i];
-        const p = item.piston;
-        let goal = 0;
-
-        if (item.target === 'tdc' || item.target === 'bdc') {
-          goal = this.resolvePistonTarget(p, item.target, !!item.invert);
-        } else if (item.targetPos !== undefined) {
-          goal = item.targetPos;
+      let allMet = true, total = 0;
+      for (const g of goals) {
+        if (g.dir) {
+          const f = strokeFraction(g.piston, engine);
+          const met = g.dir === 'above' ? f >= g.threshold - 1e-3 : f <= g.threshold + 1e-3;
+          allMet = allMet && met;
+          total += met ? 1 : Math.max(0, 1 - Math.abs(f - g.threshold));
         } else {
-          goal = p.getPos();
+          const dist = Math.abs(g.goal - g.piston.getPos());
+          allMet = allMet && dist <= REACH_TOLERANCE;
+          const stroke = Math.max(10, g.piston.getTravelLimits().stroke || 100);
+          total += Math.max(0, Math.min(1.0, 1.0 - dist / stroke));
         }
-
-        const dist = Math.abs(goal - p.getPos());
-        if (dist > 3.5) {
-          allReached = false;
-        }
-
-        const limits = p.getTravelLimits ? p.getTravelLimits() : { stroke: 100 };
-        const stroke = Math.max(10, limits.stroke || 100);
-        totalFraction += Math.max(0, Math.min(1.0, 1.0 - (dist / stroke)));
       }
-
-      const progress = totalFraction / targetPistons.length;
-      return { met: allReached, progress };
+      return { met: allMet, progress: allMet ? 1 : total / goals.length };
     }
 
     if (type === 'sensor') {
       const sensor = (engine.sensors || []).find(s => s.id === cond.sensorId);
-      if (!sensor) {
-        return { met: false, progress: 0.0 };
-      }
-
-      const metric = cond.sensorMetric || 'pressure';
-      // Sensor pressure is stored in Pa, metric can be Pa or kPa
-      let val = metric === 'temperature' ? sensor.temperature : sensor.pressure;
-      if (metric === 'pressure_kpa') {
-        val = sensor.pressure / 1000.0;
-      }
-
+      if (!sensor) return { met: false, progress: 0.0 };
+      const val = sensorValue(sensor, cond.sensorMetric || 'pressure');
       const thresh = cond.sensorThreshold !== undefined ? cond.sensorThreshold : 200;
       const op = cond.sensorOperator || '>=';
-      let met = false;
-
-      if (op === '>=' && val >= thresh) met = true;
-      else if (op === '<=' && val <= thresh) met = true;
-      else if (op === '>' && val > thresh) met = true;
-      else if (op === '<' && val < thresh) met = true;
-
-      // Approximate progress based on threshold comparison
-      let progress = 0;
-      if (thresh !== 0) {
-        progress = Math.max(0, Math.min(1.0, val / thresh));
-        if (met) progress = 1.0;
-      } else {
-        progress = met ? 1.0 : 0.0;
-      }
-
-      return { met, progress };
+      const met = op === '>=' ? val >= thresh : op === '<=' ? val <= thresh : op === '>' ? val > thresh : val < thresh;
+      let progress = met ? 1 : 0;
+      if (!met && thresh > 0 && val > 0) progress = op.startsWith('>') ? val / thresh : thresh / val;
+      return { met, progress: Math.max(0, Math.min(1, progress)) };
     }
 
     return { met: true, progress: 1.0 };
@@ -2906,19 +2974,13 @@ class SequencerConditions {
 
   /**
    * Normalizes any transition object (legacy single condition, flat array, or 2D grid)
-   * into a canonical 2D compound grid structure.
+   * into a canonical 2D compound grid structure. fallbackTimeout 0 = no timeout.
    */
   static normalizeTransition(trans) {
-    if (!trans) {
-      return {
-        type: 'compound_grid',
-        fallbackTimeout: 10.0,
-        rows: [{ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] }],
-        rowOperators: []
-      };
-    }
+    const grid = (rows, rowOperators, fallbackTimeout) => ({ type: 'compound_grid', fallbackTimeout, rows, rowOperators });
+    if (!trans) return grid([{ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] }], [], 0);
 
-    const timeout = trans.fallbackTimeout !== undefined ? trans.fallbackTimeout : 10.0;
+    const timeout = trans.fallbackTimeout !== undefined ? trans.fallbackTimeout : 0;
 
     if (Array.isArray(trans.rows) && trans.rows.length > 0) {
       const rows = trans.rows.map(r => {
@@ -2926,48 +2988,23 @@ class SequencerConditions {
           ? r.conditions.map(c => ({ ...c }))
           : [{ type: 'duration', duration: 1.5 }];
         const ops = Array.isArray(r.operators) ? [...r.operators] : [];
-        while (ops.length < conds.length - 1) {
-          ops.push('AND');
-        }
+        while (ops.length < conds.length - 1) ops.push('AND');
         return { conditions: conds, operators: ops };
       });
       const rowOps = Array.isArray(trans.rowOperators) ? [...trans.rowOperators] : [];
-      while (rowOps.length < rows.length - 1) {
-        rowOps.push('OR');
-      }
-      return {
-        type: 'compound_grid',
-        fallbackTimeout: timeout,
-        rows,
-        rowOperators: rowOps
-      };
+      while (rowOps.length < rows.length - 1) rowOps.push('OR');
+      return grid(rows, rowOps, timeout);
     }
 
     if (Array.isArray(trans.conditions) && trans.conditions.length > 0) {
       const op = (trans.operator || 'AND').toUpperCase();
       const ops = Array(Math.max(0, trans.conditions.length - 1)).fill(op);
-      return {
-        type: 'compound_grid',
-        fallbackTimeout: timeout,
-        rows: [{
-          conditions: trans.conditions.map(c => ({ ...c })),
-          operators: ops
-        }],
-        rowOperators: []
-      };
+      return grid([{ conditions: trans.conditions.map(c => ({ ...c })), operators: ops }], [], timeout);
     }
 
     const singleCond = { ...trans };
     delete singleCond.fallbackTimeout;
-    return {
-      type: 'compound_grid',
-      fallbackTimeout: timeout,
-      rows: [{
-        conditions: [singleCond.type ? singleCond : { type: 'duration', duration: 1.5 }],
-        operators: []
-      }],
-      rowOperators: []
-    };
+    return grid([{ conditions: [singleCond.type ? singleCond : { type: 'duration', duration: 1.5 }], operators: [] }], [], timeout);
   }
 
   /**
@@ -2979,7 +3016,6 @@ class SequencerConditions {
 
     const orGroups = [];
     let currentAndGroup = [evalResults[0]];
-
     for (let i = 0; i < operators.length; i++) {
       const op = (operators[i] || 'AND').toUpperCase();
       const nextItem = evalResults[i + 1] || { met: true, progress: 1.0 };
@@ -2994,38 +3030,23 @@ class SequencerConditions {
 
     const groupResults = orGroups.map(group => {
       const allMet = group.every(item => item.met);
-      const sumProg = group.reduce((sum, item) => sum + item.progress, 0);
-      const avgProg = sumProg / group.length;
+      const avgProg = group.reduce((sum, item) => sum + item.progress, 0) / group.length;
       return { met: allMet, progress: allMet ? 1.0 : avgProg };
     });
-
     const anyMet = groupResults.some(g => g.met);
-    const maxProg = Math.max(...groupResults.map(g => g.progress));
-    return { met: anyMet, progress: anyMet ? 1.0 : maxProg };
+    return { met: anyMet, progress: anyMet ? 1.0 : Math.max(...groupResults.map(g => g.progress)) };
   }
 
   /**
    * Evaluates 2D compound transition grid with bracketed rows and Boolean precedence.
    */
   static evaluate(transition, elapsedStepTime, engine, step) {
-    if (!transition) {
-      return { met: true, progress: 1.0 };
-    }
-
+    if (!transition) return { met: true, progress: 1.0 };
     const norm = this.normalizeTransition(transition);
+    if (norm.fallbackTimeout > 0 && elapsedStepTime >= norm.fallbackTimeout) return { met: true, progress: 1.0 };
 
-    const timeout = norm.fallbackTimeout;
-    if (timeout > 0 && elapsedStepTime >= timeout) {
-      return { met: true, progress: 1.0 };
-    }
-
-    const rowResults = norm.rows.map(row => {
-      const condResults = row.conditions.map(c =>
-        this.evaluateSingle(c, elapsedStepTime, engine, step)
-      );
-      return this.evaluateSequence(condResults, row.operators);
-    });
-
+    const rowResults = norm.rows.map(row => this.evaluateSequence(
+      row.conditions.map(c => this.evaluateSingle(c, elapsedStepTime, engine, step)), row.operators));
     return this.evaluateSequence(rowResults, norm.rowOperators);
   }
 }
@@ -3077,19 +3098,6 @@ class CycleSequencer {
     this.addStep({ name: 'Step 1' });
   }
 
-  reset() {
-    this.activeStepIndex = 0;
-    this.activePhaseIndex = 0;
-    this.elapsedStepTime = 0;
-    this.elapsedPhaseTime = 0;
-    this.currentCycleCount = 1;
-    this.stepProgress = 0;
-    this.phaseProgress = 0;
-    if (this.steps.length === 0) {
-      this.addStep({ name: 'Step 1' });
-    }
-  }
-
   addStep(options = {}) {
     const stepNum = this.steps.length + 1;
     const step = {
@@ -3097,13 +3105,10 @@ class CycleSequencer {
       name: options.name || `Step ${stepNum}`,
       actions: options.actions || [],
       transition: options.transition || options.trigger || {
-        type: 'duration',
-        duration: 1.5,
-        operator: 'AND',
-        conditions: [
-          { type: 'duration', duration: 1.5 }
-        ],
-        fallbackTimeout: 10.0
+        type: 'compound_grid',
+        rows: [{ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] }],
+        rowOperators: [],
+        fallbackTimeout: 0
       }
     };
     step.trigger = step.transition;
@@ -5197,16 +5202,13 @@ class Engine {
   }
 
   updateBoundSensors() {
+    if (!this._pistonLookup) this._pistonLookup = (id) => this.getPistonById(id);
     for (let i = 0; i < this.sensors.length; i++) {
       const s = this.sensors[i];
-      if (s.pistonBinding && s.pistonBinding.pistonId) {
-        const p = this.getPistonById(s.pistonBinding.pistonId);
-        if (p) {
-          s.updateBoundsFromPiston(p);
-        } else {
-          s.unbindPiston();
-        }
-      }
+      if (!s.pistonBinding && !s.pistonBinding2) continue;
+      if (s.pistonBinding2 && !this.getPistonById(s.pistonBinding2.pistonId)) s.unbindPiston(2);
+      if (s.pistonBinding && !this.getPistonById(s.pistonBinding.pistonId)) s.unbindPiston(1);
+      s.updateBoundsFromPistons(this._pistonLookup);
     }
   }
 
@@ -5673,7 +5675,9 @@ class Engine {
     if (this.sequencer && this.sequencer.isEnabled) {
       this.sequencer.step(effectiveDt, this);
     }
-    historyClock.cycle = (this.sequencer && this.sequencer.isEnabled) ? this.sequencer.currentCycleCount : 0;
+    const seqOn = !!(this.sequencer && this.sequencer.isEnabled);
+    historyClock.cycle = seqOn ? this.sequencer.currentCycleCount : 0;
+    historyClock.step = seqOn ? this.sequencer.activeStepIndex : -1;
 
     // 1. Particle Emitters & Regulators & Throttle Valves (Active in both GPU and CPU modes)
     const gpuMode = this.isGPUSimulating();
@@ -5706,6 +5710,7 @@ class Engine {
     }
 
     this.totalTime += effectiveDt;
+    for (let i = 0; i < this.pistons.length; i++) this.pistons[i].impulseFromGPU = false;
     this._updateComponents(effectiveDt);
     for (let i = 0; i < this.sensors.length; i++) this.sensors[i].updateMeasurements(this.particles, this.totalTime);
 
@@ -5725,6 +5730,7 @@ class Engine {
     for (let i = 0; i < this.pistons.length; i++) {
       this.pistons[i]._frameStartX = this.pistons[i].x;
       this.pistons[i]._frameStartY = this.pistons[i].y;
+      this.pistons[i].impulseFromGPU = true;
     }
     this._updateComponents(dt);
 
@@ -5856,6 +5862,15 @@ class Engine {
         const b = i * L.WALL_EV_STRIDE;
         this._gpuWallPendingFront[i] += raw(b) / L.EV_SCALE;
         this._gpuWallPendingBack[i] += raw(b + 2) / L.EV_SCALE;
+      }
+      // Piston face impulse with its sim time, undelayed (face pressure, P-V work)
+      for (let i = 0; i < nWalls && i < this._gpuWallOwners.length; i++) {
+        const { kind, ref } = this._gpuWallOwners[i];
+        if (kind !== 'pistonLeft' && kind !== 'pistonRight') continue;
+        const b = i * L.WALL_EV_STRIDE;
+        const imp = (raw(b) + raw(b + 2)) / L.EV_SCALE;
+        if (kind === 'pistonLeft') ref.impulseTotalLeft += imp; else ref.impulseTotalRight += imp;
+        ref.impulseTime = info.simTime;
       }
     }
 
@@ -6225,25 +6240,21 @@ class Engine {
         const isLeft = p.pos.x < piston.x;
         const vPiston = piston.velocity;
 
+        // Elastic reflection in the piston frame (like the GPU's moving walls): the
+        // piston's own motion comes from the accumulated impulse, not from the hit.
         if (isLeft) {
           p.pos.x = bounds.left - pr;
           const relVel = p.vel.x - vPiston;
           if (relVel > 0) {
-            const m1 = p.mass;
-            const m2 = Math.max(1, piston.mass);
-            const imp = (2 * m1 * m2 * (vPiston - p.vel.x)) / (m1 + m2);
-            p.vel.x += imp / m1;
-            piston.accumulatedImpulseLeft += Math.abs(imp);
+            p.vel.x = 2 * vPiston - p.vel.x;
+            piston.accumulatedImpulseLeft += 2 * p.mass * relVel;
           }
         } else {
           p.pos.x = bounds.right + pr;
           const relVel = p.vel.x - vPiston;
           if (relVel < 0) {
-            const m1 = p.mass;
-            const m2 = Math.max(1, piston.mass);
-            const imp = (2 * m1 * m2 * (vPiston - p.vel.x)) / (m1 + m2);
-            p.vel.x += imp / m1;
-            piston.accumulatedImpulseRight += Math.abs(imp);
+            p.vel.x = 2 * vPiston - p.vel.x;
+            piston.accumulatedImpulseRight += 2 * p.mass * -relVel;
           }
         }
       } else {
@@ -7955,8 +7966,8 @@ class Renderer {
     ctx.setLineDash([]);
 
     // Bound Piston Edge Glow Indicator
-    if (sensor.pistonBinding && sensor.pistonBinding.pistonId) {
-      const edge = sensor.pistonBinding.edge;
+    for (const binding of sensor.getPistonBindings()) {
+      const edge = binding.edge;
       ctx.save();
       ctx.strokeStyle = dedicatedColor;
       ctx.shadowColor = dedicatedColor;
@@ -7984,7 +7995,7 @@ class Renderer {
     ctx.fillStyle = isSelected ? '#ffffff' : dedicatedColor;
     ctx.font = 'bold 11.5px Inter, sans-serif';
     ctx.textAlign = 'center';
-    const bindTag = (sensor.pistonBinding && sensor.pistonBinding.pistonId) ? ' 🔗' : '';
+    const bindTag = sensor.getPistonBindings().length > 0 ? ' 🔗' : '';
     const tempText = hasParticles ? ` [${Math.round(sensor.temperature)} K]` : ' (Empty)';
     ctx.fillText(`${sensor.label}${bindTag}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
 
@@ -9033,6 +9044,8 @@ function sensorColor(index) {
 const TIME_METRICS = {
   temp: { label: 'Temperature', symbol: 'T', unit: 'K', key: 'historyTemp', color: CHART_PALETTE[0] },
   pressure: { label: 'Pressure', symbol: 'P', unit: 'Pa', key: 'historyPressure', color: CHART_PALETTE[1] },
+  // Momentum flux on the faces of the pistons a sensor zone is bound to (dynamic pressure, includes shocks)
+  facePressure: { label: 'Piston Pressure', symbol: 'P_piston', unit: 'Pa', key: 'historyFacePressure', color: CHART_PALETTE[7], bound: true },
   volume: { label: 'Volume', symbol: 'V', unit: 'px²', key: 'historyVolume', color: CHART_PALETTE[2] },
   count: { label: 'Particles', symbol: 'N', unit: '', key: 'historyCount', color: CHART_PALETTE[6] },
   kinetic: { label: 'Kinetic Energy', symbol: 'E_kin', unit: 'J', key: 'historyKineticEnergy', color: CHART_PALETTE[4] },
@@ -9042,6 +9055,7 @@ const TIME_METRICS = {
 // State diagrams: x / y metric; 'entropy' is s = ln T + ln(V/N) per particle (2D ideal gas, in k_B).
 const XY_METRICS = {
   pv: { label: 'P-V Diagram', x: 'volume', y: 'pressure' },
+  pv_piston: { label: 'P-V Diagram (piston)', x: 'volume', y: 'facePressure' },
   pt: { label: 'P-T Diagram', x: 'temp', y: 'pressure' },
   ts: { label: 'T-s Diagram', x: 'entropy', y: 'temp' }
 };
@@ -9071,6 +9085,28 @@ function targetsOf(engine, target) {
   return engine.sensors.includes(target) ? [target] : [];
 }
 
+// Piston pressure only exists for sensor zones bound to a piston.
+const isBound = src => src !== 'global' && (src.getPistonBindings?.().length || 0) > 0;
+const needsBinding = (...metrics) => metrics.some(m => TIME_METRICS[m]?.bound);
+
+// Drops samples without a value (piston pressure before the first measurement).
+function finiteOnly(series, keys) {
+  const n = series.t.length;
+  let ok = true;
+  for (let i = 0; i < n && ok; i++) ok = keys.every(k => Number.isFinite(series[k][i]));
+  if (ok) return series;
+  const idx = [];
+  for (let i = 0; i < n; i++) if (keys.every(k => Number.isFinite(series[k][i]))) idx.push(i);
+  const out = { ...series };
+  for (const k of ['t', 'x', 'y', 'cycle', 'step']) if (series[k]) out[k] = idx.map(i => series[k][i]);
+  return out;
+}
+
+// Names of the sequencer steps (index -> name) for phase markers.
+function stepNames(engine) {
+  return (engine.sequencer?.steps || []).map((s, i) => s.name || `Step ${i + 1}`);
+}
+
 function sourceName(src) {
   return src === 'global' ? 'System' : (src.label || 'Sensor');
 }
@@ -9090,9 +9126,11 @@ function seriesArray(src, engine, metric) {
 
 // Time series: [{ name, color, t, y, cycle }]
 function timeSeries(engine, target, metric) {
-  return targetsOf(engine, target).map(src => {
+  const bound = needsBinding(metric);
+  return targetsOf(engine, target).filter(src => !bound || isBound(src)).map(src => {
     const h = src === 'global' ? engine : src;
-    return { name: sourceName(src), color: sourceColor(src, metric), t: h.historyTime || [], y: seriesArray(src, engine, metric), cycle: h.historyCycle || [] };
+    const s = { name: sourceName(src), color: sourceColor(src, metric), t: h.historyTime || [], y: seriesArray(src, engine, metric), cycle: h.historyCycle || [], step: h.historyStep || [] };
+    return bound ? finiteOnly(s, ['y']) : s;
   });
 }
 
@@ -9100,13 +9138,15 @@ function timeSeries(engine, target, metric) {
 function xySeries(engine, target, metric) {
   const def = XY_METRICS[metric];
   // The whole world has constant volume: a global P-V or T-s diagram is degenerate.
-  const usable = targetsOf(engine, target).filter(src => src !== 'global' || def.x !== 'volume');
+  const bound = needsBinding(def.x, def.y);
+  const usable = targetsOf(engine, target).filter(src => (src !== 'global' || def.x !== 'volume') && (!bound || isBound(src)));
   return usable.map(src => {
     const h = src === 'global' ? engine : src;
-    return {
+    const s = {
       name: sourceName(src), color: sourceColor(src, def.y),
-      t: h.historyTime || [], x: seriesArray(src, engine, def.x), y: seriesArray(src, engine, def.y), cycle: h.historyCycle || []
+      t: h.historyTime || [], x: seriesArray(src, engine, def.x), y: seriesArray(src, engine, def.y), cycle: h.historyCycle || [], step: h.historyStep || []
     };
+    return bound ? finiteOnly(s, ['x', 'y']) : s;
   });
 }
 
@@ -9151,13 +9191,15 @@ function formatValue(v, unit = '') {
 
 // Long-format CSV of every recorded series (one row per sample and source).
 function historyCSV(engine) {
-  const rows = ['source,time_s,temperature_K,pressure_Pa,volume_px2,particles,kinetic_energy_J,drift_px_s,cycle'];
+  const rows = ['source,time_s,temperature_K,pressure_Pa,piston_pressure_Pa,volume_px2,particles,kinetic_energy_J,drift_px_s,cycle,step'];
+  const num = v => (Number.isFinite(v) ? v : '');
   const add = (name, h) => {
     const n = (h.historyTime || []).length;
     for (let i = 0; i < n; i++) {
       rows.push([
-        `"${name.replace(/"/g, '""')}"`, h.historyTime[i].toFixed(4), h.historyTemp[i], h.historyPressure[i],
-        h.historyVolume[i], h.historyCount[i], h.historyKineticEnergy[i], h.historyDrift[i], (h.historyCycle || [])[i] ?? 0
+        `"${name.replace(/"/g, '""')}"`, h.historyTime[i].toFixed(4), h.historyTemp[i], h.historyPressure[i], num((h.historyFacePressure || [])[i]),
+        h.historyVolume[i], h.historyCount[i], h.historyKineticEnergy[i], h.historyDrift[i], (h.historyCycle || [])[i] ?? 0,
+        ((h.historyStep || [])[i] ?? -1) + 1
       ].join(','));
     }
   };
@@ -9172,7 +9214,8 @@ function historyCSV(engine) {
 // of a target ('global', a sensor zone, or 'sensors'). Draws crisp on HiDPI,
 // with nice-number axes and units, a legend from two series on, a crosshair +
 // tooltip on hover, and P-V loops coloured per sequencer cycle (current cycle
-// bright, earlier ones faded) with the work per cycle.
+// bright, earlier ones faded) with the work per cycle and numbered markers
+// where each sequencer step begins.
 
 const THEME = {
   surface: '#12141a', grid: '#1f232c', axis: '#2d3342',
@@ -9487,6 +9530,10 @@ class ChartView {
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(Math.round(this.hover.x) + 0.5, plot.y0); ctx.lineTo(Math.round(this.hover.x) + 0.5, plot.y1); ctx.stroke();
       const lines = [{ text: `t = ${t.toFixed(2)} s` }];
+      const names = stepNames(engine);
+      const s0 = series[0];
+      const iStep = Math.min(s0.t.length - 1, lowerBound(s0.t, t));
+      if (s0.step[iStep] >= 0 && names[s0.step[iStep]]) lines.push({ text: `${s0.step[iStep] + 1} · ${names[s0.step[iStep]]}` });
       series.forEach(s => {
         let i = Math.min(s.t.length - 1, lowerBound(s.t, t));
         if (i > 0 && Math.abs(s.t[i - 1] - t) < Math.abs(s.t[i] - t)) i--;
@@ -9550,12 +9597,14 @@ class ChartView {
       ctx.globalAlpha = 1;
     });
     ctx.restore();
+    const names = stepNames(engine);
+    if (plot.y1 - plot.y0 >= 70) series.forEach((s, k) => this._stepMarkers(ctx, s, vis[k], sx, sy, names));
     series.forEach((s, k) => {
       const i = vis[k][1] - 1;
       this._dot(ctx, sx(s.x[i]), sy(s.y[i]), s.color, this.large ? 4 : 3);
     });
 
-    if (this.spec.metric === 'pv') this._workLabel(ctx, plot, series, vis);
+    if (def.x === 'volume') this._workLabel(ctx, plot, series, vis);
 
     if (this.hover && this.hover.x >= plot.x0 && this.hover.x <= plot.x1 && this.hover.y >= plot.y0 && this.hover.y <= plot.y1) {
       let best = null;
@@ -9568,12 +9617,37 @@ class ChartView {
       if (best && best.d < 40) {
         const { s, i } = best;
         this._dot(ctx, sx(s.x[i]), sy(s.y[i]), s.color, this.large ? 4 : 3);
+        const step = s.step[i] >= 0 && names[s.step[i]] ? [{ text: `${s.step[i] + 1} · ${names[s.step[i]]}` }] : [];
         this._tooltip(ctx, w, h, sx(s.x[i]), sy(s.y[i]), [
           { text: `t = ${s.t[i].toFixed(2)} s${s.cycle[i] ? ` · cycle ${s.cycle[i]}` : ''}` },
+          ...step,
           { color: s.color, text: `${AXIS[def.x].symbol} = ${formatValue(s.x[i], AXIS[def.x].unit)}` },
           { color: s.color, text: `${AXIS[def.y].symbol} = ${formatValue(s.y[i], AXIS[def.y].unit)}` }
         ]);
       }
+    }
+  }
+
+  // Numbered marker where each sequencer step last began (current cycle, or the
+  // previous one for steps the current cycle hasn't reached yet).
+  _stepMarkers(ctx, s, [a, b], sx, sy, names) {
+    const starts = new Map();
+    for (let i = Math.max(1, a); i < b; i++) {
+      if (s.step[i] >= 0 && s.step[i] !== s.step[i - 1]) starts.set(s.step[i], i);
+    }
+    const r = this.large ? 8 : 6;
+    ctx.font = `bold ${this.large ? 10 : 8}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const [step, i] of starts) {
+      if (!names[step]) continue;
+      const x = sx(s.x[i]), y = sy(s.y[i]);
+      ctx.fillStyle = THEME.surface;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = THEME.textMain;
+      ctx.fillText(String(step + 1), x, y + 0.5);
     }
   }
 
@@ -10318,12 +10392,12 @@ function rowHtml(f, value, id) {
 
 /**
  * Renders the fields of `type` for `context` ('tool' | 'inspector' | 'sequencer')
- * into `container`. `values` is updated in place; `onChange(key, value)` fires on
+ * into `container`; `type` may also be a field list (forms outside the element schema). `values` is updated in place; `onChange(key, value)` fires on
  * every edit, `onBeginEdit()` once before each user interaction (for undo).
  */
 function renderPropertyForm(container, type, values, { context, onChange, onBeginEdit } = {}) {
   if (!container) return;
-  const fields = fieldsFor(type, context);
+  const fields = Array.isArray(type) ? type : fieldsFor(type, context);
   const prefix = `pf${++formCounter}`;
   const visibleKeys = () => fields.filter(f => isVisible(f, values)).map(f => f.key).join();
   const rerender = () => renderPropertyForm(container, type, values, { context, onChange, onBeginEdit });
@@ -10438,138 +10512,6 @@ class SequencerActionFields {
 }
 
 
-// --- src/control/SequencerSummary.js ---
-
-class SequencerSummary {
-  static getActionSummary(act, item = null) {
-    return summarizeAction(act, item);
-  }
-
-  static formatConditionSummary(cond) {
-    if (!cond) return 'Immediate';
-    const type = cond.type || 'duration';
-    if (type === 'duration') {
-      return `⏱ ${(cond.duration !== undefined ? cond.duration : 1.5).toFixed(1)}s`;
-    }
-    if (type === 'piston' || type === 'piston_target') {
-      const tgt = (cond.pistonTarget || 'tdc').toUpperCase();
-      return `🎯 ${tgt}`;
-    }
-    if (type === 'sensor') {
-      const metric = cond.sensorMetric === 'temperature' ? 'T' : 'P';
-      const unit = cond.sensorMetric === 'temperature' ? 'K' : 'Pa';
-      return `📡 ${metric}${cond.sensorOperator || '>='}${cond.sensorThreshold || 200}${unit}`;
-    }
-    return 'Immediate';
-  }
-
-  static getTransitionSummary(trans) {
-    if (!trans) return 'Immediate';
-    const norm = SequencerConditions.normalizeTransition(trans);
-    if (!norm.rows || norm.rows.length === 0) return 'Immediate';
-
-    const rowSummaries = norm.rows.map(row => {
-      if (!row.conditions || row.conditions.length === 0) return 'Immediate';
-      const parts = [];
-      row.conditions.forEach((c, idx) => {
-        parts.push(this.formatConditionSummary(c));
-        if (idx < row.conditions.length - 1) {
-          const op = (row.operators[idx] || 'AND').toUpperCase();
-          parts.push(op === 'OR' || op === '||' ? '||' : '&');
-        }
-      });
-      const rowStr = parts.join(' ');
-      return norm.rows.length > 1 || row.conditions.length > 1 ? `(${rowStr})` : rowStr;
-    });
-
-    const finalParts = [];
-    rowSummaries.forEach((rStr, idx) => {
-      finalParts.push(rStr);
-      if (idx < rowSummaries.length - 1) {
-        const rOp = (norm.rowOperators[idx] || 'OR').toUpperCase();
-        finalParts.push(rOp === 'AND' || rOp === '&' ? '&' : '||');
-      }
-    });
-
-    return finalParts.join(' ');
-  }
-
-  static formatActionPropsHTML(act, item) {
-    if (!act) return '';
-    const type = act.type || (item ? item.constructor.name.toLowerCase() : 'unknown');
-    const rows = [];
-
-    const addRow = (label, val) => {
-      rows.push(`<div class="seq-action-prop-row"><span class="seq-prop-key">${label}</span><span class="seq-prop-val">${val}</span></div>`);
-    };
-
-    if (type === 'piston') {
-      const strokeMap = { drive_tdc: 'Drive to TDC (Min Vol)', drive_bdc: 'Drive to BDC (Max Vol)', hold: 'Hold Position', free: 'Free Float' };
-      addRow('Stroke', strokeMap[act.strokeCommand || 'drive_tdc'] || act.strokeCommand);
-      addRow('Motion Mode', (act.motionType || item?.mode || 'free').toUpperCase());
-      addRow('Target Speed', `${act.targetSpeed !== undefined ? act.targetSpeed : 160} px/s`);
-      addRow('Mass', `${act.mass !== undefined ? act.mass : (item?.mass || 30)} kg`);
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : (item?.conductivity || 0.2)).toFixed(2)}`);
-      if (act.motionType === 'spring') addRow('Spring k', `${act.springK || 50} N/m`);
-      if (act.motionType === 'motorized') addRow('Frequency', `${act.frequency || 0.8} Hz`);
-      if (act.motionType === 'damper') addRow('Damping γ', `${act.dampingCoeff || 25} Ns/m`);
-    } else if (type === 'manual_valve') {
-      addRow('State', act.valveState === 'open' || act.valveState === undefined ? 'OPEN' : 'CLOSED');
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    } else if (type === 'check_valve') {
-      addRow('Allowed Flow', (act.direction === -1 ? 'Reverse (←)' : 'Forward (→)'));
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    } else if (type === 'relief_valve') {
-      addRow('Relief Mode', (act.reliefMode || '1-way').toUpperCase());
-      addRow('Trigger P_max', `${act.triggerPressure || 250} Pa`);
-      addRow('Hysteresis ΔP', `${act.pressureHysteresis || 25} Pa`);
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    } else if (type === 'throttle_valve') {
-      addRow('State', act.state === 'bypassed' ? 'BYPASSED (100%)' : 'THROTTLED');
-      addRow('Opening Ratio', `${Math.round((act.openRatio !== undefined ? act.openRatio : 0.3) * 100)}%`);
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    } else if (['reservoir', 'heat_exchanger', 'regenerator', 'thermal_block'].includes(type)) {
-      addRow('Thermal State', act.isActive !== false ? 'ACTIVE' : 'INSULATED');
-      addRow('Temperature T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
-      addRow('Coupling κ', `${(act.conductivity !== undefined ? act.conductivity : (act.conductance || 0.6)).toFixed(2)}`);
-      if (act.heatCapacity !== undefined || (item && item.heatCapacity)) {
-        addRow('Heat Capacity C', `${act.heatCapacity !== undefined ? act.heatCapacity : item.heatCapacity} J/K`);
-      }
-      if (type === 'regenerator') addRow('Orientation', (act.orientation || 'horizontal').toUpperCase());
-    } else if (type === 'emitter') {
-      addRow('State', act.state === 'paused' ? 'PAUSED' : 'FIRING');
-      addRow('Direction', (act.direction || 'right').toUpperCase());
-      addRow('Rate', `${act.rate !== undefined ? act.rate : 8} /s`);
-      addRow('Temperature T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
-      addRow('Particle Mass', `${act.mass !== undefined ? act.mass : 1.0}`);
-      addRow('Max Limit', act.maxParticles > 0 ? `${act.maxParticles}` : 'Unlimited');
-    } else if (type === 'sink') {
-      addRow('State', act.isActive !== false ? 'ACTIVE' : 'INACTIVE');
-      addRow('Direction', (act.direction || '360').toUpperCase());
-      addRow('Efficiency', `${Math.round((act.absorptionEfficiency !== undefined ? act.absorptionEfficiency : 1.0) * 100)}%`);
-      addRow('Temp Filter', (act.tempFilterMode || 'all').toUpperCase());
-      addRow('Max Limit', act.maxParticles > 0 ? `${act.maxParticles}` : 'Unlimited');
-    } else if (type === 'regulator') {
-      addRow('State', act.isActive !== false ? 'ACTIVE' : 'INACTIVE');
-      addRow('Target Count N', `${act.targetCount !== undefined ? act.targetCount : 50}`);
-      addRow('Hysteresis ΔN', `±${act.hysteresis !== undefined ? act.hysteresis : 3}`);
-      addRow('Gas Temp T', `${Math.round(act.temperature !== undefined ? act.temperature : 300)} K`);
-      addRow('Max Rate', `${act.rate !== undefined ? act.rate : 15} /s`);
-    } else {
-      addRow('Conductivity κ', `${(act.conductivity !== undefined ? act.conductivity : 0).toFixed(2)}`);
-    }
-
-    return `
-      <div class="seq-action-body">
-        <div class="seq-action-props-grid">
-          ${rows.join('')}
-        </div>
-      </div>
-    `;
-  }
-}
-
-
 // --- src/model/elementNames.js ---
 // Display names of elements and groups ("Piston 2", "Rectangle 1"). Names are
 // assigned on first use and stored on the element (`name`) or in
@@ -10620,6 +10562,145 @@ function renameGroup(groupId, name, engine) {
   if (!clean) return;
   engine.groupNames = engine.groupNames || {};
   engine.groupNames[groupId] = clean;
+}
+
+
+// --- src/control/SequencerConditionFields.js ---
+/**
+ * SequencerConditionFields.js
+ * Form fields and one-line summaries of transition conditions, rendered with
+ * the shared property form (same controls as the element properties).
+ */
+
+const CONDITION_TYPES = [
+  { value: 'duration', label: 'Time in step' },
+  { value: 'piston', label: 'Piston position' },
+  { value: 'sensor', label: 'Sensor measurement' }
+];
+
+const PISTON_TARGETS = [
+  { value: 'step', label: 'Reaches its drive target' },
+  { value: 'tdc', label: 'At TDC (min volume)' },
+  { value: 'bdc', label: 'At BDC (max volume)' },
+  { value: 'above', label: 'Stroke ≥ position (toward BDC)' },
+  { value: 'below', label: 'Stroke ≤ position (toward TDC)' }
+];
+
+// Slider range of the threshold per sensor quantity (the number field accepts any value).
+const THRESHOLD_RANGE = {
+  temperature: [0, 2000, 10, 300], pressure: [0, 20000, 50, 1000], facePressure: [0, 20000, 50, 1000],
+  volume: [0, 400000, 1000, 40000], count: [0, 2000, 1, 100]
+};
+
+const condNum = (key, label, min, max, step, def, unit = '', extra = {}) => ({ key, label, kind: 'number', min, max, step, def, unit, ...extra });
+const condSelect = (key, label, options, extra = {}) => ({ key, label, kind: 'select', options, ...extra });
+
+function defaultCondition(type, engine) {
+  if (type === 'piston') return { type, pistonId: '', pistonTarget: 'step', strokePos: 50 };
+  if (type === 'sensor') {
+    return { type, sensorId: engine?.sensors?.[0]?.id || '', sensorMetric: 'temperature', sensorOperator: '>=', sensorThreshold: 300 };
+  }
+  return { type: 'duration', duration: 1.5 };
+}
+
+// Fills keys the form needs (older saves, conditions switched to another type).
+function prepareCondition(cond, engine) {
+  if ((cond.type === 'piston' || cond.type === 'piston_target') && cond.pistonId && cond.pistonTarget === undefined) cond.pistonTarget = 'tdc';
+  const base = defaultCondition(cond.type === 'piston_target' ? 'piston' : cond.type, engine);
+  for (const [k, v] of Object.entries(base)) if (cond[k] === undefined || cond[k] === null) cond[k] = v;
+  if (cond.type === 'piston_target') cond.type = 'piston';
+  if (cond.type === 'piston' && !cond.pistonId) cond.pistonTarget = 'step';
+  if (cond.type === 'sensor' && cond.sensorMetric === 'pressure_kpa') {
+    cond.sensorMetric = 'pressure';
+    cond.sensorThreshold *= 1000;
+  }
+  return cond;
+}
+
+// Field list of a condition for renderPropertyForm (values = the condition itself).
+function conditionFields(cond, engine) {
+  if (cond.type === 'piston') {
+    const pistons = (engine?.pistons || []).map(p => ({ value: p.id, label: elementName(p, engine) }));
+    return [
+      condSelect('pistonId', 'Piston', [{ value: '', label: 'Every piston driven in this step' }, ...pistons]),
+      condSelect('pistonTarget', 'Condition', PISTON_TARGETS, { visible: v => !!v.pistonId }),
+      condNum('strokePos', 'Stroke Position (0 = TDC)', 0, 100, 5, 50, '%', { visible: v => !!v.pistonId && (v.pistonTarget === 'above' || v.pistonTarget === 'below') })
+    ];
+  }
+  if (cond.type === 'sensor') {
+    const sensors = (engine?.sensors || []).map(s => ({ value: s.id, label: elementName(s, engine) }));
+    const metric = SENSOR_METRICS[cond.sensorMetric] ? cond.sensorMetric : 'pressure';
+    const [min, max, step, def] = THRESHOLD_RANGE[metric];
+    return [
+      condSelect('sensorId', 'Sensor Zone', sensors.length ? sensors : [{ value: '', label: '(no sensor zones)' }]),
+      condSelect('sensorMetric', 'Quantity', Object.entries(SENSOR_METRICS).map(([value, m]) => ({ value, label: m.label }))),
+      { key: 'sensorOperator', label: 'Comparison', kind: 'toggle', options: [{ value: '>=', label: '≥ rises to' }, { value: '<=', label: '≤ falls to' }] },
+      condNum('sensorThreshold', 'Threshold', min, max, step, def, SENSOR_METRICS[metric].unit)
+    ];
+  }
+  return [condNum('duration', 'Time in Step', 0.1, 30, 0.1, 1.5, 's')];
+}
+
+// Keys whose change alters the field list (the form is rebuilt after them).
+const STRUCTURAL_KEYS = ['pistonId', 'pistonTarget', 'sensorMetric'];
+
+const fmt = v => (Math.abs(v) >= 1000 ? `${Math.round(v / 100) / 10}k` : `${Math.round(v * 10) / 10}`);
+
+function summarizeCondition(cond, engine) {
+  if (!cond) return 'Immediately';
+  const type = cond.type === 'piston_target' ? 'piston' : (cond.type || 'duration');
+  if (type === 'duration') return `t ≥ ${(cond.duration ?? 1.5).toFixed(1)} s`;
+  if (type === 'piston') {
+    const p = cond.pistonId ? (engine?.pistons || []).find(x => x.id === cond.pistonId) : null;
+    if (!p) return cond.pistonId ? 'Piston (deleted)' : 'Pistons at target';
+    const name = elementName(p, engine);
+    const t = cond.pistonTarget || 'tdc';
+    if (t === 'tdc' || t === 'bdc') return `${name} at ${t.toUpperCase()}`;
+    if (t === 'above' || t === 'below') return `${name} ${t === 'above' ? '≥' : '≤'} ${Math.round(cond.strokePos ?? 50)}%`;
+    return `${name} at target`;
+  }
+  if (type === 'sensor') {
+    const s = (engine?.sensors || []).find(x => x.id === cond.sensorId);
+    const m = SENSOR_METRICS[cond.sensorMetric] || (cond.sensorMetric === 'pressure_kpa' ? { symbol: 'P', unit: 'kPa' } : SENSOR_METRICS.pressure);
+    const op = (cond.sensorOperator || '>=').startsWith('>') ? '≥' : '≤';
+    return `${s ? elementName(s, engine) + ': ' : ''}${m.symbol} ${op} ${fmt(cond.sensorThreshold ?? 200)}${m.unit ? ' ' + m.unit : ''}`;
+  }
+  return 'Immediately';
+}
+
+
+// --- src/control/SequencerSummary.js ---
+/**
+ * SequencerSummary.js
+ * One-line summaries of step actions and transitions for the timeline.
+ */
+
+class SequencerSummary {
+  static getActionSummary(act, item = null) {
+    return summarizeAction(act, item);
+  }
+
+  static getTransitionSummary(trans, engine = null) {
+    if (!trans) return 'Immediately';
+    const norm = SequencerConditions.normalizeTransition(trans);
+    const op = (o, fallback) => ((o || fallback).toUpperCase() === 'OR' || o === '||' ? '||' : '&');
+    const rows = norm.rows.map(row => {
+      const parts = [];
+      row.conditions.forEach((c, i) => {
+        parts.push(summarizeCondition(c, engine));
+        if (i < row.conditions.length - 1) parts.push(op(row.operators[i], 'AND'));
+      });
+      const text = parts.join(' ');
+      return norm.rows.length > 1 && row.conditions.length > 1 ? `(${text})` : text;
+    });
+    const out = [];
+    rows.forEach((r, i) => {
+      out.push(r);
+      if (i < rows.length - 1) out.push(op(norm.rowOperators[i], 'OR'));
+    });
+    const timeout = norm.fallbackTimeout > 0 ? ` · max ${norm.fallbackTimeout} s` : '';
+    return out.join(' ') + timeout;
+  }
 }
 
 
@@ -10897,7 +10978,7 @@ class SequencerTimeline {
 
     const isActive = sequencer.isEnabled && sequencer.activeStepIndex === sIdx;
     const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
-    const summary = SequencerSummary.getTransitionSummary(transition);
+    const summary = SequencerSummary.getTransitionSummary(transition, this.engine);
     const progressPct = isActive ? Math.round(sequencer.stepProgress * 100) : 0;
 
     wrap.innerHTML = `
@@ -10909,7 +10990,7 @@ class SequencerTimeline {
           <span class="seq-trans-tag">TRANSITION</span>
           <svg class="seq-trans-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </div>
-        <div class="seq-trans-desc">${summary}</div>
+        <div class="seq-trans-desc">${summary.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
         <div class="seq-transition-progress-track">
           <div class="seq-transition-progress-fill" style="width: ${progressPct}%;"></div>
         </div>
@@ -11285,10 +11366,20 @@ class SequencerActionDialog {
 // --- src/control/SequencerTransitionBuilder.js ---
 /**
  * SequencerTransitionBuilder.js
- * Interactive 2D Visual Builder for Compound Transition Conditions.
- * Renders bracketed rows, compact square monochrome SVG chips, and horizontal/vertical AND/OR operator pills.
+ * Editor for compound transition conditions: rows of condition chips joined by
+ * AND/OR inside a row (bracketed), rows joined by AND/OR. One chip at a time is
+ * expanded and edited with the shared property form.
  */
 
+const ICONS = {
+  duration: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  piston: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="12" height="10" rx="1"/><line x1="15" y1="12" x2="21" y2="12"/><line x1="9" y1="7" x2="9" y2="17"/></svg>',
+  sensor: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 12l3-3"/><path d="M7 12a5 5 0 0 1 10 0"/></svg>'
+};
+const PLUS = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+const CROSS = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
+const isOr = op => { const o = (op || '').toUpperCase(); return o === 'OR' || o === '||'; };
 
 class SequencerTransitionBuilder {
   constructor(callbacks = {}) {
@@ -11300,9 +11391,10 @@ class SequencerTransitionBuilder {
   }
 
   setData(transitionData, engine = null) {
-    this.data = SequencerConditions.normalizeTransition(transitionData);
-    this.expandedKey = '0_0';
     if (engine) this.engine = engine;
+    this.data = SequencerConditions.normalizeTransition(transitionData);
+    this.data.rows.forEach(r => r.conditions.forEach(c => prepareCondition(c, this.engine)));
+    this.expandedKey = '0_0';
   }
 
   getData() {
@@ -11319,6 +11411,31 @@ class SequencerTransitionBuilder {
     return b;
   }
 
+  _changed(rerender = true) {
+    if (typeof this.callbacks.onChange === 'function') this.callbacks.onChange(this.getData());
+    if (rerender) this.render();
+  }
+
+  _addCondition(row, op, rIdx) {
+    row.conditions.push(defaultCondition('duration'));
+    row.operators.push(op);
+    this.expandedKey = `${rIdx}_${row.conditions.length - 1}`;
+    this._changed();
+  }
+
+  _addRow(op) {
+    this.data.rowOperators.push(op);
+    this.data.rows.push({ conditions: [defaultCondition('duration')], operators: [] });
+    this.expandedKey = `${this.data.rows.length - 1}_0`;
+    this._changed();
+  }
+
+  _opPill(op, vertical, onToggle) {
+    const or = isOr(op);
+    return this._btn(`seq-trans-op-pill ${vertical ? 'v-pill' : ''} ${or ? 'is-or' : 'is-and'}`, or ? '||' : '&',
+      `${or ? 'OR' : 'AND'}, click to switch to ${or ? 'AND' : 'OR'}`, onToggle);
+  }
+
   render(containerEl, engine = null) {
     if (containerEl) this.containerEl = containerEl;
     if (engine) this.engine = engine;
@@ -11327,89 +11444,51 @@ class SequencerTransitionBuilder {
     this.containerEl.innerHTML = '';
     const gridEl = document.createElement('div');
     gridEl.className = 'seq-trans-grid';
-
     const rows = this.data.rows;
 
     rows.forEach((row, rIdx) => {
       const rowCard = document.createElement('div');
       rowCard.className = 'seq-trans-row-card';
-
-      const leftBracket = document.createElement('span');
-      leftBracket.className = 'seq-trans-bracket';
-      leftBracket.textContent = '(';
-      rowCard.appendChild(leftBracket);
+      rowCard.appendChild(Object.assign(document.createElement('span'), { className: 'seq-trans-bracket', textContent: '(' }));
 
       const chipsTrack = document.createElement('div');
       chipsTrack.className = 'seq-trans-chips-track';
-
       row.conditions.forEach((cond, cIdx) => {
         const key = `${rIdx}_${cIdx}`;
-        chipsTrack.appendChild(this.expandedKey === key
-          ? this._renderExpandedChip(cond, rIdx, cIdx)
-          : this._renderCollapsedChip(cond, rIdx, cIdx));
-
+        chipsTrack.appendChild(this.expandedKey === key ? this._expandedChip(cond, rIdx, cIdx) : this._collapsedChip(cond, rIdx, cIdx));
         if (cIdx < row.conditions.length - 1) {
-          const op = (row.operators[cIdx] || 'AND').toUpperCase();
-          const isOr = op === 'OR' || op === '||';
-          const pill = this._btn(`seq-trans-op-pill ${isOr ? 'is-or' : 'is-and'}`, isOr ? '||' : '&',
-            `Toggle operator: currently ${isOr ? 'OR' : 'AND'}`, () => {
-              row.operators[cIdx] = isOr ? 'AND' : 'OR';
-              this._notifyChange();
-              this.render();
-            });
-          chipsTrack.appendChild(pill);
+          chipsTrack.appendChild(this._opPill(row.operators[cIdx], false, () => {
+            row.operators[cIdx] = isOr(row.operators[cIdx]) ? 'AND' : 'OR';
+            this._changed();
+          }));
         }
       });
       rowCard.appendChild(chipsTrack);
-
-      const rightBracket = document.createElement('span');
-      rightBracket.className = 'seq-trans-bracket';
-      rightBracket.textContent = ')';
-      rowCard.appendChild(rightBracket);
+      rowCard.appendChild(Object.assign(document.createElement('span'), { className: 'seq-trans-bracket', textContent: ')' }));
 
       const rowActions = document.createElement('div');
       rowActions.className = 'seq-trans-row-actions';
-      rowActions.appendChild(this._btn('seq-trans-btn-mini btn-add-and', '+ &', 'Add condition to row with AND', () => {
-        row.conditions.push({ type: 'duration', duration: 1.5 });
-        row.operators.push('AND');
-        this.expandedKey = `${rIdx}_${row.conditions.length - 1}`;
-        this._notifyChange();
-        this.render();
-      }));
-      rowActions.appendChild(this._btn('seq-trans-btn-mini btn-add-or', '+ ||', 'Add condition to row with OR', () => {
-        row.conditions.push({ type: 'duration', duration: 1.5 });
-        row.operators.push('OR');
-        this.expandedKey = `${rIdx}_${row.conditions.length - 1}`;
-        this._notifyChange();
-        this.render();
-      }));
-
+      rowActions.appendChild(this._btn('seq-trans-btn-mini btn-add-and', '+ &', 'Add a condition to this row (AND)', () => this._addCondition(row, 'AND', rIdx)));
+      rowActions.appendChild(this._btn('seq-trans-btn-mini btn-add-or', '+ ||', 'Add a condition to this row (OR)', () => this._addCondition(row, 'OR', rIdx)));
       if (rows.length > 1) {
         rowActions.appendChild(this._btn('seq-trans-btn-mini btn-del-row', '&times;', 'Delete row', () => {
           rows.splice(rIdx, 1);
-          if (rIdx < this.data.rowOperators.length) this.data.rowOperators.splice(rIdx, 1);
-          else if (this.data.rowOperators.length > 0) this.data.rowOperators.pop();
+          this.data.rowOperators.splice(Math.min(rIdx, this.data.rowOperators.length - 1), 1);
           this.expandedKey = '0_0';
-          this._notifyChange();
-          this.render();
+          this._changed();
         }));
       }
-
       rowCard.appendChild(rowActions);
       gridEl.appendChild(rowCard);
 
       if (rIdx < rows.length - 1) {
-        const rowOp = (this.data.rowOperators[rIdx] || 'OR').toUpperCase();
-        const isOr = rowOp === 'OR' || rowOp === '||';
         const vDivider = document.createElement('div');
         vDivider.className = 'seq-trans-v-divider';
         vDivider.appendChild(document.createElement('div')).className = 'seq-trans-v-line';
-        vDivider.appendChild(this._btn(`seq-trans-op-pill v-pill ${isOr ? 'is-or' : 'is-and'}`, isOr ? '||' : '&',
-          `Toggle row operator: currently ${isOr ? 'OR' : 'AND'}`, () => {
-            this.data.rowOperators[rIdx] = isOr ? 'AND' : 'OR';
-            this._notifyChange();
-            this.render();
-          }));
+        vDivider.appendChild(this._opPill(this.data.rowOperators[rIdx] || 'OR', true, () => {
+          this.data.rowOperators[rIdx] = isOr(this.data.rowOperators[rIdx] || 'OR') ? 'AND' : 'OR';
+          this._changed();
+        }));
         vDivider.appendChild(document.createElement('div')).className = 'seq-trans-v-line';
         gridEl.appendChild(vDivider);
       }
@@ -11417,185 +11496,69 @@ class SequencerTransitionBuilder {
 
     const addRowBar = document.createElement('div');
     addRowBar.className = 'seq-trans-add-row-bar';
-    addRowBar.appendChild(this._btn('seq-trans-btn-add-row',
-      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span>& Zeile</span>',
-      'Add row with AND', () => {
-        this.data.rowOperators.push('AND');
-        this.data.rows.push({ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] });
-        this.expandedKey = `${this.data.rows.length - 1}_0`;
-        this._notifyChange();
-        this.render();
-      }));
-    addRowBar.appendChild(this._btn('seq-trans-btn-add-row',
-      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span>|| Zeile</span>',
-      'Add row with OR', () => {
-        this.data.rowOperators.push('OR');
-        this.data.rows.push({ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] });
-        this.expandedKey = `${this.data.rows.length - 1}_0`;
-        this._notifyChange();
-        this.render();
-      }));
-
+    addRowBar.appendChild(this._btn('seq-trans-btn-add-row', `${PLUS}<span>&amp; Row</span>`, 'Add a row that must also hold (AND)', () => this._addRow('AND')));
+    addRowBar.appendChild(this._btn('seq-trans-btn-add-row', `${PLUS}<span>|| Row</span>`, 'Add an alternative row (OR)', () => this._addRow('OR')));
     gridEl.appendChild(addRowBar);
     this.containerEl.appendChild(gridEl);
   }
 
-  _renderCollapsedChip(cond, rIdx, cIdx) {
+  _collapsedChip(cond, rIdx, cIdx) {
     const chip = document.createElement('div');
     chip.className = 'seq-trans-chip is-collapsed';
-    chip.title = `Click to edit: ${this._getTooltip(cond)}`;
-
-    let svg = '', badge = '';
-    const type = cond.type || 'duration';
-
-    if (type === 'duration') {
-      svg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
-      badge = `${(cond.duration !== undefined ? cond.duration : 1.5).toFixed(1)}s`;
-    } else if (type === 'piston' || type === 'piston_target') {
-      svg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>';
-      badge = (cond.pistonTarget || 'tdc').toUpperCase();
-    } else if (type === 'sensor') {
-      svg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 12l3-3"/><path d="M7 12a5 5 0 0 1 10 0"/></svg>';
-      const metric = cond.sensorMetric === 'temperature' ? 'T' : 'P';
-      const unit = cond.sensorMetric === 'temperature' ? 'K' : 'Pa';
-      badge = `${metric}${cond.sensorOperator || '>='}${cond.sensorThreshold || 200}${unit}`;
-    }
-
-    chip.innerHTML = `<div class="seq-trans-chip-icon">${svg}</div><div class="seq-trans-chip-badge">${badge}</div>`;
+    const summary = summarizeCondition(cond, this.engine);
+    chip.title = `${summary} (click to edit)`;
+    const type = cond.type === 'piston_target' ? 'piston' : (cond.type || 'duration');
+    chip.innerHTML = `<div class="seq-trans-chip-icon">${ICONS[type] || ICONS.duration}</div><div class="seq-trans-chip-badge"></div>`;
+    chip.querySelector('.seq-trans-chip-badge').textContent = summary;
     chip.addEventListener('click', () => { this.expandedKey = `${rIdx}_${cIdx}`; this.render(); });
     return chip;
   }
 
-  _renderExpandedChip(cond, rIdx, cIdx) {
+  _expandedChip(cond, rIdx, cIdx) {
     const chip = document.createElement('div');
     chip.className = 'seq-trans-chip is-expanded';
-    const type = cond.type || 'duration';
     const totalConds = this.data.rows.reduce((sum, r) => sum + r.conditions.length, 0);
+    const type = cond.type === 'piston_target' ? 'piston' : (cond.type || 'duration');
 
-    chip.innerHTML = `
-      <div class="seq-trans-chip-header">
-        <select class="styled-select seq-chip-type-select">
-          <option value="duration" ${type === 'duration' ? 'selected' : ''}>Time Duration</option>
-          <option value="piston" ${type === 'piston' || type === 'piston_target' ? 'selected' : ''}>Piston Target</option>
-          <option value="sensor" ${type === 'sensor' ? 'selected' : ''}>Sensor Chamber</option>
-        </select>
-        <button type="button" class="btn-icon-sm btn-del-chip" title="Remove Condition" ${totalConds <= 1 ? 'disabled' : ''}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      </div>
-      <div class="seq-trans-chip-body"></div>
-    `;
-
-    const typeSelect = chip.querySelector('.seq-chip-type-select');
-    const bodyEl = chip.querySelector('.seq-trans-chip-body');
-
-    const updateBody = (curType, curData) => {
-      bodyEl.innerHTML = '';
-      if (curType === 'duration') {
-        const dur = curData.duration !== undefined ? curData.duration : 1.5;
-        bodyEl.innerHTML = `
-          <div class="field-row" style="margin-bottom:0;">
-            <div class="field-label"><span style="font-size:10px;">Elapsed >=</span><span class="field-num lbl-dur" style="font-size:10px;">${dur.toFixed(1)} s</span></div>
-            <input type="range" class="styled-slider input-dur" min="0.1" max="10.0" step="0.1" value="${dur}">
-          </div>
-        `;
-        const slider = bodyEl.querySelector('.input-dur');
-        const lbl = bodyEl.querySelector('.lbl-dur');
-        slider?.addEventListener('input', () => {
-          curData.duration = parseFloat(slider.value);
-          if (lbl) lbl.textContent = `${curData.duration.toFixed(1)} s`;
-          this._notifyChange();
-        });
-      } else if (curType === 'piston') {
-        if (!curData.pistonTarget) curData.pistonTarget = 'tdc';
-        const pistons = this.engine?.pistons || [];
-        let pOptions = `<option value="">All Pistons</option>`;
-        pistons.forEach((p, idx) => { pOptions += `<option value="${p.id}" ${curData.pistonId === p.id ? 'selected' : ''}>Piston ${idx + 1}</option>`; });
-        const tgt = curData.pistonTarget;
-        bodyEl.innerHTML = `
-          <select class="styled-select input-piston-id" style="width:100%; margin-bottom:2px;">${pOptions}</select>
-          <select class="styled-select input-piston-tgt" style="width:100%;">
-            <option value="tdc" ${tgt === 'tdc' ? 'selected' : ''}>Top Dead Center (TDC)</option>
-            <option value="bdc" ${tgt === 'bdc' ? 'selected' : ''}>Bottom Dead Center (BDC)</option>
-          </select>
-        `;
-        bodyEl.querySelector('.input-piston-id')?.addEventListener('change', (e) => { curData.pistonId = e.target.value || null; this._notifyChange(); });
-        bodyEl.querySelector('.input-piston-tgt')?.addEventListener('change', (e) => { curData.pistonTarget = e.target.value; this._notifyChange(); });
-      } else if (curType === 'sensor') {
-        if (!curData.sensorMetric) curData.sensorMetric = 'pressure';
-        if (!curData.sensorOperator) curData.sensorOperator = '>=';
-        if (curData.sensorThreshold === undefined) curData.sensorThreshold = 200;
-        const sensors = this.engine?.sensors || [];
-        let sOptions = sensors.length === 0 ? `<option value="">(No Chambers)</option>` : '';
-        sensors.forEach(s => { sOptions += `<option value="${s.id}" ${curData.sensorId === s.id ? 'selected' : ''}>${s.label || 'Chamber'}</option>`; });
-        const metric = curData.sensorMetric;
-        const op = curData.sensorOperator;
-        const thresh = curData.sensorThreshold;
-        bodyEl.innerHTML = `
-          <select class="styled-select input-sensor-id" style="width:100%; margin-bottom:2px;">${sOptions}</select>
-          <div style="display:flex; gap:4px; align-items:center; width:100%;">
-            <select class="styled-select input-sensor-metric" style="flex:1; min-width:0;">
-              <option value="pressure" ${metric === 'pressure' ? 'selected' : ''}>P (Pa)</option>
-              <option value="temperature" ${metric === 'temperature' ? 'selected' : ''}>T (K)</option>
-            </select>
-            <select class="styled-select input-sensor-op" style="width:46px; min-width:46px; text-align:center;">
-              <option value=">=" ${op === '>=' ? 'selected' : ''}>&gt;=</option>
-              <option value="<=" ${op === '<=' ? 'selected' : ''}>&lt;=</option>
-            </select>
-            <input type="number" class="styled-select input-sensor-thresh" value="${thresh}" style="width:56px; min-width:56px;">
-          </div>
-        `;
-        bodyEl.querySelector('.input-sensor-id')?.addEventListener('change', (e) => { curData.sensorId = e.target.value || null; this._notifyChange(); });
-        bodyEl.querySelector('.input-sensor-metric')?.addEventListener('change', (e) => { curData.sensorMetric = e.target.value; this._notifyChange(); });
-        bodyEl.querySelector('.input-sensor-op')?.addEventListener('change', (e) => { curData.sensorOperator = e.target.value; this._notifyChange(); });
-        bodyEl.querySelector('.input-sensor-thresh')?.addEventListener('input', (e) => { curData.sensorThreshold = parseFloat(e.target.value) || 0; this._notifyChange(); });
-      }
-    };
-
-    updateBody(type, cond);
-    typeSelect.addEventListener('change', () => { cond.type = typeSelect.value; updateBody(cond.type, cond); this._notifyChange(); });
-
-    chip.querySelector('.btn-del-chip')?.addEventListener('click', (e) => {
-      e.stopPropagation();
+    const header = document.createElement('div');
+    header.className = 'seq-trans-chip-header';
+    const typeSelect = document.createElement('select');
+    typeSelect.className = 'prop-select seq-chip-type-select';
+    typeSelect.innerHTML = CONDITION_TYPES.map(t => `<option value="${t.value}" ${t.value === type ? 'selected' : ''}>${t.label}</option>`).join('');
+    typeSelect.addEventListener('change', () => {
       const row = this.data.rows[rIdx];
-      row.conditions.splice(cIdx, 1);
-      if (cIdx < row.operators.length) row.operators.splice(cIdx, 1);
-      else if (row.operators.length > 0) row.operators.pop();
-      if (row.conditions.length === 0) {
-        this.data.rows.splice(rIdx, 1);
-        if (rIdx < this.data.rowOperators.length) this.data.rowOperators.splice(rIdx, 1);
-        else if (this.data.rowOperators.length > 0) this.data.rowOperators.pop();
-      }
-      if (this.data.rows.length === 0) {
-        this.data.rows.push({ conditions: [{ type: 'duration', duration: 1.5 }], operators: [] });
-      }
-      this.expandedKey = '0_0';
-      this._notifyChange();
-      this.render();
+      row.conditions[cIdx] = defaultCondition(typeSelect.value, this.engine);
+      this._changed();
     });
+    header.appendChild(typeSelect);
+    const del = this._btn('btn-icon-sm btn-del-chip', CROSS, 'Remove condition', () => this._removeCondition(rIdx, cIdx));
+    del.disabled = totalConds <= 1;
+    header.appendChild(del);
+    chip.appendChild(header);
 
+    const body = document.createElement('div');
+    body.className = 'seq-trans-chip-body';
+    chip.appendChild(body);
+    renderPropertyForm(body, conditionFields(cond, this.engine), cond, {
+      onChange: (key) => this._changed(STRUCTURAL_KEYS.includes(key))
+    });
     return chip;
   }
 
-  _getTooltip(cond) {
-    const type = cond.type || 'duration';
-    if (type === 'duration') return `Time >= ${(cond.duration || 1.5).toFixed(1)}s`;
-    if (type === 'piston' || type === 'piston_target') return `Piston reaches ${(cond.pistonTarget || 'tdc').toUpperCase()}`;
-    if (type === 'sensor') {
-      const metric = cond.sensorMetric === 'temperature' ? 'T' : 'P';
-      const unit = cond.sensorMetric === 'temperature' ? 'K' : 'Pa';
-      return `Sensor ${metric} ${cond.sensorOperator || '>='} ${cond.sensorThreshold || 200}${unit}`;
+  _removeCondition(rIdx, cIdx) {
+    const rows = this.data.rows;
+    const row = rows[rIdx];
+    row.conditions.splice(cIdx, 1);
+    if (row.operators.length > 0) row.operators.splice(Math.min(cIdx, row.operators.length - 1), 1);
+    if (row.conditions.length === 0) {
+      rows.splice(rIdx, 1);
+      if (this.data.rowOperators.length > 0) this.data.rowOperators.splice(Math.min(rIdx, this.data.rowOperators.length - 1), 1);
     }
-    return 'Condition';
-  }
-
-  _notifyChange() {
-    if (typeof this.callbacks.onChange === 'function') {
-      this.callbacks.onChange(this.getData());
-    }
+    if (rows.length === 0) rows.push({ conditions: [defaultCondition('duration')], operators: [] });
+    this.expandedKey = '0_0';
+    this._changed();
   }
 }
-
 
 
 // --- src/control/SequencerTransitionDialog.js ---
@@ -11605,6 +11568,9 @@ class SequencerTransitionBuilder {
  * Integrates SequencerTransitionBuilder for bracketed row blocks and Boolean precedence.
  */
 
+
+// Safety timeout: the step advances after this time even if its conditions never hold.
+const TIMEOUT_FIELD = { key: 'fallbackTimeout', label: 'Safety Timeout (0 = off)', kind: 'number', min: 0, max: 120, step: 1, def: 0, unit: 's' };
 
 class SequencerTransitionDialog {
   constructor(engine, onTransitionSaved) {
@@ -11629,28 +11595,20 @@ class SequencerTransitionDialog {
           <div class="modal-header">
             <div style="display:flex; align-items:center; gap:8px;">
               <span class="tool-dialog-badge" style="background:rgba(56,189,248,0.18); color:#38bdf8;">GATE</span>
-              <h3 id="seqTransTitle" style="font-size:13px;">Configure Transition Conditions</h3>
+              <h3 id="seqTransTitle" style="font-size:13px;">Transition</h3>
             </div>
             <button id="seqTransBtnClose" class="modal-close-btn">&times;</button>
           </div>
           <div class="modal-body" style="padding:16px; gap:12px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:2px;">
-              <span style="font-size:10px; font-weight:700; letter-spacing:0.5px; color:var(--text-muted); text-transform:uppercase;">
-                Compound Conditions (Brackets &amp; Logic)
-              </span>
-              <span style="font-size:10px; color:var(--text-dim); font-style:italic;">
-                Row: ( &amp; / || ) • Vertical: &amp; / ||
-              </span>
+            <div class="seq-trans-intro">
+              Advance to the next step when these conditions hold. Conditions in a row are bracketed;
+              click <b>&amp;</b> / <b>||</b> to switch between AND and OR.
             </div>
 
             <!-- 2D Grid Container -->
             <div id="seqTransGridContainer" class="seq-trans-grid-container" style="max-height:340px; overflow-y:auto; padding-right:4px;"></div>
 
-            <!-- Fallback Safety Timeout -->
-            <div class="field-row" style="margin-top:6px; padding-top:10px; border-top:1px solid var(--border-subtle);">
-              <div class="field-label"><span>Fallback Safety Timeout</span><span class="field-num" id="lbl_seqTrans_timeout">10.0 s</span></div>
-              <input type="range" id="seqTrans_timeout" min="1" max="60" step="0.5" value="10" class="styled-slider">
-            </div>
+            <div id="seqTransTimeout" class="seq-trans-timeout"></div>
 
             <div class="modal-actions-row" style="margin-top:8px;">
               <button id="seqTransBtnCancel" class="btn-pill btn-secondary-action">Cancel</button>
@@ -11663,13 +11621,6 @@ class SequencerTransitionDialog {
     }
     this.modalEl = modal;
 
-    // Timeout slider readout
-    const timeoutSlider = modal.querySelector('#seqTrans_timeout');
-    const timeoutLbl = modal.querySelector('#lbl_seqTrans_timeout');
-    timeoutSlider?.addEventListener('input', () => {
-      if (timeoutLbl) timeoutLbl.textContent = `${parseFloat(timeoutSlider.value).toFixed(1)} s`;
-    });
-
     // Modal action buttons
     modal.querySelector('#seqTransBtnClose')?.addEventListener('click', () => this.close());
     modal.querySelector('#seqTransBtnCancel')?.addEventListener('click', () => this.close());
@@ -11681,21 +11632,17 @@ class SequencerTransitionDialog {
     const step = this.engine.sequencer?.steps[stepIndex];
     if (!step) return;
 
+    const steps = this.engine.sequencer.steps;
     const title = document.getElementById('seqTransTitle');
     if (title) {
-      const nextStepNum = stepIndex + 2 <= this.engine.sequencer.steps.length ? stepIndex + 2 : (this.engine.sequencer.isLooping ? '1' : 'End');
-      title.textContent = `Transition Gate: ${step.name} ➔ Step ${nextStepNum}`;
+      const next = stepIndex + 1 < steps.length ? stepIndex + 1 : (this.engine.sequencer.isLooping ? 0 : -1);
+      const name = (i) => `${i + 1} · ${steps[i].name}`;
+      title.textContent = `${name(stepIndex)}  ➔  ${next >= 0 ? name(next) : 'End'}`;
     }
 
     const transition = step.transition || step.trigger || { type: 'duration', duration: 1.5 };
     this.builder.setData(transition, this.engine);
-
-    // Set fallback timeout
-    const timeoutSlider = this.modalEl.querySelector('#seqTrans_timeout');
-    const timeoutLbl = this.modalEl.querySelector('#lbl_seqTrans_timeout');
-    const timeoutVal = this.builder.data.fallbackTimeout !== undefined ? this.builder.data.fallbackTimeout : 10.0;
-    if (timeoutSlider) timeoutSlider.value = timeoutVal;
-    if (timeoutLbl) timeoutLbl.textContent = `${timeoutVal.toFixed(1)} s`;
+    renderPropertyForm(this.modalEl.querySelector('#seqTransTimeout'), [TIMEOUT_FIELD], this.builder.data);
 
     // Render 2D Grid
     const gridContainer = this.modalEl.querySelector('#seqTransGridContainer');
@@ -11711,8 +11658,7 @@ class SequencerTransitionDialog {
     if (!step) return;
 
     const transitionData = this.builder.getData();
-    const timeout = parseFloat(this.modalEl.querySelector('#seqTrans_timeout')?.value || '10');
-    transitionData.fallbackTimeout = timeout;
+    transitionData.fallbackTimeout = Math.max(0, Number(transitionData.fallbackTimeout) || 0);
 
     step.transition = transitionData;
     step.trigger = transitionData;
@@ -12370,9 +12316,11 @@ function duplicateSelection() {
   moveItems(copies, offset, offset);
   copies.forEach(c => {
     if (c instanceof SensorZone && c.pistonBinding) {
-      const piston = pistonMap.get(c.pistonBinding.pistonId);
-      if (piston) c.bindToPiston(piston, c.pistonBinding.edge, true);
-      else c.unbindPiston();
+      // A copied chamber follows the copied pistons; bindings to pistons outside the copy are dropped.
+      const [b1, b2] = [c.pistonBinding, c.pistonBinding2];
+      c.unbindPiston();
+      if (pistonMap.get(b1.pistonId)) c.bindToPiston(pistonMap.get(b1.pistonId), b1.edge, true);
+      if (b2 && pistonMap.get(b2.pistonId)) c.bindToPiston(pistonMap.get(b2.pistonId), b2.edge, true, c.pistonBinding ? 2 : 1);
     }
   });
   engine.particles.forEach(p => { p.selected = false; });
@@ -12910,18 +12858,9 @@ function endTransform() {
     if (s.item instanceof SensorZone) {
       s.item.volume = s.item.width * s.item.height;
       if (active.mode === 'rotate' && s.item.pistonBinding) s.item.unbindPiston();
-      else if (s.item.pistonBinding) updateSensorBinding(s.item);
     }
   });
   active = null;
-}
-
-function updateSensorBinding(zone) {
-  const pb = zone.pistonBinding;
-  if (pb.edge === 'right') pb.fixedOpposite = zone.x;
-  else if (pb.edge === 'left') pb.fixedOpposite = zone.x + zone.width;
-  else if (pb.edge === 'bottom') pb.fixedOpposite = zone.y;
-  else if (pb.edge === 'top') pb.fixedOpposite = zone.y + zone.height;
 }
 
 // ---------------------------------------------------------------------------
@@ -13228,10 +13167,15 @@ function applyGeometry(key, v) {
 // ---------------------------------------------------------------------------
 // Extras for single elements
 // ---------------------------------------------------------------------------
+const escapeAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
 function renderSensorBinding(container, item) {
   const bound = item.pistonBinding?.pistonId || '';
   const edge = item.pistonBinding?.edge || 'right';
-  const pistons = engine.pistons.map((p, i) => `<option value="${p.id}" ${bound === p.id ? 'selected' : ''}>Piston ${i + 1}</option>`).join('');
+  const bound2 = item.pistonBinding2?.pistonId || '';
+  const option = (p, sel) => `<option value="${p.id}" ${sel === p.id ? 'selected' : ''}>${escapeAttr(elementName(p, engine))}</option>`;
+  const pistons = engine.pistons.map(p => option(p, bound)).join('');
+  const others = engine.pistons.filter(p => p.id !== bound).map(p => option(p, bound2)).join('');
   container.insertAdjacentHTML('beforeend', `
     <div class="properties-section">Piston Binding</div>
     <div class="prop-row"><div class="prop-label"><span>Follows Piston</span></div>
@@ -13242,16 +13186,23 @@ function renderSensorBinding(container, item) {
         <option value="left" ${edge === 'left' ? 'selected' : ''}>Left edge (zone right of piston)</option>
         <option value="bottom" ${edge === 'bottom' ? 'selected' : ''}>Bottom edge (zone above piston)</option>
         <option value="top" ${edge === 'top' ? 'selected' : ''}>Top edge (zone below piston)</option>
-      </select></div>`);
+      </select></div>
+    <div class="prop-row" ${bound ? '' : 'hidden'}><div class="prop-label"><span>Piston on Opposite Edge</span></div>
+      <select class="prop-select" id="propBindPiston2" title="For a chamber between two pistons"><option value="">None (fixed edge)</option>${others}</select></div>`);
   const pistonSel = container.querySelector('#propBindPiston');
   const edgeSel = container.querySelector('#propBindEdge');
+  const piston2Sel = container.querySelector('#propBindPiston2');
+  const OPPOSITE = { right: 'left', left: 'right', bottom: 'top', top: 'bottom' };
   const apply = () => {
     recordUndoState(false);
     const p = engine.getPistonById(pistonSel.value);
-    if (!p) item.unbindPiston();
-    else item.bindToPiston(p, edgeSel.value, true);
+    const p2 = p ? engine.getPistonById(piston2Sel.value) : null;
+    item.unbindPiston();
+    if (p) item.bindToPiston(p, edgeSel.value, true);
+    if (p2 && p2 !== p) item.bindToPiston(p2, OPPOSITE[edgeSel.value], true, 2);
     renderInspector(true);
   };
+  piston2Sel.addEventListener('change', apply);
   pistonSel.addEventListener('change', () => {
     const p = engine.getPistonById(pistonSel.value);
     if (p) {
@@ -14066,6 +14017,7 @@ function showSplashScreen(options = {}) {
 function hideSplashScreen() {
   app.isSplashActive = false;
   app.isAmbientSim = false;
+  engine.ambientBounds = null; // the ambient splash gas wraps around the view; the scene must not
   app.hasActiveSession = true;
   document.body.classList.remove('splash-mode');
   if (splashOverlay) {
@@ -15430,7 +15382,7 @@ const metricSel = document.getElementById('chartViewerMetric');
 const targetSel = document.getElementById('chartViewerTarget');
 const rangeGroup = document.getElementById('chartViewerRange');
 
-const METRICS = ['temp', 'pressure', 'volume', 'count', 'kinetic', 'drift', 'pv', 'pt', 'ts', 'hist'];
+const METRICS = ['temp', 'pressure', 'facePressure', 'volume', 'count', 'kinetic', 'drift', 'pv', 'pv_piston', 'pt', 'ts', 'hist'];
 const viewerChart = viewerCanvas ? new ChartView(viewerCanvas, {}, { large: true }) : null;
 let drag = null; // { x, window } while panning
 

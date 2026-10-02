@@ -646,8 +646,8 @@ export class Renderer {
     ctx.setLineDash([]);
 
     // Bound Piston Edge Glow Indicator
-    if (sensor.pistonBinding && sensor.pistonBinding.pistonId) {
-      const edge = sensor.pistonBinding.edge;
+    for (const binding of sensor.getPistonBindings()) {
+      const edge = binding.edge;
       ctx.save();
       ctx.strokeStyle = dedicatedColor;
       ctx.shadowColor = dedicatedColor;
@@ -675,7 +675,7 @@ export class Renderer {
     ctx.fillStyle = isSelected ? '#ffffff' : dedicatedColor;
     ctx.font = 'bold 11.5px Inter, sans-serif';
     ctx.textAlign = 'center';
-    const bindTag = (sensor.pistonBinding && sensor.pistonBinding.pistonId) ? ' 🔗' : '';
+    const bindTag = sensor.getPistonBindings().length > 0 ? ' 🔗' : '';
     const tempText = hasParticles ? ` [${Math.round(sensor.temperature)} K]` : ' (Empty)';
     ctx.fillText(`${sensor.label}${bindTag}${tempText}`, sensor.x + sensor.width * 0.5, sensor.y + 18);
 
